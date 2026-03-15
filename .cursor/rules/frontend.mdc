@@ -1,0 +1,39 @@
+---
+description: 前端 (frontend) 开发规则与约定
+globs: frontend/**
+alwaysApply: false
+---
+
+# 前端开发规则
+
+## 技术栈
+
+- React 19、TypeScript、Vite、Tailwind CSS、Zustand、lucide-react。
+- 类型从 `@shared/index` 引入；业务类型与 API 契约与 shared 保持一致。
+
+## 目录与职责
+
+- **components/desktop/**：桌面壳（Desktop、WindowManager、Taskbar、DesktopIcons、SearchLauncher、ContextMenu、LockScreen、NotificationCenter、StatusBar）。窗口与任务栏使用 `AppIdentifier`，图标与标题通过 `appRegistry` 的 `getAllApps()` / `getAppTitle()` / manifest `icon` 获取。
+- **components/apps/**：各应用组件。`AppContent.tsx` 根据 `appId: AppIdentifier` 用 `resolveBuiltinId(appId)` 解析后渲染对应内置组件；新内置应用需在 `appRegistry.BUILTIN_MANIFESTS` 与 `AppContent` 的 switch 中同时注册。
+- **store/desktopStore.ts**：Zustand 单 store。窗口 `appId`、任务栏固定、桌面图标位置键均为 `AppIdentifier`（string）；`openApp(appId, metadata?)`、`getAppTitle`/`getAppDefaultSize` 来自 `@/appRegistry`。
+- **appRegistry.ts**：内置清单、`getAllApps`/`getApp`/`getAppTitle`/`getAppDefaultSize`、`installApp`/`uninstallApp`/`getInstalledApps`、`resolveBuiltinId`、`isBuiltin`。已安装列表存 localStorage `x-computer-installed-apps`。
+- **hooks/useWebSocket.ts**：连接后端 WS，处理 init/task_event 等，与 store 同步；上报 `set_computer_context` 时使用 `buildComputerContext(storeState)`。
+- **utils/api.ts**：封装 fetch，请求 `/api/*`（Vite 代理到后端 4000）。**utils/computerContext.ts**：从 store 状态构建 `ComputerContext`，供 WS 上报。
+
+## 应用与图标
+
+- 应用 id 类型使用 `AppIdentifier`（内置 id 或安装应用 id 字符串）。桌面图标、任务栏、搜索均用 `getAllApps()` 动态列表；图标为 manifest 的 `icon` 字符串，通过 Lucide 图标名到组件的映射渲染（见 DesktopIcons/Taskbar/SearchLauncher 中的 ICON_MAP/ICON_BY_NAME）。
+- 新内置应用：在 `shared` 的 `BuiltinAppId` 联合类型、`appRegistry.BUILTIN_MANIFESTS`、`AppContent` 的 switch、`getAppDefaultSize` 的 DEFAULT_SIZES 中一并添加。
+
+## 样式与组件
+
+- 使用 Tailwind，主题类名以 `desktop-*`（如 `desktop-text`、`desktop-accent`）在 `global.css` 中定义。
+- 设置页新 tab 在 `SettingsApp` 的 `tabs` 与 `tab === 'xxx'` 分支中成对添加；侧栏使用 `overflow-y-auto` 保证小窗口下可滚动。
+
+## 测试
+
+- 新功能需有测试覆盖：可配合后端 API 集成测试验证行为，或为纯前端逻辑编写 Vitest 单测（可逐步引入 `frontend/src/**/*.test.ts`）。与聊天、设置、API 调用相关的行为优先在后端 `api.test.ts` 中覆盖。
+
+## 注意
+
+- 不要在前端硬编码内置应用 id 列表或标题/图标映射，统一走 `appRegistry`。与后端交互的上下文类型（如 `ComputerContext`）与 `shared` 定义一致。

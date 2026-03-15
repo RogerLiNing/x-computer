@@ -1,0 +1,35 @@
+{
+  "$schema": "./config.schema.json",
+  "tool_loading_mode": "all",
+  "llm_config": {
+    "providers": [
+      {
+        "id": "bailian",
+        "name": "阿里百炼",
+        "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "apiKey": "{env:BAILIAN_API_KEY}"
+      }
+    ],
+    "defaultByModality": {
+      "chat": { "providerId": "bailian", "modelId": "qwen3.5-plus" },
+      "text": { "providerId": "bailian", "modelId": "qwen3.5-plus" },
+      "video": { "providerId": "bailian", "modelId": "qwen3.5-plus" },
+      "image": { "providerId": "bailian", "modelId": "qwen3.5-plus" },
+      "image_edit": { "providerId": "bailian", "modelId": "qwen-image-plus-2026-01-09" },
+      "vector": { "providerId": "bailian", "modelId": "text-embedding-v4" }
+    }
+  },
+  "auth": {
+    "allowRegister": true,
+    "allowAnonymous": false
+  },
+  "container": {
+    "enabled": true,
+    "cpuLimit": 0.5,
+    "memoryLimit": "256m",
+    "pidsLimit": 100,
+    "networkMode": "none",
+    "idleTimeout": 300000,
+    "maxIdleTime": 86400000
+  }
+}

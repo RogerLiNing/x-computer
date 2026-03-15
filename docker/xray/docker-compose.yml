@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  xray:
+    image: ghcr.io/xtls/xray-core:latest
+    container_name: xray-proxy
+    restart: unless-stopped
+    ports:
+      - "10809:10809"  # HTTP 代理端口
+      - "10808:10808"  # SOCKS5 代理端口
+    volumes:
+      - ./config.json:/etc/xray/config.json:ro
+    command: run -c /etc/xray/config.json
+    networks:
+      - xray-net
+
+networks:
+  xray-net:
+    driver: bridge

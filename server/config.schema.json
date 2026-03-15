@@ -1,0 +1,168 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "X-Computer Configuration",
+  "description": "X-Computer 配置文件 (.x-config.json) 的 JSON Schema",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema 引用"
+    },
+    "tool_loading_mode": {
+      "type": "string",
+      "enum": ["all", "on_demand"],
+      "default": "all",
+      "description": "工具加载模式：all=每次都加载全部工具；on_demand=仅预置搜索/加载，按需加载工具"
+    },
+    "llm_config": {
+      "type": "object",
+      "description": "LLM 配置",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "description": "LLM 提供商列表",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "提供商 ID"
+              },
+              "name": {
+                "type": "string",
+                "description": "提供商名称"
+              },
+              "baseUrl": {
+                "type": "string",
+                "description": "API 基础 URL"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API Key，支持 {env:VAR_NAME} 占位符从环境变量读取"
+              }
+            },
+            "required": ["id", "name"]
+          }
+        },
+        "defaultByModality": {
+          "type": "object",
+          "description": "按模态类型的默认模型配置",
+          "patternProperties": {
+            ".*": {
+              "type": "object",
+              "properties": {
+                "providerId": {
+                  "type": "string",
+                  "description": "提供商 ID"
+                },
+                "modelId": {
+                  "type": "string",
+                  "description": "模型 ID"
+                }
+              },
+              "required": ["providerId", "modelId"]
+            }
+          }
+        }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "description": "认证相关配置",
+      "properties": {
+        "allowRegister": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否允许注册新账号，默认 true；设为 false 可关闭注册（仅登录）"
+        },
+        "allowAnonymous": {
+          "type": "boolean",
+          "default": true,
+          "description": "是否允许匿名访问，默认 true（开发模式）；生产环境建议设为 false"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "description": "数据库配置：选择 SQLite 或 MySQL",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["sqlite", "mysql"],
+          "default": "sqlite",
+          "description": "数据库类型：sqlite（默认，本地文件 x-computer.db）或 mysql（需配置 MYSQL_HOST/PORT/USER/PASSWORD/DATABASE 环境变量）"
+        }
+      }
+    },
+    "container": {
+      "type": "object",
+      "description": "容器隔离配置",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "是否启用容器隔离，默认 false（开发模式）；生产环境强烈建议设为 true"
+        },
+        "cpuLimit": {
+          "type": "number",
+          "default": 1,
+          "minimum": 0.1,
+          "maximum": 16,
+          "description": "CPU 核心数限制，默认 1（0.5 = 50% 单核）"
+        },
+        "memoryLimit": {
+          "type": "string",
+          "default": "512m",
+          "pattern": "^[0-9]+(m|g)$",
+          "description": "内存限制，默认 512m（支持 m/g 单位，如 256m、1g）"
+        },
+        "pidsLimit": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 1000,
+          "description": "最大进程数限制，默认 100"
+        },
+        "networkMode": {
+          "type": "string",
+          "enum": ["none", "bridge", "host"],
+          "default": "none",
+          "description": "网络模式：none（无网络，最安全）、bridge（桥接网络）、host（主机网络），默认 none"
+        },
+        "idleTimeout": {
+          "type": "integer",
+          "default": 300000,
+          "minimum": 60000,
+          "description": "容器空闲超时（毫秒），超时后自动停止容器，默认 300000（5分钟）"
+        },
+        "maxIdleTime": {
+          "type": "integer",
+          "default": 86400000,
+          "minimum": 3600000,
+          "description": "容器最大空闲时间（毫秒），超时后自动删除容器，默认 86400000（24小时）"
+        }
+      }
+    },
+    "mcp_servers": {
+      "description": "默认 MCP 服务器（联网搜索等），用户无 mcp_config 时生效。格式：servers 数组或 mcpServers 对象",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "url": { "type": "string" },
+              "command": { "type": "string" },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "name": { "type": "string" },
+              "headers": { "type": "object" }
+            },
+            "required": ["id"]
+          }
+        },
+        { "type": "object" }
+      ]
+    }
+  }
+}

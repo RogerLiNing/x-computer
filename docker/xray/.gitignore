@@ -1,0 +1,3 @@
+# 忽略可能包含敏感信息的配置备份
+config.json.bak
+*.log

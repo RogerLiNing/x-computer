@@ -1,0 +1,108 @@
+{
+  "nav": {
+    "features": "功能特性",
+    "pricing": "价格方案",
+    "about": "关于我们",
+    "signIn": "登录",
+    "getStarted": "开始使用"
+  },
+  "hero": {
+    "badge": "AI 驱动的自主电脑系统",
+    "title": "你的 AI 大脑",
+    "titleHighlight": "无所不能",
+    "description": "X-Computer 是一个自主的 AI 操作系统，可以编程、浏览网页、管理文件，并自主执行复杂任务。",
+    "startTrial": "开始免费试用",
+    "learnMore": "了解更多"
+  },
+  "features": {
+    "title": "强大功能",
+    "subtitle": "一个系统满足所有需求",
+    "codeGeneration": {
+      "title": "代码生成",
+      "description": "在 AI 辅助下编写、编辑和调试任何语言的代码"
+    },
+    "webBrowsing": {
+      "title": "网页浏览",
+      "description": "浏览网页、提取数据、自动化网页任务"
+    },
+    "taskAutomation": {
+      "title": "任务自动化",
+      "description": "通过智能任务规划自动化复杂工作流"
+    },
+    "secureSandbox": {
+      "title": "安全沙箱",
+      "description": "所有操作在安全、隔离的环境中运行"
+    },
+    "selfLearning": {
+      "title": "自我学习",
+      "description": "从每次交互中持续学习和改进"
+    },
+    "multiModal": {
+      "title": "多模态 AI",
+      "description": "生成图片、音乐和创意内容"
+    }
+  },
+  "pricing": {
+    "title": "简单透明的定价",
+    "subtitle": "选择适合你的方案",
+    "trial": {
+      "name": "免费试用",
+      "price": "¥0",
+      "period": "7 天",
+      "features": [
+        "100 次 AI 调用",
+        "100MB 存储空间",
+        "1 个并发任务",
+        "基础功能"
+      ],
+      "cta": "开始免费试用"
+    },
+    "personal": {
+      "name": "个人版",
+      "price": "¥68",
+      "period": "每月",
+      "features": [
+        "1,000 次 AI 调用",
+        "1GB 存储空间",
+        "3 个并发任务",
+        "全部功能",
+        "优先支持"
+      ],
+      "cta": "立即开始"
+    },
+    "pro": {
+      "name": "专业版",
+      "price": "¥198",
+      "period": "每月",
+      "features": [
+        "5,000 次 AI 调用",
+        "10GB 存储空间",
+        "10 个并发任务",
+        "全部功能",
+        "优先支持",
+        "高级工具"
+      ],
+      "cta": "立即开始"
+    }
+  },
+  "cta": {
+    "title": "准备好开始了吗？",
+    "subtitle": "加入数千名已经在使用 X-Computer 自动化工作的用户",
+    "button": "开始免费试用"
+  },
+  "footer": {
+    "description": "面向未来的 AI 驱动自主电脑系统",
+    "product": "产品",
+    "company": "公司",
+    "legal": "法律",
+    "features": "功能特性",
+    "pricing": "价格方案",
+    "docs": "文档",
+    "about": "关于我们",
+    "blog": "博客",
+    "contact": "联系我们",
+    "privacy": "隐私政策",
+    "terms": "服务条款",
+    "copyright": "© 2026 X-Computer. 保留所有权利。"
+  }
+}

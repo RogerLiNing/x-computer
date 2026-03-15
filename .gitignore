@@ -1,0 +1,70 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+frontend/dist/
+server/dist/
+
+# Environment (NEVER commit secrets)
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test / Coverage
+coverage/
+.nyc_output/
+
+# User config (may contain API keys)
+.x-config.json
+**/.x-config.json
+!.x-config.example.json
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+workflow-engine/workflow-data.sqlite
+
+# Deploy config (contains host/password)
+scripts/deploy.config.json
+
+# Runtime data
+/projects-for-reference
+/qdrant_data
+/skills
+server/data/
+!server/data/.gitkeep
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+tmp/
+temp/
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Misc
+*.local

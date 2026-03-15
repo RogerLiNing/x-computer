@@ -1,0 +1,44 @@
+{
+  "name": "x-computer",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "description": "AI-driven autonomous computer system — office-first, agent-powered",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:frontend\"",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "dev:server": "npm run dev --workspace=server",
+    "dev:workflow": "npm run dev --workspace=workflow-engine",
+    "build": "npm run build --workspace=shared && npm run build --workspace=server && npm run build --workspace=frontend && npm run build --workspace=workflow-engine",
+    "lint": "npm run lint --workspaces",
+    "test": "cd server && npm run test",
+    "test:integration": "cd server && npm run test",
+    "test:workflow": "cd workflow-engine && npm run test",
+    "sync-skills": "./scripts/sync-builtin-skills.sh",
+    "deploy": "./scripts/deploy.sh",
+    "deploy:multi": "./scripts/deploy-multi.sh",
+    "deploy:list": "./scripts/deploy-multi.sh --list",
+    "deploy:validate": "./scripts/validate-deploy-config.sh",
+    "deploy:test": "./scripts/test-ssh-connection.sh",
+    "deploy:setup": "./scripts/remote-setup.sh",
+    "deploy:dev": "./scripts/deploy-multi.sh dev",
+    "deploy:staging": "./scripts/deploy-multi.sh staging",
+    "deploy:prod": "./scripts/deploy-multi.sh production",
+    "test:fal": "node scripts/test-fal-api.mjs",
+    "db:migrate": "tsx scripts/run-mysql-migration.ts",
+    "upgrade:pro": "tsx scripts/upgrade-user-to-pro.ts"
+  },
+  "workspaces": [
+    "shared",
+    "server",
+    "frontend",
+    "workflow-engine"
+  ],
+  "devDependencies": {
+    "@types/mailparser": "^3.4.6",
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  }
+}

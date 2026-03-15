@@ -1,0 +1,16 @@
+{
+  "servers": [
+    {
+      "id": "search",
+      "url": "https://mcp.exa.ai/mcp",
+      "name": "网络搜索",
+      "headers": { "Authorization": "Bearer YOUR_EXA_OR_OTHER_API_KEY" }
+    },
+    {
+      "id": "bingcn",
+      "command": "npx",
+      "args": ["bing-cn-mcp"],
+      "name": "Bing CN 搜索"
+    }
+  ]
+}

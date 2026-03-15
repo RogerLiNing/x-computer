@@ -1,0 +1,90 @@
+{
+  "environments": {
+    "dev": {
+      "name": "开发环境",
+      "host": "user@dev.example.com",
+      "port": 22,
+      "auth": {
+        "type": "key",
+        "keyPath": "~/.ssh/id_rsa"
+      },
+      "path": "/apps/x-computer-dev",
+      "branch": "develop",
+      "config": {
+        "container": {
+          "enabled": false
+        },
+        "auth": {
+          "allowAnonymous": true
+        }
+      }
+    },
+    "staging": {
+      "name": "测试环境",
+      "host": "user@staging.example.com",
+      "port": 22,
+      "auth": {
+        "type": "key",
+        "keyPath": "~/.ssh/id_rsa"
+      },
+      "path": "/apps/x-computer-staging",
+      "branch": "main",
+      "frontendSyncPath": "/opt/1panel/apps/openresty/openresty/www/sites/x.itoolcloud.cn",
+      "config": {
+        "container": {
+          "enabled": true,
+          "cpuLimit": 0.5,
+          "memoryLimit": "256m",
+          "networkMode": "none"
+        },
+        "auth": {
+          "allowAnonymous": true
+        }
+      }
+    },
+    "production": {
+      "name": "生产环境",
+      "host": "user@prod.example.com",
+      "port": 22,
+      "auth": {
+        "type": "key",
+        "keyPath": "~/.ssh/id_rsa_prod"
+      },
+      "path": "/apps/x-computer",
+      "branch": "main",
+      "config": {
+        "container": {
+          "enabled": true,
+          "cpuLimit": 0.5,
+          "memoryLimit": "256m",
+          "pidsLimit": 100,
+          "networkMode": "none"
+        },
+        "auth": {
+          "allowAnonymous": false
+        }
+      },
+      "requireConfirmation": true
+    },
+    "example-password": {
+      "name": "密码认证示例",
+      "host": "user@example.com",
+      "port": 22,
+      "auth": {
+        "type": "password",
+        "password": "your-password-here"
+      },
+      "path": "/apps/x-computer",
+      "branch": "main"
+    }
+  },
+  "default": "staging",
+  "comments": {
+    "auth.type": "认证方式：'key'（密钥）或 'password'（密码）",
+    "auth.keyPath": "SSH 私钥路径，支持 ~ 展开，默认 ~/.ssh/id_rsa",
+    "auth.password": "SSH 密码（需要安装 sshpass）",
+    "frontendSyncPath": "1Panel/OpenResty 使用 Docker 时，前端需复制到站点目录；填 1Panel 站点根目录路径，如 /opt/1panel/.../www/sites/xxx",
+    "port": "SSH 端口，默认 22",
+    "password": "已废弃，请使用 auth.password"
+  }
+}

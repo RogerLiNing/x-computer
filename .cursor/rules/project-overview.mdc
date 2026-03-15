@@ -1,0 +1,34 @@
+---
+description: X-Computer 项目概览与前后端分工
+alwaysApply: true
+---
+
+# X-Computer 项目开发规则概览
+
+**X-Computer** 是 AI 驱动的自主电脑系统：Web 桌面 + 办公应用 + 四域 AI 任务编排。Monorepo 使用 npm workspaces：`shared`、`server`、`frontend`。
+
+## 目录与职责
+
+- **shared/**：仅 TypeScript 类型，无运行时依赖。前后端共用：Task、TaskStep、ExecutionMode、AppIdentifier、AppManifest、ComputerContext 等。修改类型后需先 `npm run build --workspace=shared`。
+- **frontend/**：React 19 + TypeScript + Vite + Tailwind + Zustand。桌面壳、窗口管理、11 个内置应用、应用注册表、设置。详见 `frontend` 规则。
+- **server/**：Node.js + Express + WebSocket。任务编排、沙箱 FS/Shell、策略与审计、REST 与 WS 路由。详见 `server` 规则。
+
+## 约定
+
+- 共享类型与 API 契约以 `shared/src/index.ts` 和 `docs/DEVELOPMENT.md` 为准。
+- 新增 API 或 WS 消息时，在 `docs/DEVELOPMENT.md` 的「API 参考」「WebSocket 协议」中补充。
+- 应用相关：内置与安装应用统一走 `frontend/src/appRegistry.ts` 与 `docs/APP_SPEC.md` 规范。
+- **基础设施**：多用户隔离与云端存储的架构与实现见 `docs/INFRASTRUCTURE_MULTIUSER_CLOUD.md`。
+- **需求管理**：功能需求统一记录在 `docs/REQUIREMENTS.md`（状态：待开发/开发中/已完成；优先级 P0–P3）。用户提供新需求时：先评估并录入该表，再按优先级开发；开发中更新状态，完成后标为已完成并同步相关文档。
+- **测试**：任何新功能需配套单元测试或集成测试。后端在 `server/src` 用 Vitest 编写（`*.test.ts`）；前端逻辑可随 API 行为在后端集成测试中覆盖，或单独加 Vitest 单测。新增/修改接口或核心逻辑时同步补充用例并确保 `cd server && npm run test` 通过。
+
+## 运行与构建
+
+```bash
+npm install
+npm run dev          # 前端 3000 + 后端 4000
+npm run build        # shared → server → frontend
+cd server && npm run test   # 后端测试
+```
+
+文件级前端/后端规则见：`frontend.mdc`、`backend.mdc`。

@@ -1,0 +1,108 @@
+{
+  "nav": {
+    "features": "Features",
+    "pricing": "Pricing",
+    "about": "About",
+    "signIn": "Sign In",
+    "getStarted": "Get Started"
+  },
+  "hero": {
+    "badge": "AI-Powered Autonomous Computer System",
+    "title": "Your AI Brain for",
+    "titleHighlight": "Everything",
+    "description": "X-Computer is an autonomous AI operating system that can code, browse, manage files, and execute complex tasks - all by itself.",
+    "startTrial": "Start Free Trial",
+    "learnMore": "Learn More"
+  },
+  "features": {
+    "title": "Powerful Features",
+    "subtitle": "Everything you need in one AI-powered system",
+    "codeGeneration": {
+      "title": "Code Generation",
+      "description": "Write, edit, and debug code in any language with AI assistance"
+    },
+    "webBrowsing": {
+      "title": "Web Browsing",
+      "description": "Browse the web, extract data, and automate web tasks"
+    },
+    "taskAutomation": {
+      "title": "Task Automation",
+      "description": "Automate complex workflows with intelligent task planning"
+    },
+    "secureSandbox": {
+      "title": "Secure Sandbox",
+      "description": "All operations run in a secure, isolated environment"
+    },
+    "selfLearning": {
+      "title": "Self-Learning",
+      "description": "Continuously learns and improves from every interaction"
+    },
+    "multiModal": {
+      "title": "Multi-Modal AI",
+      "description": "Generate images, music, and creative content"
+    }
+  },
+  "pricing": {
+    "title": "Simple, Transparent Pricing",
+    "subtitle": "Choose the plan that's right for you",
+    "trial": {
+      "name": "Free Trial",
+      "price": "$0",
+      "period": "7 days",
+      "features": [
+        "100 AI calls",
+        "100MB storage",
+        "1 concurrent task",
+        "Basic features"
+      ],
+      "cta": "Start Free Trial"
+    },
+    "personal": {
+      "name": "Personal",
+      "price": "$9.99",
+      "period": "per month",
+      "features": [
+        "1,000 AI calls",
+        "1GB storage",
+        "3 concurrent tasks",
+        "All features",
+        "Priority support"
+      ],
+      "cta": "Get Started"
+    },
+    "pro": {
+      "name": "Professional",
+      "price": "$29.99",
+      "period": "per month",
+      "features": [
+        "5,000 AI calls",
+        "10GB storage",
+        "10 concurrent tasks",
+        "All features",
+        "Priority support",
+        "Advanced tools"
+      ],
+      "cta": "Get Started"
+    }
+  },
+  "cta": {
+    "title": "Ready to Get Started?",
+    "subtitle": "Join thousands of users who are already using X-Computer to automate their work",
+    "button": "Start Your Free Trial"
+  },
+  "footer": {
+    "description": "The AI-powered autonomous computer system for the future.",
+    "product": "Product",
+    "company": "Company",
+    "legal": "Legal",
+    "features": "Features",
+    "pricing": "Pricing",
+    "docs": "Documentation",
+    "about": "About",
+    "blog": "Blog",
+    "contact": "Contact",
+    "privacy": "Privacy",
+    "terms": "Terms",
+    "copyright": "© 2026 X-Computer. All rights reserved."
+  }
+}

@@ -1,0 +1,39 @@
+---
+description: 后端 (server) 开发规则与约定
+globs: server/**
+alwaysApply: false
+---
+
+# 后端开发规则
+
+## 技术栈
+
+- Node.js、Express 5、TypeScript、ws（WebSocket）。类型从 `@x-computer/shared` 引入，与前端共享契约。
+
+## 目录与职责
+
+- **src/index.ts**：创建 Express、挂载 `/api` 与 `/api/fs`、`/api/shell`、创建 WSS、初始化 SandboxFS、启动 HTTP。入口不包含业务逻辑，仅装配路由与中间件。
+- **src/routes/api.ts**：任务 CRUD、暂停/恢复、审批/拒绝、执行模式、工具定义、策略规则、审计查询、健康检查、整机上下文（`/api/context` 返回前端通过 WS 上报的 ComputerContext）。
+- **src/routes/fs.ts**：沙箱文件系统 list/read/write/mkdir/delete/rename/stat，委托 `SandboxFS`，路径需校验防穿越。
+- **src/routes/shell.ts**：POST `/api/shell/exec`，委托 `SandboxShell`，超时与危险命令拦截。
+- **src/orchestrator/**：AgentOrchestrator（任务生命周期、步骤循环、策略与审批）、TaskPlanner（四域步骤模板）、ToolExecutor（内置工具实现，当前多为模拟）。
+- **src/policy/PolicyEngine.ts**：风险评分、审批门控。
+- **src/observability/AuditLogger.ts**：内存审计日志，支持按任务/类型/时间查询与广播新条目。
+- **src/tooling/SandboxFS.ts**：沙箱目录、防路径穿越、启动时初始化示例目录。**SandboxShell.ts**：子进程执行、工作目录限制、超时与危险命令拦截。
+
+## API 与 WebSocket
+
+- REST base：`http://localhost:4000`；前端通过 Vite 代理访问 `/api`。接口路径、请求/响应体与 `docs/DEVELOPMENT.md` 的「API 参考」一致。
+- WebSocket：`ws://localhost:4000/ws`。服务端推送 init、task_event、audit_entry、mode_changed、task_created；接收 create_task、set_mode、pause_task、resume_task、approve_step、reject_step、set_computer_context。`set_computer_context` 的 payload 为 `ComputerContext`（含 `taskbarPinned: AppIdentifier[]`、`activeContext.appId?: AppIdentifier`），后端仅存储或透传，不解析具体应用 id。
+- 新增 REST 或 WS 消息类型时，在 shared 中补充类型定义（若需），并在 `docs/DEVELOPMENT.md` 中更新说明。
+
+## 错误与安全
+
+- 路由内使用 try/catch，返回明确 HTTP 状态码与错误信息；避免把内部堆栈暴露给前端。
+- 文件路径、命令参数必须经 SandboxFS/SandboxShell 校验，禁止路径穿越与未授权执行。
+
+## 测试
+
+- 测试文件位于 `server/src`，与实现同目录或集中（如 `api.test.ts`、`utils/chatContext.test.ts`），使用 Vitest。运行：`cd server && npm run test`。
+- **Node 版本**：测试与运行后端请使用 **Node 22**。在项目根目录执行 `nvm use` 或 `nvm use 22` 后再执行 `npm run test`，否则 better-sqlite3 等原生模块可能因 NODE_MODULE_VERSION 不匹配而报错。项目根目录提供 `.nvmrc`，`nvm use` 会自动读取。
+- **约定**：任何新功能、新接口或行为变更都需配套单元测试或集成测试；核心逻辑（如上下文截断、记忆、策略）需有单测，REST/WS 行为需在 `api.test.ts` 等集成测试中覆盖。提交前确保 `npm run test` 通过。

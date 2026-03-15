@@ -1,0 +1,43 @@
+{
+  "$schema": "https://x-computer.dev/config.json",
+  "database": {
+    "type": "sqlite"
+  },
+  "llm_config": {
+    "providers": [
+      {
+        "id": "openai",
+        "name": "OpenAI",
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKey": "{env:OPENAI_API_KEY}"
+      },
+      {
+        "id": "anthropic",
+        "name": "Anthropic (Claude)",
+        "baseUrl": "https://api.anthropic.com",
+        "apiKey": "{env:ANTHROPIC_API_KEY}"
+      },
+      {
+        "id": "ollama",
+        "name": "本地 Ollama",
+        "baseUrl": "http://localhost:11434/v1"
+      }
+    ],
+    "defaultByModality": {
+      "chat": { "providerId": "openai", "modelId": "gpt-4o" },
+      "text": { "providerId": "openai", "modelId": "gpt-4o" },
+      "video": { "providerId": "openai", "modelId": "gpt-4o" },
+      "image": { "providerId": "openai", "modelId": "dall-e-3" },
+      "image_edit": { "providerId": "openai", "modelId": "dall-e-3" },
+      "vector": { "providerId": "openai", "modelId": "text-embedding-3-small" }
+    }
+  },
+  "mcp_servers": [
+    {
+      "id": "search",
+      "name": "网络搜索",
+      "url": "https://mcp.exa.ai/mcp",
+      "headers": { "Authorization": "Bearer {env:EXA_API_KEY}" }
+    }
+  ]
+}
