@@ -3,24 +3,12 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Brain, Send, Loader2, Bell, Key, HelpCircle, Info, Sparkles, Play, Clock, Bot, User, Wrench, ChevronDown, ChevronRight, CheckCircle2, XCircle, Copy, Check, Users, MessageCircle, Square, MessageSquare, Plus } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { setMiniAppsFromApi } from '@/appRegistry';
 import { api } from '@/utils/api';
-
-/** 单次工具调用记录（与 AI 助手一致，用于对话中展示） */
-interface ToolCallRecord {
-  id: string;
-  toolName: string;
-  status: 'running' | 'completed' | 'failed';
-  input?: Record<string, unknown>;
-  output?: unknown;
-  error?: string;
-  duration?: number;
-}
+import { MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 /** 按需加载模式下已加载的工具名，跨消息持久化 */
@@ -903,18 +891,7 @@ export function XApp() {
                     <div className={m.toolCalls?.length ? 'mt-2' : ''}>
                       {m.role === 'assistant' ? (
                         <div className="chat-markdown text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
-                          <ReactMarkdown
-                            remarkPlugins={[remarkGfm]}
-                            components={{
-                              a: ({ href, children }) => (
-                                <a href={href} target="_blank" rel="noopener noreferrer" className="text-desktop-highlight underline">
-                                  {children}
-                                </a>
-                              ),
-                            }}
-                          >
-                            {m.content || (loading ? '…' : '')}
-                          </ReactMarkdown>
+                          <MarkdownContent content={m.content || (loading ? '…' : '')} />
                         </div>
                       ) : (
                         <span className="whitespace-pre-wrap">{m.content}</span>

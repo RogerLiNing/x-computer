@@ -17,6 +17,8 @@ export interface DiscordLoopDeps {
   setConfig: (userId: string, key: string, value: string) => void | Promise<void>;
   runIntent: (userId: string, intent: string, meta?: { signal?: string }) => void;
   runAgent: (userId: string, agentId: string, goal: string, meta?: { triggerId?: string; actionFingerprint?: string }) => Promise<void>;
+  /** 渠道消息作为Chat会话处理 */
+  handleChannelMessageAsChat?: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) => Promise<void>;
 }
 
 async function loadProcessedIds(
@@ -48,7 +50,7 @@ export async function handleDiscordMessage(
   userId: string,
   msg: DiscordMessagePayload,
 ): Promise<void> {
-  const { db, getConfig, setConfig, runIntent, runAgent } = deps;
+  const { db, getConfig, setConfig, runIntent, runAgent, handleChannelMessageAsChat } = deps;
   const msgId = `dc-${msg.messageId}`;
   const processed = await loadProcessedIds(getConfig, userId);
   if (processed.has(msgId)) return;
@@ -67,7 +69,13 @@ export async function handleDiscordMessage(
   });
 
   const fromDisplay = msg.fromUsername;
-  const goal = `用户通过 Discord 发来消息，请处理并回复。
+
+  // 如果提供了handleChannelMessageAsChat，则使用Chat会话方式处理
+  if (handleChannelMessageAsChat) {
+    await handleChannelMessageAsChat(userId, 'Discord', msg.text, fromDisplay, { channelId: msg.channelId });
+  } else {
+    // 后备：使用fireSignal触发意图处理
+    const goal = `用户通过 Discord 发来消息，请处理并回复。
 
 【发件人】${fromDisplay}（Channel ID: ${msg.channelId}）
 【内容】
@@ -75,7 +83,8 @@ ${msg.text}
 
 请理解用户意图，处理请求，并用 x.send_discord 回复到 channelId=${msg.channelId}。`;
 
-  await fireSignal(userId, 'discord_message_received', { from: msg.fromId, channelId: msg.channelId, text: msg.text, messageId: msgId, goal }, { getConfig, runIntent, runAgent });
+    await fireSignal(userId, 'discord_message_received', { from: msg.fromId, channelId: msg.channelId, text: msg.text, messageId: msgId, goal }, { getConfig, runIntent, runAgent });
+  }
 
   await saveProcessedIds(setConfig, userId, [...processed, msgId]);
   serverLogger.info('discord/loop', `discord_message_received 已发出`, `userId=${userId} from=${fromDisplay}`);

@@ -51,6 +51,7 @@ function isAdvancedTool(name: string): boolean {
     'memory_',
     'memory.',
     'signal.',
+    // x. 前缀的工具中，x.send_* 除外（渠道发送工具应在基础套餐中可用）
     'x.',
     'skill.',
     'search.web',
@@ -62,6 +63,8 @@ function isAdvancedTool(name: string): boolean {
     'python.run',
     'backend.',
   ];
+  // x.send_* 工具（渠道发送）应该在基础套餐中可用
+  if (name.startsWith('x.send_')) return false;
   return advancedPrefixes.some((p) => name === p || name.startsWith(p + '.'));
 }
 

@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
@@ -11,17 +9,7 @@ import { api, ApiError } from '@/utils/api';
 import { TASK_TEMPLATES, type TaskTemplateCategory } from '@/config/taskTemplates';
 import { buildComputerContext, formatComputerContextForPrompt, formatTaskSummaryForPrompt } from '@/utils/computerContext';
 import type { TaskDomain } from '@shared/index';
-
-/** 单次工具调用记录（用于对话中展示） */
-interface ToolCallRecord {
-  id: string;
-  toolName: string;
-  status: 'running' | 'completed' | 'failed';
-  input?: Record<string, unknown>;
-  output?: unknown;
-  error?: string;
-  duration?: number;
-}
+import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
 interface Message {
   id: string;
@@ -159,81 +147,6 @@ const WELCOME_FALLBACK = `我是 X-Computer 主脑，掌控本机所有应用与
 • 描述多步任务：我会创建执行流程，你可在任务时间线中审批或自动执行
 
 需要危险或敏感操作时，我会请求你的确认。试试输入「你好」或「写一篇短文」开始。`;
-
-/** 可展开/收起的工具调用块，类似 Cursor 风格 */
-function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
-  const [expanded, setExpanded] = useState(false);
-  const tools = useDesktopStore((s) => s.tools);
-  const fetchTools = useDesktopStore((s) => s.fetchTools);
-  useEffect(() => {
-    fetchTools();
-  }, [fetchTools]);
-  const toolDisplayName = tools.find((t) => t.name === tc.toolName)?.displayName ?? tc.toolName;
-  const statusIcon =
-    tc.status === 'running' ? (
-      <Loader2 size={10} className="text-blue-400 animate-spin shrink-0" />
-    ) : tc.status === 'completed' ? (
-      <CheckCircle2 size={10} className="text-green-400 shrink-0" />
-    ) : (
-      <XCircle size={10} className="text-red-400 shrink-0" />
-    );
-  const outputStr =
-    tc.error != null
-      ? String(tc.error)
-      : tc.output != null
-        ? typeof tc.output === 'string'
-          ? tc.output
-          : JSON.stringify(tc.output, null, 2)
-        : '';
-  const hasDetail = (tc.input && Object.keys(tc.input).length > 0) || outputStr;
-  return (
-    <div className="mt-1.5 rounded-lg border border-white/10 bg-white/5 overflow-hidden">
-      <button
-        type="button"
-        className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-white/5 transition-colors"
-        onClick={() => hasDetail && setExpanded((e) => !e)}
-      >
-        {hasDetail ? (
-          expanded ? (
-            <ChevronDown size={10} className="text-desktop-muted shrink-0" />
-          ) : (
-            <ChevronRight size={10} className="text-desktop-muted shrink-0" />
-          )
-        ) : (
-          <span className="w-[10px]" />
-        )}
-        <Wrench size={10} className="text-desktop-muted shrink-0" />
-        {statusIcon}
-        <span className="text-[10px] text-desktop-muted truncate flex-1">
-          {toolDisplayName}
-          {tc.duration != null && tc.status !== 'running' && (
-            <span className="text-desktop-muted/60 ml-1">({tc.duration}ms)</span>
-          )}
-        </span>
-      </button>
-      {expanded && hasDetail && (
-        <div className="px-2.5 py-1.5 text-[10px] text-desktop-muted/80 border-t border-white/5 space-y-1 max-h-32 overflow-auto">
-          {tc.input && Object.keys(tc.input).length > 0 && (
-            <div>
-              <span className="text-desktop-muted/60">输入:</span>
-              <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono">
-                {JSON.stringify(tc.input, null, 2)}
-              </pre>
-            </div>
-          )}
-          {outputStr && (
-            <div>
-              <span className="text-desktop-muted/60">{tc.error ? '错误:' : '输出:'}</span>
-              <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-desktop-text/90">
-                {outputStr.length > 500 ? outputStr.slice(0, 500) + '...' : outputStr}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
 
 /** 会话记录项（与 API 返回格式一致） */
 interface ChatSessionItem {
@@ -1491,7 +1404,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     <div className="h-full flex">
       {/* 会话列表侧边栏 */}
       {sidebarOpen && (
-        <div className="w-56 shrink-0 border-r border-white/5 bg-white/[0.02] flex flex-col">
+        <div className="w-full sm:w-56 shrink-0 border-r border-white/5 bg-white/[0.02] flex flex-col absolute sm:relative inset-x-0 top-12 sm:top-0 bottom-0 sm:bottom-auto z-20 sm:z-auto">
           <button
             className="flex items-center gap-2 px-3 py-2.5 m-2 rounded-lg bg-desktop-highlight/20 hover:bg-desktop-highlight/30 text-desktop-text text-xs transition-colors"
             onClick={startNewChat}
@@ -1545,7 +1458,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className={`flex-1 flex flex-col min-w-0 ${sidebarOpen ? 'hidden sm:flex' : 'flex'}`}>
       {/* Header：手机嵌入模式仅保留会话切换；否则显示完整 header */}
       {embeddedInMobile ? (
         <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5 bg-transparent">
@@ -1609,21 +1522,21 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto px-4 py-3 space-y-4">
+      <div className="flex-1 overflow-auto px-2 sm:px-4 py-3 space-y-3 sm:space-y-4">
         {chatSyncFailed && (
           <div className="rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs px-3 py-2">
             部分消息未同步到云端，请检查网络。恢复后可继续发送，新消息将正常同步。
           </div>
         )}
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+          <div key={msg.id} className={`flex gap-2 sm:gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
             {msg.role !== 'user' && (
-              <div className="w-7 h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0 mt-0.5">
+              <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0 mt-0.5">
                 <Bot size={14} className="text-desktop-highlight" />
               </div>
             )}
             <div
-              className={`max-w-[85%] rounded-xl px-3 py-2.5 text-xs leading-relaxed ${
+              className={`max-w-[90%] sm:max-w-[85%] rounded-xl px-2 sm:px-3 py-2 sm:py-2.5 text-xs leading-relaxed ${
                 msg.role === 'user'
                   ? 'bg-desktop-highlight/20 text-desktop-text'
                   : msg.role === 'system'
@@ -1643,18 +1556,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 <div className={msg.toolCalls?.length ? 'mt-2' : ''}>
                   {(msg.role === 'assistant' || msg.role === 'system') ? (
                     <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          a: ({ href, children }) => (
-                            <a href={href} target="_blank" rel="noopener noreferrer" className="text-desktop-highlight underline">
-                              {children}
-                            </a>
-                          ),
-                        }}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
+                      <MarkdownContent content={msg.content} />
                     </div>
                   ) : (
                     <span className="whitespace-pre-wrap">{msg.content}</span>
@@ -1804,7 +1706,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
             </div>
             {msg.role === 'user' && (
-              <div className="w-7 h-7 rounded-full bg-desktop-surface flex items-center justify-center shrink-0 mt-0.5">
+              <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-surface flex items-center justify-center shrink-0 mt-0.5">
                 <User size={14} className="text-desktop-muted" />
               </div>
             )}
@@ -1812,8 +1714,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         ))}
 
         {isLoading && (
-          <div className="flex gap-2.5">
-            <div className="w-7 h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0">
+          <div className="flex gap-2 sm:gap-2.5">
+            <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0">
               <Bot size={14} className="text-desktop-highlight" />
             </div>
             <div className="bg-white/5 rounded-xl px-4 py-3 flex items-center gap-2">
@@ -1954,22 +1856,22 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2 bg-white/5 rounded-xl px-3 py-2 border border-white/10 focus-within:border-desktop-highlight/30 transition-colors">
+        <div className="flex items-end gap-1 sm:gap-2 bg-white/5 rounded-xl px-2 sm:px-3 py-2 border border-white/10 focus-within:border-desktop-highlight/30 transition-colors">
           <button
             type="button"
-            className="p-1 rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text"
+            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
             onClick={() => attachFileInputRef.current?.click()}
             title={attachedFiles.length >= 5 ? '最多 5 个文件' : '附加文档（txt、md、pdf、doc、csv、json 等）'}
           >
-            <Paperclip size={14} />
+            <Paperclip size={16} className="sm:size-4" />
           </button>
           <button
             type="button"
-            className="p-1 rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text"
+            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
             onClick={() => attachInputRef.current?.click()}
             title={attachedImages.length >= 3 ? '最多 3 张参考图' : '上传参考图（1–3 张），将随消息发送供图像编辑使用'}
           >
-            <ImagePlus size={14} />
+            <ImagePlus size={16} className="sm:size-4" />
           </button>
           <textarea
             ref={inputRef}
@@ -1982,20 +1884,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               }
             }}
             placeholder="输入消息或任务描述... (Shift+Enter 换行)"
-            className="flex-1 bg-transparent outline-none text-xs text-desktop-text resize-none max-h-[120px] min-h-[24px] py-0.5 placeholder:text-desktop-muted/50 leading-relaxed"
+            className="flex-1 bg-transparent outline-none text-sm sm:text-xs text-desktop-text resize-none max-h-[120px] min-h-[32px] sm:min-h-[24px] py-1.5 sm:py-0.5 placeholder:text-desktop-muted/50 leading-relaxed"
             rows={1}
           />
           {isLoading ? (
             <button
-              className="p-1.5 rounded-lg transition-all shrink-0 mb-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400"
+              className="p-2 sm:p-1.5 rounded-lg transition-all shrink-0 mb-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
               onClick={stopGenerating}
               title="停止生成"
             >
-              <Square size={13} />
+              <Square size={14} className="sm:size-[13px]" />
             </button>
           ) : (
             <button
-              className={`p-1.5 rounded-lg transition-all shrink-0 mb-0.5 ${
+              className={`p-2 sm:p-1.5 rounded-lg transition-all shrink-0 mb-0.5 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
                 input.trim() || attachedImages.length || attachedFiles.length
                   ? 'bg-desktop-highlight hover:bg-desktop-highlight/80 text-white scale-100'
                   : 'bg-white/5 text-desktop-muted scale-95'
@@ -2003,7 +1905,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               onClick={() => sendMessage()}
               disabled={!input.trim() && !attachedImages.length && !attachedFiles.length}
             >
-              <Send size={13} />
+              <Send size={14} className="sm:size-[13px]" />
             </button>
           )}
         </div>

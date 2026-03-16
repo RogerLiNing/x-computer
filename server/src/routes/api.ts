@@ -66,17 +66,18 @@ import {
   disconnectWhatsApp,
   parseWhatsAppConfig,
   reconnectWhatsAppForConfiguredUsers,
+  sendWhatsAppMessage,
   CREDENTIALS_BASE,
 } from '../whatsapp/whatsappService.js';
 import { getSystemProxy } from '../utils/systemProxy.js';
 import { handleWhatsAppMessage } from '../whatsapp/whatsappLoop.js';
-import { setTelegramMessageHandler, getTelegramConnection, disconnectTelegram, parseTelegramConfig, reconnectTelegramForConfiguredUsers } from '../telegram/telegramService.js';
+import { setTelegramMessageHandler, getTelegramConnection, disconnectTelegram, parseTelegramConfig, reconnectTelegramForConfiguredUsers, sendTelegramMessage } from '../telegram/telegramService.js';
 import { handleTelegramMessage } from '../telegram/telegramLoop.js';
-import { setDiscordMessageHandler, getDiscordConnection, disconnectDiscord, parseDiscordConfig, reconnectDiscordForConfiguredUsers } from '../discord/discordService.js';
+import { setDiscordMessageHandler, getDiscordConnection, disconnectDiscord, parseDiscordConfig, reconnectDiscordForConfiguredUsers, sendDiscordMessage } from '../discord/discordService.js';
 import { handleDiscordMessage } from '../discord/discordLoop.js';
-import { setSlackMessageHandler, getSlackConnection, disconnectSlack, parseSlackConfig, reconnectSlackForConfiguredUsers } from '../slack/slackService.js';
+import { setSlackMessageHandler, getSlackConnection, disconnectSlack, parseSlackConfig, reconnectSlackForConfiguredUsers, sendSlackMessage } from '../slack/slackService.js';
 import { handleSlackMessage } from '../slack/slackLoop.js';
-import { setQQMessageHandler, getQQConnection, disconnectQQ, parseQQConfig, reconnectQQForConfiguredUsers } from '../qq/qqService.js';
+import { setQQMessageHandler, getQQConnection, disconnectQQ, parseQQConfig, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
 import { handleQQMessage } from '../qq/qqLoop.js';
 
 const MEMORY_DIR = 'memory';
@@ -1413,11 +1414,142 @@ export function createApiRouter(
   // ── R014：事件驱动 X 执行（用户发消息 / 任务完成后触发，节流 60s 每用户每来源） ──
   const EVENT_DRIVEN_THROTTLE_MS = 60_000;
   const lastEventRunByUser = new Map<string, number>();
+
+  /** 渠道消息作为Chat会话处理：将消息添加到Chat会话并触发AI回复 */
+  const handleChannelMessageAsChat = async (
+    userId: string,
+    channel: string,
+    message: string,
+    fromName?: string,
+    metadata?: Record<string, unknown>,
+  ): Promise<void> => {
+    if (!db || !userId || userId === 'anonymous') return;
+
+    // 查找最近的渠道会话，或创建新会话
+    const sessions = await db.listSessions(userId, 10, undefined);
+    const channelSession = sessions.find(
+      (s) => s.title && s.title.includes(`[${channel}]`),
+    );
+    const sessionId = channelSession?.id ?? (await db.createSession(userId, `渠道消息 [${channel}]`, null)).id;
+
+    // 将用户消息添加到会话
+    const userMessage = fromName
+      ? `[${channel}] ${fromName}: ${message}`
+      : `[${channel}] ${message}`;
+    await db.addMessage(sessionId, 'user', userMessage);
+
+    // 获取历史消息（最近50条）
+    const historyMessages = await db.getMessages(sessionId, 50);
+
+    // 转换为 LLM 消息格式，排除最后一条（刚添加的用户消息）
+    const chatHistoryRaw = historyMessages
+      .filter((m) => m.role !== 'system')
+      .slice(0, -1)
+      .map((m) => ({
+        role: m.role as 'user' | 'assistant',
+        content: m.content || '',
+      }));
+
+    // 使用标准的截断函数处理对话历史，并过滤掉 system 消息
+    const chatHistory = truncateChatMessages(chatHistoryRaw, MAX_CHAT_MESSAGES).filter(
+      (m) => m.role !== 'system',
+    ) as { role: 'user' | 'assistant'; content: string }[];
+
+    // 获取 LLM 配置
+    const llmConfig = await getLLMConfigForScheduler(userId);
+    if (!llmConfig?.providerId || !llmConfig?.modelId) {
+      serverLogger.warn('handleChannelMessageAsChat', `跳过执行：LLM 未配置`, `userId=${userId}`);
+      return;
+    }
+
+    // 确保用户的 MCP 工具已加载
+    if (ensureUserMcpForScheduler) {
+      await ensureUserMcpForScheduler(userId);
+    }
+
+    // 获取各种提示词（标准做法）
+    const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
+      getLearnedPromptForUser(userId),
+      getEvolvedCorePromptForUser(userId),
+      getBasePromptForUser(userId),
+      getAssistantPromptForUser(userId),
+    ]);
+
+    // 构建系统提示（使用标准 assemble 逻辑）
+    const tools = listAllCapabilities(orchestrator.getTools());
+    const skills = getDiscoveredSkills(userId);
+    const caps = USE_CONDENSED_SYSTEM_PROMPT
+      ? formatCapabilitiesSummaryCondensed(tools) + formatSkillsSummary(skills, true)
+      : formatCapabilitiesSummary(tools) + formatSkillsSummary(skills);
+
+    const systemPrompt = getAssembledSystemPrompt({
+      scene: 'none',
+      promptMode: 'minimal',
+      basePrompt,
+      capabilities: caps,
+      learnedPrompt,
+      evolvedCorePrompt,
+      assistantPrompt,
+    });
+
+    // 用户最新消息
+    const userMessageForLLM = `用户通过 ${channel} 发来消息：${message}\n\n请理解消息内容，进行对话式回复。`;
+
+    // 构建完整的消息列表（历史 + 最新）
+    const allMessages = [
+      ...chatHistory,
+      { role: 'user' as const, content: userMessageForLLM },
+    ];
+
+    // 直接调用 orchestrator 的聊天循环，获取回复内容
+    const toolLoadingMode = getToolLoadingMode();
+    const result = await orchestrator.runChatAgentLoop({
+      messages: allMessages,
+      systemPrompt,
+      llmConfig,
+      maxSteps: 15,
+      userId,
+      toolLoadingMode,
+    });
+
+    const replyText = result.content?.trim();
+    if (!replyText) {
+      serverLogger.warn('handleChannelMessageAsChat', `AI 未生成回复内容`, `userId=${userId} channel=${channel}`);
+      return;
+    }
+
+    // 保存 AI 回复到会话（用于多轮对话）
+    await db.addMessage(sessionId, 'assistant', replyText);
+
+    // 自动发送回复到对应渠道
+    const getConfig = db.getConfig.bind(db);
+    let sendResult: { ok: boolean; error?: string } = { ok: false, error: '未知渠道' };
+
+    if (channel === 'QQ' && metadata?.targetType && metadata?.targetId) {
+      sendResult = await sendQQMessage(getConfig, userId, { type: metadata.targetType as 'private' | 'group' | 'guild', id: String(metadata.targetId) }, replyText);
+    } else if (channel === 'WhatsApp' && metadata?.to) {
+      sendResult = await sendWhatsAppMessage(getConfig, userId, String(metadata.to), replyText);
+    } else if (channel === 'Telegram' && metadata?.chatId) {
+      sendResult = await sendTelegramMessage(getConfig, userId, String(metadata.chatId), replyText);
+    } else if (channel === 'Discord' && metadata?.channelId) {
+      sendResult = await sendDiscordMessage(getConfig, userId, String(metadata.channelId), replyText);
+    } else if (channel === 'Slack' && metadata?.channelId) {
+      sendResult = await sendSlackMessage(getConfig, userId, String(metadata.channelId), replyText);
+    }
+
+    if (sendResult.ok) {
+      serverLogger.info('handleChannelMessageAsChat', `渠道回复已发送`, `userId=${userId} channel=${channel}`);
+    } else {
+      serverLogger.error('handleChannelMessageAsChat', `渠道回复发送失败: ${sendResult.error}`, `userId=${userId} channel=${channel}`);
+    }
+  };
+
   const triggerXRunForUser = (
     userId: string,
     intent: string,
     source: string = 'chat',
     actionFingerprint?: string,
+    metadata?: Record<string, unknown>,
   ): void => {
     if (!userId || userId === 'anonymous' || !db) return;
     const now = Date.now();
@@ -1453,6 +1585,7 @@ export function createApiRouter(
               source: 'event_driven',
               title: '事件触发',
               actionFingerprint,
+              metadata,
             }),
           { logLabel: 'x/event-driven' },
         );
@@ -1497,13 +1630,53 @@ export function createApiRouter(
   if (db && signalFireDeps) {
     registerHook('task_complete', async (payload) => {
       const task = orchestrator.getTask(payload.taskId);
-      const meta = task?.metadata as { userId?: string; actionFingerprint?: string; source?: string; sourceId?: string } | undefined;
+      const meta = task?.metadata as { userId?: string; actionFingerprint?: string; source?: string; sourceId?: string; description?: string; llmConfig?: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string } } | undefined;
       if (meta?.actionFingerprint && meta?.userId) {
         const ok = payload.data && typeof payload.data === 'object' && (payload.data as { success?: boolean }).success === true;
         if (ok) void Promise.resolve(signalFireDeps.recordHandled!(meta.userId, meta.actionFingerprint)).catch(() => {});
       }
       const userId = meta?.userId;
       if (!userId) return;
+
+      // ── 记忆捕获：信号触发（QQ/WhatsApp/Telegram/Discord/Slack/Email）的任务 ──
+      // 仅对信号触发的任务执行记忆捕获，避免和 HTTP /chat 接口重复
+      const signalSources = ['event_driven', 'signal_trigger', 'scheduled_job'];
+      const isSignalTask = meta?.source && signalSources.includes(meta.source);
+      if (isSignalTask) {
+        const userMessage = meta?.description ?? '';
+        const assistantReply = (task?.result as { output?: string } | undefined)?.output ?? '';
+        const llmConfig = meta?.llmConfig;
+        if (userMessage.trim() && assistantReply.trim() && llmConfig?.providerId && llmConfig?.modelId) {
+          setImmediate(async () => {
+            try {
+              const memSvc = (await getMemoryServiceForUser(userId)) ?? memoryService;
+              await runConsiderCapture({
+                userMessage: userMessage.trim(),
+                assistantReply: assistantReply.trim(),
+                providerId: llmConfig.providerId,
+                modelId: llmConfig.modelId,
+                baseUrl: llmConfig.baseUrl,
+                apiKey: llmConfig.apiKey,
+                memoryService: memSvc,
+                workspaceId: userId,
+              });
+              await runLearnPromptExtract({
+                userMessage: userMessage.trim(),
+                assistantReply: assistantReply.trim(),
+                providerId: llmConfig.providerId,
+                modelId: llmConfig.modelId,
+                baseUrl: llmConfig.baseUrl,
+                apiKey: llmConfig.apiKey,
+                memoryService: memSvc,
+              });
+              serverLogger.info('task_complete', '信号任务记忆捕获完成', `taskId=${payload.taskId} userId=${userId}`);
+            } catch (err) {
+              serverLogger.error('task_complete (memory)', err instanceof Error ? err.message : String(err));
+            }
+          });
+        }
+      }
+
       // 定时任务完成后，将看板中对应「等待」项更新为「已完成」
       if (meta?.source === 'scheduled_job' && meta?.sourceId && typeof db.getBoardItemBySourceId === 'function') {
         const row = await Promise.resolve(db.getBoardItemBySourceId(userId, meta.sourceId));
@@ -1555,6 +1728,8 @@ export function createApiRouter(
       setConfig: db.setConfig.bind(db),
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
+      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
+        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
     };
     setWhatsAppMessageHandler((userId, msg) => {
       void handleWhatsAppMessage(whatsappLoopDeps, userId, msg);
@@ -1566,22 +1741,54 @@ export function createApiRouter(
     );
 
     // Telegram：注入消息处理器 + 启动自动重连
-    const telegramLoopDeps = { db, getConfig: db.getConfig.bind(db), setConfig: db.setConfig.bind(db), runIntent: runIntentWithSource, runAgent: signalFireDeps.runAgent };
+    const telegramLoopDeps = {
+      db,
+      getConfig: db.getConfig.bind(db),
+      setConfig: db.setConfig.bind(db),
+      runIntent: runIntentWithSource,
+      runAgent: signalFireDeps.runAgent,
+      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
+        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+    };
     setTelegramMessageHandler((userId, msg) => { void handleTelegramMessage(telegramLoopDeps, userId, msg); });
     void reconnectTelegramForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('telegram_config'));
 
     // Discord：注入消息处理器 + 启动自动重连
-    const discordLoopDeps = { db, getConfig: db.getConfig.bind(db), setConfig: db.setConfig.bind(db), runIntent: runIntentWithSource, runAgent: signalFireDeps.runAgent };
+    const discordLoopDeps = {
+      db,
+      getConfig: db.getConfig.bind(db),
+      setConfig: db.setConfig.bind(db),
+      runIntent: runIntentWithSource,
+      runAgent: signalFireDeps.runAgent,
+      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
+        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+    };
     setDiscordMessageHandler((userId, msg) => { void handleDiscordMessage(discordLoopDeps, userId, msg); });
     void reconnectDiscordForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('discord_config'));
 
     // Slack：注入消息处理器 + 启动自动重连
-    const slackLoopDeps = { db, getConfig: db.getConfig.bind(db), setConfig: db.setConfig.bind(db), runIntent: runIntentWithSource, runAgent: signalFireDeps.runAgent };
+    const slackLoopDeps = {
+      db,
+      getConfig: db.getConfig.bind(db),
+      setConfig: db.setConfig.bind(db),
+      runIntent: runIntentWithSource,
+      runAgent: signalFireDeps.runAgent,
+      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
+        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+    };
     setSlackMessageHandler((userId, msg) => { void handleSlackMessage(slackLoopDeps, userId, msg); });
     void reconnectSlackForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('slack_config'));
 
     // QQ：注入消息处理器 + 启动自动重连
-    const qqLoopDeps = { db, getConfig: db.getConfig.bind(db), setConfig: db.setConfig.bind(db), runIntent: runIntentWithSource, runAgent: signalFireDeps.runAgent };
+    const qqLoopDeps = {
+      db,
+      getConfig: db.getConfig.bind(db),
+      setConfig: db.setConfig.bind(db),
+      runIntent: runIntentWithSource,
+      runAgent: signalFireDeps.runAgent,
+      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
+        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+    };
     setQQMessageHandler((userId, msg) => { void handleQQMessage(qqLoopDeps, userId, msg); });
     void reconnectQQForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('qq_config'));
   }

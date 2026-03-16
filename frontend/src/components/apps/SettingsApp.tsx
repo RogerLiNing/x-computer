@@ -4,6 +4,7 @@ import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
+import { useAdminStore } from '@/store/adminStore';
 import type { LLMModality } from '@shared/index';
 import {
   BUILTIN_PROVIDER_IDS,
@@ -24,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'ai' | 'models' | 'mcp' | 'skills' | 'media' | 'channels' | 'security' | 'servers' | 'apps' | 'logs' | 'about';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'media' | 'channels' | 'security' | 'servers' | 'logs';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -446,20 +447,9 @@ function AccountSettingsSection(props: {
   );
 }
 
-const SIMPLE_MODE_KEY = 'x-computer-settings-simple-mode';
-const BASIC_TABS: SettingsTab[] = ['general', 'account', 'about'];
-
 export function SettingsApp({ windowId }: Props) {
   const { t } = useTranslation();
-  const [simpleMode, setSimpleMode] = useState(() => {
-    try {
-      return localStorage.getItem(SIMPLE_MODE_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
   const [tab, setTab] = useState<SettingsTab>('general');
-  const [canConfigureLLM, setCanConfigureLLM] = useState(true); // 默认 true，拉取后更新；仅专业版可配置
   const [accountEmail, setAccountEmail] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
   const [accountLoading, setAccountLoading] = useState(false);
@@ -473,20 +463,16 @@ export function SettingsApp({ windowId }: Props) {
     updatedAt: string;
   } | null>(null);
 
-  useEffect(() => {
-    api.getSubscriptionMe()
-      .then((d) => setCanConfigureLLM(d.canConfigureLLM ?? false))
-      .catch(() => setCanConfigureLLM(false));
-  }, []);
-
-  useEffect(() => {
-    if (tab === 'models' && !canConfigureLLM) setTab('general');
-  }, [tab, canConfigureLLM]);
-
-  const allTabs: { id: SettingsTab; labelKey: string; icon: React.ElementType }[] = [
+  // 基础tab，普通用户和管理员都可见
+  const basicTabs: { id: SettingsTab; labelKey: string; icon: React.ElementType }[] = [
     { id: 'general', labelKey: 'settings.general', icon: Monitor },
     { id: 'account', labelKey: 'settings.account', icon: User },
     { id: 'apps', labelKey: 'settings.apps', icon: Package },
+    { id: 'about', labelKey: 'settings.about', icon: Info },
+  ];
+
+  // 高级tab，仅管理员可见
+  const adminTabs: { id: SettingsTab; labelKey: string; icon: React.ElementType }[] = [
     { id: 'ai', labelKey: 'settings.ai', icon: Bot },
     { id: 'models', labelKey: 'settings.models', icon: Key },
     { id: 'mcp', labelKey: 'settings.mcp', icon: Plug },
@@ -496,24 +482,17 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'servers', labelKey: 'settings.servers', icon: Server },
     { id: 'security', labelKey: 'settings.security', icon: Shield },
     { id: 'logs', labelKey: 'settings.logs', icon: FileText },
-    { id: 'about', labelKey: 'settings.about', icon: Info },
   ];
-  const tabs = (simpleMode ? allTabs.filter((t) => BASIC_TABS.includes(t.id)) : allTabs).filter(
-    (t) => t.id !== 'models' || canConfigureLLM
-  );
 
-  const toggleSimpleMode = (on: boolean) => {
-    setSimpleMode(on);
-    try {
-      localStorage.setItem(SIMPLE_MODE_KEY, on ? '1' : '0');
-    } catch {}
-    if (!on && !BASIC_TABS.includes(tab)) setTab('general');
-  };
+  const isAdmin = useAdminStore((s) => s.isAdmin);
+  const tabs = useMemo(() => {
+    return isAdmin ? [...basicTabs, ...adminTabs] : basicTabs;
+  }, [isAdmin]);
 
   return (
     <div className="h-full flex text-sm min-h-0">
-      {/* Sidebar */}
-      <div className="w-48 shrink-0 border-r border-white/5 bg-white/[0.01] p-2 overflow-y-auto">
+      {/* Sidebar - 移动端隐藏，PC端显示 */}
+      <div className="w-40 sm:w-48 shrink-0 border-r border-white/5 bg-white/[0.01] p-2 overflow-y-auto hidden sm:block">
         {tabs.map((tabItem) => {
           const Icon = tabItem.icon;
           return (
@@ -533,8 +512,29 @@ export function SettingsApp({ windowId }: Props) {
         })}
       </div>
 
+      {/* 移动端：顶部 Tab 切换 */}
+      <div className="sm:hidden flex border-b border-white/5 bg-white/[0.01] overflow-x-auto shrink-0">
+        {tabs.map((tabItem) => {
+          const Icon = tabItem.icon;
+          return (
+            <button
+              key={tabItem.id}
+              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs transition-colors whitespace-nowrap ${
+                tab === tabItem.id
+                  ? 'bg-desktop-accent/40 text-desktop-text border-b-2 border-desktop-highlight'
+                  : 'text-desktop-muted hover:text-desktop-text'
+              }`}
+              onClick={() => setTab(tabItem.id)}
+            >
+              <Icon size={12} />
+              {t(tabItem.labelKey)}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Content */}
-      <div className="flex-1 overflow-auto p-5">
+      <div className="flex-1 overflow-auto p-3 sm:p-5">
         {tab === 'account' && (
           <AccountSettingsSection
             email={accountEmail}
@@ -556,20 +556,6 @@ export function SettingsApp({ windowId }: Props) {
         {tab === 'general' && (
           <div className="space-y-6">
             <h3 className="text-sm font-medium text-desktop-text">{t('settings.general')}</h3>
-            <SettingRow label={t('settings.simpleMode')} description={t('settings.simpleModeDescription')}>
-              <div className="flex items-center gap-2">
-                <ToggleSwitch value={simpleMode} onToggle={toggleSimpleMode} />
-                {simpleMode && (
-                  <button
-                    type="button"
-                    className="text-[11px] text-desktop-accent hover:underline"
-                    onClick={() => toggleSimpleMode(false)}
-                  >
-                    {t('settings.showAdvanced')}
-                  </button>
-                )}
-              </div>
-            </SettingRow>
             <SettingRow label={t('settings.theme')} description={t('settings.themeDescription')}>
               <select className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none">
                 <option>{t('settings.themeDark')}</option>
@@ -652,10 +638,6 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'apps' && (
           <AppManagementSettings />
-        )}
-
-        {tab === 'logs' && (
-          <SystemLogTab />
         )}
 
         {tab === 'about' && (

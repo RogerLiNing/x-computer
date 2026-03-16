@@ -209,7 +209,13 @@ else
   fi
 fi
 
-# 打包项目
+# 打包前检查：必须存在 docker/qdrant，否则部署后无法启动 Qdrant
+if [ ! -f "$ROOT/docker/qdrant/docker-compose.yml" ]; then
+  log_error "缺少 docker/qdrant，无法打包。请先拉取最新代码: git pull"
+  exit 1
+fi
+
+# 打包项目（显式包含 docker 各子目录，确保 qdrant 等一定被打进包）
 TARBALL="/tmp/x-computer-deploy-$$.tar.gz"
 log_info "打包项目（包含构建产物，排除源代码）"
 COPYFILE_DISABLE=1 tar -czf "$TARBALL" \
@@ -240,6 +246,7 @@ log_info "远程解压、安装依赖并重启"
 ${SSH_PREFIX}ssh $SSH_OPTS $SSH_PORT_OPT $SSH_KEY_OPT "$DEPLOY_HOST" "export LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8;
   PARENT=\$(dirname $DEPLOY_PATH)
   BASE=\$(basename $DEPLOY_PATH)
+  mkdir -p \$PARENT
   cd \$PARENT
   
   # 备份
@@ -318,10 +325,12 @@ ${SSH_PREFIX}ssh $SSH_OPTS $SSH_PORT_OPT $SSH_KEY_OPT "$DEPLOY_HOST" "export LC_
   # 应用环境配置（合并到现有配置，不覆盖 llm_config 等）
   if [ -f /tmp/x-computer-env-config.json ]; then
     echo '>>> 应用环境配置（合并）'
+    mkdir -p $DEPLOY_PATH/server
     node -e \"
       const fs = require('fs');
       const confPath = '$DEPLOY_PATH/server/.x-config.json';
       const overlayPath = '/tmp/x-computer-env-config.json';
+      fs.mkdirSync(require('path').dirname(confPath), { recursive: true });
       let base = {};
       if (fs.existsSync(confPath)) {
         base = JSON.parse(fs.readFileSync(confPath, 'utf8'));
@@ -329,7 +338,7 @@ ${SSH_PREFIX}ssh $SSH_OPTS $SSH_PORT_OPT $SSH_KEY_OPT "$DEPLOY_HOST" "export LC_
       const overlay = JSON.parse(fs.readFileSync(overlayPath, 'utf8'));
       for (const k of Object.keys(overlay)) {
         base[k] = typeof overlay[k] === 'object' && overlay[k] !== null && !Array.isArray(overlay[k])
-          ? { ...(base[k] || {}), ...overlay[k] }
+          ? Object.assign({}, base[k] || {}, overlay[k])
           : overlay[k];
       }
       fs.writeFileSync(confPath, JSON.stringify(base, null, 2));
@@ -369,8 +378,9 @@ ${SSH_PREFIX}ssh $SSH_OPTS $SSH_PORT_OPT $SSH_KEY_OPT "$DEPLOY_HOST" "export LC_
     rm -f /tmp/x-computer-env-exports.sh
   fi
   
-  # 若使用 MySQL，先启动 MySQL 容器并等待就绪
-  if [ \"\${DATABASE_TYPE:-}\" = 'mysql' ]; then
+  # 若使用 MySQL 且 config.database.useDocker=true，则启动 MySQL 容器；否则假定已有 MySQL 在运行
+  USE_MYSQL_DOCKER=\$(node -e \"try { const c=JSON.parse(require('fs').readFileSync('$DEPLOY_PATH/server/.x-config.json','utf8')); console.log(c.database?.useDocker === true ? 'yes' : 'no'); } catch(e){ console.log('no'); }\" 2>/dev/null || echo 'no')
+  if [ \"\${DATABASE_TYPE:-}\" = 'mysql' ] && [ \"\$USE_MYSQL_DOCKER\" = 'yes' ]; then
     echo '>>> 启动 MySQL 容器'
     if command -v docker &>/dev/null; then
       docker compose -f $DEPLOY_PATH/docker/mysql/docker-compose.yml up -d
@@ -385,6 +395,8 @@ ${SSH_PREFIX}ssh $SSH_OPTS $SSH_PORT_OPT $SSH_KEY_OPT "$DEPLOY_HOST" "export LC_
     else
       echo '>>> 警告: 未检测到 docker，请确保 MySQL 已运行'
     fi
+  elif [ \"\${DATABASE_TYPE:-}\" = 'mysql' ]; then
+    echo '>>> 使用已有 MySQL（跳过 Docker 容器）'
   fi
   
   # 重启服务

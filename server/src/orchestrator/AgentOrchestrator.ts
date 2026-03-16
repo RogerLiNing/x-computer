@@ -765,11 +765,13 @@ export class AgentOrchestrator extends EventEmitter {
           tool_call_id: tc.id,
         });
       }
-      if (onDemand && effectiveAllowed) {
-        effectiveAllowed = resolveToolNames();
+      // 每次工具执行后重新获取工具列表，确保新添加的 MCP 工具（如 x.add_mcp_server 后）能立即使用
+      const allFiltered = await this.getLLMToolDefsFiltered(userId);
+      if (effectiveAllowed?.length) {
         const set = new Set(effectiveAllowed);
-        const allFiltered = await this.getLLMToolDefsFiltered(userId);
         tools = allFiltered.filter((t) => set.has(t.name));
+      } else {
+        tools = allFiltered;
       }
       steps++;
     }
@@ -831,8 +833,9 @@ export class AgentOrchestrator extends EventEmitter {
     sourceId?: string;
     title?: string;
     actionFingerprint?: string;
+    metadata?: Record<string, unknown>;
   }): Promise<{ content: string }> {
-    const { intent, llmConfig, systemPrompt, userId, source, sourceId, title, actionFingerprint } = params;
+    const { intent, llmConfig, systemPrompt, userId, source, sourceId, title, actionFingerprint, metadata: extraMetadata } = params;
     const taskId = uuid();
     const task: Task = {
       id: taskId,
@@ -850,6 +853,7 @@ export class AgentOrchestrator extends EventEmitter {
         source,
         sourceId,
         ...(actionFingerprint ? { actionFingerprint } : {}),
+        ...(extraMetadata || {}),
       },
     };
     this.tasks.set(task.id, task);
@@ -1144,6 +1148,7 @@ export class AgentOrchestrator extends EventEmitter {
       allowedToolNames?: string[];
       agentId?: string;
       chatContext?: Array<{ role: string; content: string }>;
+      sourceMessage?: { fromId?: string; chatId?: string; targetType?: string };
     } | undefined;
     const llmConfig = meta?.llmConfig;
     const taskUserId = meta?.userId;
@@ -1236,6 +1241,7 @@ export class AgentOrchestrator extends EventEmitter {
           setConfig: accessors.setConfig,
           recentToolResults,
           reloadMcpForUser: this.reloadMcpForUser,
+          taskMetadata: meta, // 传递任务 metadata，包括 sourceMessage
         };
         const stepsCreated: TaskStep[] = [];
         for (const tc of result.toolCalls) {

@@ -79,7 +79,8 @@
     }
   },
   "default": "staging",
-  "comments": {
+    "comments": {
+    "config.database.useDocker": "为 true 时使用 Docker 启动 MySQL 容器；否则假定已有 MySQL 在运行（默认跳过）",
     "auth.type": "认证方式：'key'（密钥）或 'password'（密码）",
     "auth.keyPath": "SSH 私钥路径，支持 ~ 展开，默认 ~/.ssh/id_rsa",
     "auth.password": "SSH 密码（需要安装 sshpass）",

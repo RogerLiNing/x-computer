@@ -72,14 +72,25 @@ export function AppWindowFrame({ window: win }: Props) {
     [win, resizeWindow],
   );
 
+  const isMobileWindow = typeof window !== 'undefined' && window.innerWidth < 640;
+
   const style: React.CSSProperties = win.isMaximized
-    ? { left: 0, top: 0, width: '100%', height: 'calc(100% - var(--taskbar-height, 52px))', zIndex: win.zIndex }
+    ? {
+        left: 0,
+        top: 0,
+        width: '100%',
+        height: isMobileWindow
+          ? '100%'
+          : 'calc(100% - var(--taskbar-height, 52px))',
+        zIndex: win.zIndex,
+        paddingTop: isMobileWindow ? 'env(safe-area-inset-top)' : undefined,
+      }
     : { left: win.x, top: win.y, width: win.width, height: win.height, zIndex: win.zIndex };
 
   return (
     <div
       ref={frameRef}
-      className={`absolute flex flex-col overflow-hidden animate-fade-in sm:rounded-xl ${
+      className={`absolute flex flex-col overflow-hidden animate-fade-in sm:rounded-xl ${isMobileWindow && win.isMaximized ? 'safe-area-pb' : ''} ${
         win.isFocused ? 'shadow-window-focused ring-1 ring-desktop-highlight/20' : 'shadow-window'
       } ${win.isMaximized ? 'rounded-none' : ''}`}
       style={style}

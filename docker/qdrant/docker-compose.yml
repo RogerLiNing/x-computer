@@ -1,0 +1,21 @@
+# Qdrant 向量数据库，供 x-computer 记忆检索等使用
+# 使用：在项目根目录执行 docker compose -f docker/qdrant/docker-compose.yml up -d
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: x-computer-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"   # REST API
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qdrant_data:

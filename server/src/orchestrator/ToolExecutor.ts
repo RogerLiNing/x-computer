@@ -261,6 +261,8 @@ export interface ExecutionContext {
   onGroupRunProgress?: (userId: string, data: GroupRunProgressPayload) => void;
   /** 按用户重载 MCP 配置（x.add/update/remove_mcp_server 后立即生效） */
   reloadMcpForUser?: (userId: string) => Promise<void>;
+  /** 任务元数据（如 sourceMessage 包含渠道消息的发送者信息） */
+  taskMetadata?: Record<string, unknown>;
 }
 
 type ToolHandler = (input: Record<string, unknown>, context?: ExecutionContext) => Promise<unknown>;
@@ -2840,11 +2842,23 @@ export class ToolExecutor {
         if (!userId || userId === 'anonymous') throw new Error('x.send_qq: 需要已登录用户');
         const getConfig = ctx?.getConfig;
         if (!getConfig) throw new Error('x.send_qq: 配置不可用');
-        const targetType = String(input.targetType ?? '').trim() as 'private' | 'group' | 'guild';
-        const targetId = String(input.targetId ?? '').trim();
+        let targetType = String(input.targetType ?? '').trim() as 'private' | 'group' | 'guild';
+        let targetId = String(input.targetId ?? '').trim();
         const message = String(input.message ?? input.content ?? '').trim();
         if (!targetType || !targetId || !message) throw new Error('x.send_qq: targetType、targetId、message 必填');
         if (!['private', 'group', 'guild'].includes(targetType)) throw new Error('x.send_qq: targetType 必须为 private、group 或 guild');
+
+        // 智能修正 targetId：如果 AI 错误地传了 "user" 或空字符串，尝试从上下文获取正确的发送者 ID
+        if (!targetId || targetId === 'user' || targetId === 'chat') {
+          // 从当前任务的 metadata 中获取原始消息的 fromId（发送者的 QQ openid）
+          const taskMetadata = ctx?.taskMetadata as { sourceMessage?: { fromId?: string; chatId?: string } } | undefined;
+          if (taskMetadata?.sourceMessage?.fromId) {
+            targetId = taskMetadata.sourceMessage.fromId;
+          } else {
+            throw new Error('x.send_qq: targetId 无效。请确保使用发送者的 QQ ID（openid）作为 targetId，而不是 "user"。');
+          }
+        }
+
         const config = parseQQConfig(await getConfigValue(getConfig, userId, 'qq_config'));
         if (!config?.enabled) throw new Error('x.send_qq: 未启用 QQ，请在设置中配置');
         const result = await sendQQMessage(getConfig, userId, { type: targetType, id: targetId }, message);

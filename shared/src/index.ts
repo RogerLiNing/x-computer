@@ -189,7 +189,11 @@ export type BuiltinAppId =
   | 'agent-manager'
   | 'x-board'
   | 'subscription'
-  | 'admin';
+  | 'admin'
+  | 'skills'
+  | 'mcp'
+  | 'channels'
+  | 'extensions';
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
 export type AppId = BuiltinAppId;

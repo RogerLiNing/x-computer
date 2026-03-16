@@ -18,6 +18,8 @@ export interface WhatsAppLoopDeps {
   setConfig: (userId: string, key: string, value: string) => void | Promise<void>;
   runIntent: (userId: string, intent: string, meta?: { signal?: string }) => void;
   runAgent: (userId: string, agentId: string, goal: string, meta?: { triggerId?: string; actionFingerprint?: string }) => Promise<void>;
+  /** 渠道消息作为Chat会话处理 */
+  handleChannelMessageAsChat?: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) => Promise<void>;
 }
 
 async function loadProcessedIds(
@@ -54,7 +56,7 @@ export async function handleWhatsAppMessage(
   userId: string,
   msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean },
 ): Promise<void> {
-  const { db, getConfig, setConfig, runIntent, runAgent } = deps;
+  const { db, getConfig, setConfig, runIntent, runAgent, handleChannelMessageAsChat } = deps;
   const msgId = msg.messageId ?? `${msg.fromJid}-${msg.timestamp ?? Date.now()}-${Math.random().toString(36).slice(2)}`;
   const processed = await loadProcessedIds(getConfig, userId);
   if (processed.has(msgId)) return;
@@ -70,7 +72,13 @@ export async function handleWhatsAppMessage(
   });
 
   const fromDisplay = msg.fromJid.replace(/@.*$/, '');
-  const goal = `用户通过 WhatsApp 发来消息，请处理并回复。
+
+  // 如果提供了handleChannelMessageAsChat，则使用Chat会话方式处理
+  if (handleChannelMessageAsChat) {
+    await handleChannelMessageAsChat(userId, 'WhatsApp', msg.text, fromDisplay, { to: msg.fromJid });
+  } else {
+    // 后备：使用fireSignal触发意图处理
+    const goal = `用户通过 WhatsApp 发来消息，请处理并回复。
 
 【发件人】${fromDisplay}
 【内容】
@@ -78,16 +86,17 @@ ${msg.text}
 
 请理解用户意图，处理请求，并用 x.send_whatsapp 回复到 ${fromDisplay}。`;
 
-  await fireSignal(
-    userId,
-    'whatsapp_message_received',
-    { from: msg.fromJid, text: msg.text, messageId: msgId, goal },
-    {
-      getConfig,
-      runIntent,
-      runAgent,
-    },
-  );
+    await fireSignal(
+      userId,
+      'whatsapp_message_received',
+      { from: msg.fromJid, text: msg.text, messageId: msgId, goal },
+      {
+        getConfig,
+        runIntent,
+        runAgent,
+      },
+    );
+  }
 
   await saveProcessedIds(setConfig, userId, [...processed, msgId]);
   serverLogger.info('whatsapp/loop', `whatsapp_message_received 已发出`, `userId=${userId} from=${fromDisplay}`);
