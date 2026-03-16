@@ -113,6 +113,10 @@ export async function searchSkillHub(query: string, limit = 10): Promise<SkillHu
   }
   const limitNum = Math.min(Math.max(1, Math.floor(Number(limit) || 10)), 50);
   const cmd = `npx --yes skillhub search "${q.replace(/"/g, '\\"')}" --limit ${limitNum}`;
+
+  // 添加超时逻辑
+  const TIMEOUT_MS = 60000; // 60秒超时
+
   return new Promise((resolve) => {
     const child = spawn('sh', ['-c', cmd], {
       cwd: process.cwd(),
@@ -120,9 +124,20 @@ export async function searchSkillHub(query: string, limit = 10): Promise<SkillHu
     });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      resolve({ ok: false, error: 'skillhub search 超时（60秒），请稍后重试' });
+    }, TIMEOUT_MS);
+
     child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
     child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
     child.on('close', (code: number | null, signal: string | null) => {
+      clearTimeout(timeoutId);
+      if (timedOut) return;
+
       if (code !== 0) {
         const err = stderr.trim() || stdout.trim() || `exit ${code ?? signal}`;
         resolve({ ok: false, error: `skillhub search 失败: ${err.slice(0, 300)}` });
@@ -167,8 +182,8 @@ export async function searchSkillHub(query: string, limit = 10): Promise<SkillHu
           continue;
         }
 
-        // Format B: 列表格式 [1]   owner/repo/skill-name   ●●●●●
-        const listMatch = trimmed.match(/^\[\d+\]\s+([a-zA-Z0-9_./-]+)\s+●/);
+        // Format B: 列表格式 [1]   owner/repo/skill-name   🛡️ Pass 或 ●●●●●
+        const listMatch = trimmed.match(/^\[\d+\]\s+([a-zA-Z0-9_./-]+)\s+(🛡️|●)/);
         if (listMatch) {
           if (slug) flush();
           pendingListSlug = listMatch[1];
@@ -226,6 +241,8 @@ export async function searchSkillHub(query: string, limit = 10): Promise<SkillHu
       resolve({ ok: true, skills });
     });
     child.on('error', (err: Error) => {
+      clearTimeout(timeoutId);
+      if (timedOut) return;
       resolve({ ok: false, error: `执行 skillhub search 失败: ${err.message}` });
     });
   });
