@@ -41,6 +41,9 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'x-board', name: getAppName('x-board'), description: getAppDescription('x-board'), source: 'builtin', icon: 'Kanban' },
   { id: 'subscription', name: getAppName('subscription'), description: getAppDescription('subscription'), source: 'builtin', icon: 'CreditCard' },
   { id: 'admin', name: getAppName('admin'), description: getAppDescription('admin'), source: 'builtin', icon: 'Shield' },
+  { id: 'skills', name: getAppName('skills'), description: getAppDescription('skills'), source: 'builtin', icon: 'Sparkles' },
+  { id: 'mcp', name: getAppName('mcp'), description: getAppDescription('mcp'), source: 'builtin', icon: 'Plug' },
+  { id: 'channels', name: getAppName('channels'), description: getAppDescription('channels'), source: 'builtin', icon: 'MessageSquare' },
   { id: 'extensions', name: getAppName('extensions'), description: getAppDescription('extensions'), source: 'builtin', icon: 'Sparkles' },
 ];
 

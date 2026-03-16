@@ -47,6 +47,9 @@
     "x-board": "X Task Board",
     "subscription": "Subscription",
     "admin": "Admin",
+    "skills": "Skills",
+    "mcp": "MCP Servers",
+    "channels": "Channels",
     "extensions": "Extensions"
   },
 
