@@ -10,6 +10,7 @@ services:
       - "6333:6333"   # REST API
       - "6334:6334"   # gRPC
     volumes:
+      # 命名卷（默认）：数据由 Docker 管理，持久化
       - qdrant_data:/qdrant/storage
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
@@ -17,5 +18,6 @@ services:
       timeout: 5s
       retries: 5
 
+# 命名卷：持久化向量数据，容器删除后仍保留
 volumes:
   qdrant_data:

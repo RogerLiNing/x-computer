@@ -47,9 +47,6 @@
     "x-board": "X Task Board",
     "subscription": "Subscription",
     "admin": "Admin",
-    "skills": "Skills",
-    "mcp": "MCP Servers",
-    "channels": "Channels",
     "extensions": "Extensions"
   },
 
@@ -73,9 +70,6 @@
     "x-board": "X's task board: view X's todo, in-progress, and completed tasks",
     "subscription": "Manage your subscription and billing",
     "admin": "User management, ban/unban, system overview (admin only)",
-    "skills": "Manage AI skills and plugins",
-    "mcp": "Manage MCP server extensions",
-    "channels": "Manage communication channels like email, WhatsApp, QQ",
     "extensions": "Manage Skills, MCP extensions and tools",
     "miniapp": "App created by X"
   },

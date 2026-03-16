@@ -41,9 +41,6 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'x-board', name: getAppName('x-board'), description: getAppDescription('x-board'), source: 'builtin', icon: 'Kanban' },
   { id: 'subscription', name: getAppName('subscription'), description: getAppDescription('subscription'), source: 'builtin', icon: 'CreditCard' },
   { id: 'admin', name: getAppName('admin'), description: getAppDescription('admin'), source: 'builtin', icon: 'Shield' },
-  { id: 'skills', name: getAppName('skills'), description: getAppDescription('skills'), source: 'builtin', icon: 'Sparkles' },
-  { id: 'mcp', name: getAppName('mcp'), description: getAppDescription('mcp'), source: 'builtin', icon: 'Plug' },
-  { id: 'channels', name: getAppName('channels'), description: getAppDescription('channels'), source: 'builtin', icon: 'MessageSquare' },
   { id: 'extensions', name: getAppName('extensions'), description: getAppDescription('extensions'), source: 'builtin', icon: 'Sparkles' },
 ];
 
@@ -69,9 +66,6 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'x-board': { width: 900, height: 600 },
   subscription: { width: 1000, height: 680 },
   admin: { width: 1000, height: 680 },
-  skills: { width: 720, height: 560 },
-  mcp: { width: 720, height: 560 },
-  channels: { width: 720, height: 560 },
   extensions: { width: 900, height: 650 },
 };
 
