@@ -73,6 +73,12 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <MediaViewerApp windowId={windowId} metadata={metadata} />;
     case 'extensions':
       return <ExtensionsApp windowId={windowId} />;
+    case 'skills':
+      return <SkillsApp windowId={windowId} />;
+    case 'mcp':
+      return <McpApp windowId={windowId} />;
+    case 'channels':
+      return <ChannelsApp windowId={windowId} />;
     default:
       return (
         <div className="flex items-center justify-center h-full text-desktop-muted text-sm">
