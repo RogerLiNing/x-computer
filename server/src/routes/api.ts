@@ -3013,7 +3013,8 @@ export function createApiRouter(
       if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
       const config = parseQQConfig(await db.getConfig(userId, 'qq_config'));
       const conn = getQQConnection(userId, db.getConfig.bind(db));
-      res.json({ ok: true, enabled: config?.enabled ?? false, status: conn.getStatus(), botInfo: conn.getBotInfo(), dmPolicy: config?.dmPolicy ?? 'open', groupPolicy: config?.groupPolicy ?? 'open' });
+      const selfOpenid = await db.getConfig(userId, 'qq_self_openid');
+      res.json({ ok: true, enabled: config?.enabled ?? false, status: conn.getStatus(), botInfo: conn.getBotInfo(), dmPolicy: config?.dmPolicy ?? 'open', groupPolicy: config?.groupPolicy ?? 'open', selfOpenid: selfOpenid ?? null });
     } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '获取失败' }); }
   });
 

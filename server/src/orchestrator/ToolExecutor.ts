@@ -2827,12 +2827,12 @@ export class ToolExecutor {
       {
         name: 'x.send_qq',
         displayName: '发送 QQ 消息',
-        description: '通过 QQ 官方 Bot 发送消息。需先在 设置 → 通知/QQ 中配置 AppID+Secret 并连接。targetType 为 private/group/guild，targetId 为对应的用户ID/群ID/频道ID。',
+        description: '通过 QQ 官方 Bot 发送消息。需先在 设置 → 通知/QQ 中配置 AppID+Secret 并连接。targetType 为 private/group/guild 或 self（发给自己）。targetId 为对应的用户ID/群ID/频道ID。使用 self 时会自动使用用户已记录的 OpenID（用户首次私聊时会自动记录）。',
         domain: ['chat', 'agent'],
         riskLevel: 'low',
         parameters: [
-          { name: 'targetType', type: 'string', description: '消息目标类型：private（私聊）、group（群聊）或 guild（频道）', required: true },
-          { name: 'targetId', type: 'string', description: '目标 ID（用户 openid、群 openid 或频道 channel_id）', required: true },
+          { name: 'targetType', type: 'string', description: '消息目标类型：private（私聊）、group（群聊）、guild（频道）或 self（发给自己）', required: true },
+          { name: 'targetId', type: 'string', description: '目标 ID（用户 openid、群 openid 或频道 channel_id）。当 targetType 为 self 时此参数可选', required: false },
           { name: 'message', type: 'string', description: '消息内容', required: true },
         ],
         requiredPermissions: [],
@@ -2841,12 +2841,29 @@ export class ToolExecutor {
         const userId = ctx?.userId;
         if (!userId || userId === 'anonymous') throw new Error('x.send_qq: 需要已登录用户');
         const getConfig = ctx?.getConfig;
+        const setConfig = ctx?.setConfig;
         if (!getConfig) throw new Error('x.send_qq: 配置不可用');
-        let targetType = String(input.targetType ?? '').trim() as 'private' | 'group' | 'guild';
+        let targetTypeRaw = String(input.targetType ?? '').trim();
         let targetId = String(input.targetId ?? '').trim();
         const message = String(input.message ?? input.content ?? '').trim();
-        if (!targetType || !targetId || !message) throw new Error('x.send_qq: targetType、targetId、message 必填');
-        if (!['private', 'group', 'guild'].includes(targetType)) throw new Error('x.send_qq: targetType 必须为 private、group 或 guild');
+
+        // 支持 targetType 为 "self"，表示发送给用户自己（使用已记录的 OpenID）
+        let targetType: 'private' | 'group' | 'guild' = 'private';
+        if (targetTypeRaw === 'self') {
+          // 获取用户之前记录的 OpenID
+          const selfOpenid = await getConfigValue(getConfig, userId, 'qq_self_openid');
+          if (!selfOpenid) {
+            throw new Error('x.send_qq: 尚未记录您的 QQ OpenID。请先通过 QQ 私聊发送一条消息，系统会自动记录。');
+          }
+          targetId = selfOpenid;
+          targetType = 'private';
+        } else {
+          targetType = targetTypeRaw as 'private' | 'group' | 'guild';
+          if (!targetType || !targetId || !message) throw new Error('x.send_qq: targetType、targetId、message 必填');
+          if (!['private', 'group', 'guild'].includes(targetType)) throw new Error('x.send_qq: targetType 必须为 private、group、guild 或 self');
+        }
+
+        if (!targetId || !message) throw new Error('x.send_qq: targetId 和 message 必填');
 
         // 智能修正 targetId：如果 AI 错误地传了 "user" 或空字符串，尝试从上下文获取正确的发送者 ID
         if (!targetId || targetId === 'user' || targetId === 'chat') {
@@ -2854,8 +2871,8 @@ export class ToolExecutor {
           const taskMetadata = ctx?.taskMetadata as { sourceMessage?: { fromId?: string; chatId?: string } } | undefined;
           if (taskMetadata?.sourceMessage?.fromId) {
             targetId = taskMetadata.sourceMessage.fromId;
-          } else {
-            throw new Error('x.send_qq: targetId 无效。请确保使用发送者的 QQ ID（openid）作为 targetId，而不是 "user"。');
+          } else if (targetTypeRaw !== 'self') {
+            throw new Error('x.send_qq: targetId 无效。请确保使用发送者的 QQ ID（openid）作为 targetId，或使用 targetType:"self" 发送给用户自己。');
           }
         }
 

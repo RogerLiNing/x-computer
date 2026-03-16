@@ -9,6 +9,7 @@ import { serverLogger } from '../observability/ServerLogger.js';
 import type { QQMessagePayload } from './qqService.js';
 
 const QQ_PROCESSED_IDS_KEY = 'qq_processed_ids';
+const QQ_SELF_OPENID_KEY = 'qq_self_openid';
 const MAX_PROCESSED_IDS = 500;
 
 export interface QQLoopDeps {
@@ -69,6 +70,15 @@ export async function handleQQMessage(
   });
 
   const fromDisplay = msg.fromName || msg.fromId;
+
+  // 自动记录用户的 OpenID（私聊时发送者就是用户自己）
+  if (msg.messageType === 'private' && msg.fromId) {
+    const currentOpenid = await Promise.resolve(getConfig(userId, QQ_SELF_OPENID_KEY));
+    if (!currentOpenid || currentOpenid !== msg.fromId) {
+      await Promise.resolve(setConfig(userId, QQ_SELF_OPENID_KEY, msg.fromId));
+      serverLogger.info('qq/loop', `已记录用户 OpenID`, `userId=${userId} openid=${msg.fromId}`);
+    }
+  }
 
   // 如果提供了handleChannelMessageAsChat，则使用Chat会话方式处理
   if (handleChannelMessageAsChat) {

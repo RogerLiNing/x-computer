@@ -974,7 +974,7 @@ export const api = {
 
   // ── QQ 渠道
   getQQStatus: () =>
-    request<{ ok: boolean; enabled: boolean; status: string; botInfo?: { id?: string; username?: string }; dmPolicy?: string; groupPolicy?: string; error?: string }>('/qq/status'),
+    request<{ ok: boolean; enabled: boolean; status: string; botInfo?: { id?: string; username?: string }; dmPolicy?: string; groupPolicy?: string; selfOpenid?: string | null; error?: string }>('/qq/status'),
   qqConnect: () =>
     request<{ ok: boolean; error?: string }>('/qq/connect', { method: 'POST' }),
   qqDisconnect: () =>
