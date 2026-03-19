@@ -216,7 +216,7 @@ function getMainSkillsRoot(): string {
 
 /**
  * 发现当前可用的 Skills 列表。
- * 合并来源（后者覆盖前者）：项目内置 skills → 主工作区 skills → 用户沙箱 skills。
+ * 合并来源（后者覆盖前者）：项目内置 skills → 主工作区 skills → .claude/skills（skillhub 安装目录）→ 用户沙箱 skills。
  * 确保 dev 时（workspaceRoot 为临时目录）X 也能发现仓库中的 Skill。
  */
 export function getDiscoveredSkills(userId?: string): DiscoveredSkill[] {
@@ -227,6 +227,12 @@ export function getDiscoveredSkills(userId?: string): DiscoveredSkill[] {
   }
   const mainRoot = getMainSkillsRoot();
   for (const s of discoverSkills(mainRoot)) byDir.set(s.dirName, s);
+
+  // Also discover from .claude/skills (skillhub --project installs here)
+  const claudeSkillsRoot = path.join(process.cwd(), '.claude', 'skills');
+  if (fs.existsSync(claudeSkillsRoot) && fs.statSync(claudeSkillsRoot).isDirectory()) {
+    for (const s of discoverSkills(claudeSkillsRoot)) byDir.set(s.dirName, s);
+  }
 
   if (userId && userId !== 'anonymous' && getSkillsRootForUser) {
     const userRoot = getSkillsRootForUser(userId);

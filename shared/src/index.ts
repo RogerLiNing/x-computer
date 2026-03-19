@@ -190,7 +190,7 @@ export type BuiltinAppId =
   | 'x-board'
   | 'subscription'
   | 'admin'
-  | 'extensions';
+;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
 export type AppId = BuiltinAppId;

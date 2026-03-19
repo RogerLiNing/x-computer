@@ -270,17 +270,17 @@ export async function runNpmInstallInSkillDir(skillDir: string): Promise<{ ok: b
 }
 
 /**
- * 从 SkillHub 安装 Skill：通过 npx skillhub install 命令。安装完成后若存在 package.json 则自动执行 npm install 以便 npx 可用。
+ * 从 SkillHub 安装 Skill：使用 npx skillhub install CLI。
+ * slug 格式: owner/repo/skill-name (如 openclaw/skills/serpapi) 或短格式 (serpapi)
+ * 短格式会先搜索获取完整 slug
  * @param targetRoot 可选，指定安装目标 skills 根目录；不传则用 getSkillsRoot()
  */
 export async function installFromSkillHub(slug: string, targetRoot?: string): Promise<SkillInstallResult> {
-  const npxOk = await ensureNpxAvailable();
-  if (!npxOk.ok) {
-    return { ok: false, message: npxOk.error ?? 'npx 不可用', skillName: slug, dirName: slug };
-  }
   const skillsRoot = targetRoot ?? getSkillsRoot();
-  const workdir = path.dirname(skillsRoot);
-  const dirName = path.basename(skillsRoot);
+  const parts = slug.split('/');
+  const skillName = parts[parts.length - 1] || slug;
+
+  // 确保目标目录存在
   try {
     fs.mkdirSync(skillsRoot, { recursive: true });
   } catch (e) {
@@ -291,54 +291,159 @@ export async function installFromSkillHub(slug: string, targetRoot?: string): Pr
       dirName: slug,
     };
   }
-  const slugEscaped = slug.includes(' ') || slug.includes('/') ? `"${slug.replace(/"/g, '\\"')}"` : slug;
-  const cmd = `npx --yes skillhub install ${slugEscaped} --dir ${dirName} --workdir "${workdir}" --no-input --force`;
-  return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', cmd], {
-      cwd: workdir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
-    child.on('close', async (code: number | null, signal: string | null) => {
-      if (code === 0) {
-        const skillDir = path.join(skillsRoot, slug);
-        const skillMd = path.join(skillDir, 'SKILL.md');
-        if (fs.existsSync(skillMd)) {
-          const npmResult = await runNpmInstallInSkillDir(skillDir);
-          const msg = npmResult.ok
-            ? `已安装 Skill: ${slug}（含 npm 依赖，支持 npx 调用）`
-            : `已安装 Skill: ${slug}，但 npm install 失败: ${npmResult.error ?? '未知错误'}，可在 skills/${slug} 中手动执行 npm install`;
-          resolve({ ok: true, message: msg, skillName: slug, dirName: slug });
-        } else {
-          resolve({
-            ok: false,
-            message: `skillhub 安装完成但未找到 SKILL.md。stdout: ${stdout.slice(0, 500)}`,
-            skillName: slug,
-            dirName: slug,
-          });
-        }
-      } else {
-        const err = stderr.trim() || stdout.trim() || `exit ${code ?? signal}`;
-        resolve({
-          ok: false,
-          message: `skillhub install 失败: ${err.slice(0, 500)}`,
-          skillName: slug,
-          dirName: slug,
-        });
-      }
-    });
-    child.on('error', (err: Error) => {
-      resolve({
+
+  // 如果是短格式（没有斜杠），先搜索获取完整 slug
+  let fullSlug = slug;
+  if (!slug.includes('/')) {
+    const searchResult = await searchSkillHub(slug, 3);
+    if (searchResult.ok && searchResult.skills.length > 0) {
+      // 找到匹配的 skill，使用第一个结果
+      const match = searchResult.skills.find(s => s.slug.toLowerCase().includes(slug.toLowerCase())) || searchResult.skills[0];
+      fullSlug = match.slug;
+    } else {
+      return {
         ok: false,
-        message: `执行 skillhub 失败: ${err.message}`,
+        message: `未在 SkillHub 中找到 skill: ${slug}。请使用完整格式如 openclaw/skills/serpapi`,
         skillName: slug,
         dirName: slug,
-      });
+      };
+    }
+  }
+
+  // 使用 npx skillhub install 安装到临时目录，然后复制到目标目录
+  const TIMEOUT_MS = 120000; // 2分钟超时
+
+  return new Promise((resolve) => {
+    // 先安装到临时目录
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-install-'));
+    const cmd = `npx --yes skillhub install "${fullSlug}"`;
+
+    const child = spawn('sh', ['-c', cmd], {
+      cwd: tempDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      resolve({ ok: false, message: 'skillhub install 超时（2分钟），请稍后重试', skillName: slug, dirName: slug });
+    }, TIMEOUT_MS);
+
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString(); });
+
+    child.on('close', (code: number | null, signal: string | null) => {
+      clearTimeout(timeoutId);
+      if (timedOut) return;
+
+      if (code !== 0) {
+        const err = stderr.trim() || stdout.trim() || `exit ${code ?? signal}`;
+        // 如果是 "already installed" 错误，也算成功
+        if (err.toLowerCase().includes('already installed') || err.toLowerCase().includes('already exists')) {
+          // 已经安装过了，尝试查找并复制
+          resolve(moveInstalledSkill(tempDir, skillsRoot, skillName, fullSlug));
+          return;
+        }
+        resolve({ ok: false, message: `skillhub install 失败: ${err.slice(0, 300)}`, skillName: slug, dirName: slug });
+        return;
+      }
+
+      // 安装成功，移动到目标目录
+      resolve(moveInstalledSkill(tempDir, skillsRoot, skillName, fullSlug));
+    });
+
+    child.on('error', (err: Error) => {
+      clearTimeout(timeoutId);
+      resolve({ ok: false, message: `skillhub install 执行失败: ${err.message}`, skillName: slug, dirName: slug });
     });
   });
+}
+
+/**
+ * 将临时目录中安装的 skill 移动到目标 skills 目录
+ */
+function moveInstalledSkill(tempDir: string, skillsRoot: string, skillName: string, slug: string): SkillInstallResult {
+  try {
+    // 查找临时目录中的 skill 目录
+    const entries = fs.readdirSync(tempDir, { withFileTypes: true });
+    let foundSkillDir: string | null = null;
+
+    for (const entry of entries) {
+      if (entry.isDirectory() && entry.name !== 'node_modules') {
+        const skillPath = path.join(tempDir, entry.name, 'SKILL.md');
+        if (fs.existsSync(skillPath)) {
+          foundSkillDir = path.join(tempDir, entry.name);
+          break;
+        }
+      }
+    }
+
+    // 也检查 .claude/skills 目录（skillhub 默认安装位置）
+    const defaultSkillHubDir = path.join(os.homedir(), '.claude', 'skills');
+    let sourceDir = foundSkillDir;
+    let actualSkillName = skillName;
+
+    if (!sourceDir && fs.existsSync(defaultSkillHubDir)) {
+      const dirs = fs.readdirSync(defaultSkillHubDir, { withFileTypes: true });
+      for (const dir of dirs) {
+        if (dir.isDirectory()) {
+          const skillPath = path.join(defaultSkillHubDir, dir.name, 'SKILL.md');
+          if (fs.existsSync(skillPath)) {
+            // 检查是否匹配 slug
+            const metaPath = path.join(defaultSkillHubDir, dir.name, '.skillhub.json');
+            if (fs.existsSync(metaPath)) {
+              try {
+                const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+                if (meta.skillId === slug || meta.skillId?.endsWith(`/${skillName}`)) {
+                  sourceDir = path.join(defaultSkillHubDir, dir.name);
+                  actualSkillName = dir.name;
+                  break;
+                }
+              } catch { /* ignore */ }
+            }
+            // 如果没有 meta 或不匹配，但目录名包含 skillName 也尝试
+            if (!sourceDir && dir.name.toLowerCase().includes(skillName.toLowerCase())) {
+              sourceDir = path.join(defaultSkillHubDir, dir.name);
+              actualSkillName = dir.name;
+            }
+          }
+        }
+      }
+    }
+
+    if (!sourceDir) {
+      return { ok: false, message: `未找到安装的 skill: ${slug}`, skillName: slug, dirName: slug };
+    }
+
+    const targetDir = path.join(skillsRoot, actualSkillName);
+
+    // 如果目标目录已存在，先删除
+    if (fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true });
+    }
+
+    // 移动到目标目录
+    fs.renameSync(sourceDir, targetDir);
+
+    return {
+      ok: true,
+      message: `已安装 Skill: ${slug}`,
+      skillName: actualSkillName,
+      dirName: actualSkillName,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, message: `移动 skill 失败: ${msg}`, skillName: slug, dirName: slug };
+  } finally {
+    // 清理临时目录
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch { /* ignore */ }
+  }
 }
 
 type IndexSkill = { name: string; description?: string; files: string[] };
@@ -350,8 +455,10 @@ type IndexSkill = { name: string; description?: string; files: string[] };
  */
 export async function installFromUrl(
   baseUrl: string,
-  skillNameOrIndex?: number
+  skillNameOrIndex?: number,
+  targetRoot?: string
 ): Promise<SkillInstallResult> {
+  const skillsRoot = targetRoot ?? getSkillsRoot();
   const url = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
   const indexUrl = new URL('index.json', url).href;
   let data: { skills?: IndexSkill[] };
@@ -374,7 +481,6 @@ export async function installFromUrl(
   if (!skill?.name || !Array.isArray(skill.files) || skill.files.length === 0) {
     return { ok: false, message: `无效的 skill 条目: ${JSON.stringify(skill ?? '')}` };
   }
-  const skillsRoot = getSkillsRoot();
   const targetDir = path.join(skillsRoot, skill.name);
   try {
     fs.mkdirSync(targetDir, { recursive: true });
