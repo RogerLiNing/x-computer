@@ -24,7 +24,8 @@
     "rename": "Rename",
     "new": "New",
     "open": "Open",
-    "language": "Language"
+    "language": "Language",
+    "noDescription": "No description"
   },
   
   "apps": {
@@ -46,8 +47,7 @@
     "agent-manager": "Agent Manager",
     "x-board": "X Task Board",
     "subscription": "Subscription",
-    "admin": "Admin",
-    "extensions": "Extensions"
+    "admin": "Admin"
   },
 
   "appDescriptions": {
@@ -70,7 +70,6 @@
     "x-board": "X's task board: view X's todo, in-progress, and completed tasks",
     "subscription": "Manage your subscription and billing",
     "admin": "User management, ban/unban, system overview (admin only)",
-    "extensions": "Manage Skills, MCP extensions and tools",
     "miniapp": "App created by X"
   },
   
@@ -197,6 +196,9 @@
     "ai": "AI Configuration",
     "mcp": "MCP Servers",
     "skills": "Skills",
+    "tools": "Tools",
+    "searchTools": "Search tools...",
+    "noTools": "No tools available",
     "notification": "Notifications",
     "storage": "Storage",
     "about": "About",

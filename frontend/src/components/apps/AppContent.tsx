@@ -19,7 +19,6 @@ import { AgentManagerApp } from './AgentManagerApp';
 import { XBoardApp } from './XBoardApp';
 import { SubscriptionApp } from './SubscriptionApp';
 import { AdminApp } from './AdminApp';
-import { ExtensionsApp } from './ExtensionsApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -68,8 +67,6 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <OfficeViewerApp windowId={windowId} metadata={metadata} />;
     case 'media-viewer':
       return <MediaViewerApp windowId={windowId} metadata={metadata} />;
-    case 'extensions':
-      return <ExtensionsApp windowId={windowId} />;
     default:
       return (
         <div className="flex items-center justify-center h-full text-desktop-muted text-sm">

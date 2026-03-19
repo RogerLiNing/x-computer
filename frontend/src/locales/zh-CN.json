@@ -24,7 +24,8 @@
     "rename": "重命名",
     "new": "新建",
     "open": "打开",
-    "language": "语言"
+    "language": "语言",
+    "noDescription": "无描述"
   },
   
   "apps": {
@@ -49,8 +50,7 @@
     "admin": "管理后台",
     "skills": "技能管理",
     "mcp": "MCP 扩展",
-    "channels": "渠道管理",
-    "extensions": "扩展管理"
+    "channels": "渠道管理"
   },
 
   "appDescriptions": {
@@ -76,7 +76,6 @@
     "skills": "管理 AI 技能与插件",
     "mcp": "管理 MCP 服务器扩展",
     "channels": "管理邮件、WhatsApp、QQ 等通信渠道",
-    "extensions": "统一管理 Skills、MCP 扩展与工具列表",
     "miniapp": "X 制作的应用"
   },
   
@@ -203,6 +202,9 @@
     "ai": "AI 配置",
     "mcp": "MCP 服务器",
     "skills": "技能",
+    "tools": "工具",
+    "searchTools": "搜索工具...",
+    "noTools": "暂无工具",
     "notification": "通知",
     "storage": "存储",
     "about": "关于",

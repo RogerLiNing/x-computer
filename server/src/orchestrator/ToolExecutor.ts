@@ -1,5 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { spawn } from 'child_process';
+import path from 'path';
 import type { TaskStep, ToolCall, ToolDefinition, RuntimeType, TaskLLMConfig, AgentDefinition, AgentTeam, AgentGroup, MiniAppDefinition, CreateTaskRequest, Task } from '../../../shared/src/index.js';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
@@ -1931,7 +1932,7 @@ export class ToolExecutor {
       {
         name: 'skill.install',
         description:
-          '安装 Skill 到本地。source 格式：skillhub:<slug>（如 skillhub:serpapi-search）从 SkillHub 安装；或 url:<baseUrl>（如 url:https://example.com/skills/）从支持 index.json 的地址安装。安装后可用 skill.load 加载。',
+          '安装 Skill 到本地。source 格式：skillhub:<slug>（如 skillhub:openclaw/skills/serpapi）从 SkillHub 安装；openclaw:<slug>（如 openclaw:weather）从 OpenClaw GitHub 安装；或 url:<baseUrl>（如 url:https://example.com/skills/）从支持 index.json 的地址安装。安装后可用 skill.load 加载。',
         domain: ['chat', 'agent', 'office'],
         riskLevel: 'medium',
         parameters: [
@@ -1939,8 +1940,8 @@ export class ToolExecutor {
             name: 'source',
             type: 'string',
             description:
-              '来源：skillhub:<slug>（SkillHub 上的 slug，如 serpapi-search）或 url:<baseUrl>（以 / 结尾的 index.json 根地址）',
-            required: true,
+              '来源：skillhub:<slug>（SkillHub 上的 slug，如 openclaw/skills/serpapi）、openclaw:<slug>（OpenClaw GitHub 上的 skill，如 weather）或 url:<baseUrl>（以 / 结尾的 index.json 根地址）',
+            required: false,
           },
           {
             name: 'skill_index',
@@ -1951,17 +1952,41 @@ export class ToolExecutor {
         ],
         requiredPermissions: ['network.outbound'],
       },
-      async (input) => {
-        const raw = String(input?.source ?? '').trim();
-        if (!raw) throw new Error('skill.install: source 必填');
+      async (input, ctx) => {
+        // 获取用户ID用于隔离安装目录
+        const userId = (ctx as { userId?: string })?.userId;
+        const targetRoot = userId && userId !== 'anonymous' && this.userSandboxManager
+          ? path.join(this.userSandboxManager.getUserWorkspaceRoot(userId), 'skills')
+          : undefined;
+
+        // 兼容 name 和 source 两种参数
+        const raw = (input?.source as string)?.trim() || (input?.name as string)?.trim();
+        if (!raw) throw new Error('skill.install: source 必填，格式如 skillhub:openclaw/skills/serpapi');
         const skillIndex = typeof input?.skill_index === 'number' ? Math.max(0, Math.floor(input.skill_index)) : 0;
 
         if (raw.toLowerCase().startsWith('skillhub:')) {
           const slug = raw.slice(8).trim();
           if (!slug) {
-            return { text: 'skill.install: skillhub: 后需填写 slug，如 serpapi-search', isError: true };
+            return { text: 'skill.install: skillhub: 后需填写 slug，如 openclaw/skills/serpapi', isError: true };
           }
-          const result = await installFromSkillHub(slug);
+          const result = await installFromSkillHub(slug, targetRoot);
+          if (result.ok) {
+            return {
+              text: `${result.message}\n安装后可调用 skill.load(name: "${result.skillName}") 加载。若该 Skill 需要 API Key，请到 设置 → Skills 中配置，或通过 x.notify_user 告知用户。`,
+              skillName: result.skillName,
+              dirName: result.dirName,
+            };
+          }
+          return { text: result.message, isError: true, skillName: result.skillName };
+        }
+
+        if (raw.toLowerCase().startsWith('openclaw:')) {
+          const slug = raw.slice(8).trim();
+          if (!slug) {
+            return { text: 'skill.install: openclaw: 后需填写 slug，如 openclaw/skills/weather 或 openclaw/openclaw/weather', isError: true };
+          }
+          // 使用改进的安装函数
+          const result = await installFromSkillHub(slug, targetRoot);
           if (result.ok) {
             return {
               text: `${result.message}\n安装后可调用 skill.load(name: "${result.skillName}") 加载。若该 Skill 需要 API Key，请到 设置 → Skills 中配置，或通过 x.notify_user 告知用户。`,
@@ -1977,7 +2002,20 @@ export class ToolExecutor {
           if (!baseUrl || (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://'))) {
             return { text: 'skill.install: url: 后需填写有效的 HTTP(S) 地址', isError: true };
           }
-          const result = await installFromUrl(baseUrl, skillIndex);
+          const result = await installFromUrl(baseUrl, skillIndex, targetRoot);
+          if (result.ok) {
+            return {
+              text: `${result.message}\n安装后可调用 skill.load(name: "${result.skillName}") 加载。若该 Skill 需要 API Key，请到 设置 → Skills 中配置，或通过 x.notify_user 告知用户。`,
+              skillName: result.skillName,
+              dirName: result.dirName,
+            };
+          }
+          return { text: result.message, isError: true, skillName: result.skillName };
+        }
+
+        // 没有前缀时，尝试作为 skillhub slug 安装（自动添加前缀）
+        if (raw) {
+          const result = await installFromSkillHub(raw, targetRoot);
           if (result.ok) {
             return {
               text: `${result.message}\n安装后可调用 skill.load(name: "${result.skillName}") 加载。若该 Skill 需要 API Key，请到 设置 → Skills 中配置，或通过 x.notify_user 告知用户。`,
@@ -1989,7 +2027,7 @@ export class ToolExecutor {
         }
 
         return {
-          text: 'skill.install: source 须以 skillhub: 或 url: 开头，例如 skillhub:serpapi-search 或 url:https://example.com/skills/',
+          text: 'skill.install: source 须以 skillhub:、openclaw: 或 url: 开头，例如 skillhub:openclaw/skills/serpapi、openclaw:weather 或 url:https://example.com/skills/',
           isError: true,
         };
       },

@@ -66,6 +66,11 @@ class UserQQConnection {
   private bot: Bot<ReceiverMode.WEBSOCKET> | null = null;
   private running = false;
   private botInfo: { id?: string; username?: string } | null = null;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 10;
+  private reconnectDelay = 5000; // 初始重连延迟 5 秒
+  private savedConfig: { appId: string; secret: string; sandbox?: boolean } | null = null;
 
   constructor(
     private userId: string,
@@ -73,8 +78,52 @@ class UserQQConnection {
     private onMessage: (userId: string, msg: QQMessagePayload) => void,
   ) {}
 
+  private setupReconnect(): void {
+    if (!this.bot) return;
+    
+    // 监听 WebSocket 断开事件
+    this.bot.on('close', (hadError: boolean) => {
+      if (this.reconnectTimer) return; // 防止重复触发
+      serverLogger.warn('qq', `WebSocket 连接断开${hadError ? '（有错误）' : ''} userId=${this.userId}`);
+      this.running = false;
+      this.scheduleReconnect();
+    });
+
+    // 监听错误事件
+    this.bot.on('error', (err: Error) => {
+      serverLogger.warn('qq', `WebSocket 错误 userId=${this.userId}`, err.message);
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.savedConfig) return;
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      serverLogger.error('qq', `重连次数已达上限（${this.maxReconnectAttempts}），请检查网络或 Token`, `userId=${this.userId}`);
+      return;
+    }
+
+    const delay = Math.min(this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts), 60000); // 指数退避，最大 60 秒
+    this.reconnectAttempts++;
+    serverLogger.info('qq', `计划 ${Math.round(delay / 1000)} 秒后重连（第 ${this.reconnectAttempts} 次）`, `userId=${this.userId}`);
+
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = null;
+      const result = await this.connect(this.savedConfig!.appId, this.savedConfig!.secret, this.savedConfig!.sandbox);
+      if (!result.ok) {
+        this.scheduleReconnect();
+      } else {
+        this.reconnectAttempts = 0;
+        this.reconnectDelay = 5000;
+      }
+    }, delay);
+  }
+
   async connect(appId: string, secret: string, sandbox?: boolean): Promise<{ ok: boolean; error?: string }> {
-    if (this.running) return { ok: true };
+    if (this.running && this.bot) return { ok: true };
+    
+    // 保存配置用于重连
+    this.savedConfig = { appId, secret, sandbox };
+    
     try {
       this.bot = new Bot({
         appid: appId,
@@ -89,6 +138,8 @@ class UserQQConnection {
         mode: ReceiverMode.WEBSOCKET,
         logLevel: 'warn',
       });
+
+      this.setupReconnect();
 
       this.bot.on('message.private.friend', async (event: PrivateMessageEvent) => {
         await this.handleIncoming('private', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, undefined, undefined);
@@ -115,6 +166,8 @@ class UserQQConnection {
         serverLogger.info('qq', `Bot 已连接 userId=${this.userId}`);
       }
       this.running = true;
+      this.reconnectAttempts = 0;
+      this.reconnectDelay = 5000;
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -180,12 +233,18 @@ class UserQQConnection {
   }
 
   disconnect(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.bot) {
       try { void this.bot.stop(); } catch {}
       this.bot = null;
     }
     this.running = false;
     this.botInfo = null;
+    this.savedConfig = null;
+    this.reconnectAttempts = 0;
   }
 }
 
@@ -217,6 +276,21 @@ export function disconnectQQ(userId: string): void {
     conn.disconnect();
     connections.delete(userId);
   }
+}
+
+export async function reconnectQQ(
+  userId: string,
+  getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>,
+): Promise<{ ok: boolean; error?: string }> {
+  const raw = getConfig(userId, 'qq_config');
+  const config = parseQQConfig(raw instanceof Promise ? await raw : raw);
+  if (!config?.enabled || !config?.appId || !config?.secret) {
+    return { ok: false, error: 'QQ 未配置或未启用' };
+  }
+  // 断开现有连接并重新创建
+  disconnectQQ(userId);
+  const conn = getOrCreateConnection(userId, getConfig);
+  return conn.connect(config.appId, config.secret, config.sandbox);
 }
 
 export function getQQConnection(

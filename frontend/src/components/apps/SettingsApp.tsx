@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { useAdminStore } from '@/store/adminStore';
-import type { LLMModality } from '@shared/index';
+import type { LLMModality, ToolDefinition } from '@shared/index';
 import {
   BUILTIN_PROVIDER_IDS,
   PROVIDER_META,
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'media' | 'channels' | 'security' | 'servers' | 'logs';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -468,6 +468,9 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'general', labelKey: 'settings.general', icon: Monitor },
     { id: 'account', labelKey: 'settings.account', icon: User },
     { id: 'apps', labelKey: 'settings.apps', icon: Package },
+    { id: 'skills', labelKey: 'settings.skills', icon: Sparkles },
+    { id: 'tools', labelKey: 'settings.tools', icon: Wrench },
+    { id: 'channels', labelKey: 'settings.channels', icon: MessageSquare },
     { id: 'about', labelKey: 'settings.about', icon: Info },
   ];
 
@@ -476,9 +479,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'ai', labelKey: 'settings.ai', icon: Bot },
     { id: 'models', labelKey: 'settings.models', icon: Key },
     { id: 'mcp', labelKey: 'settings.mcp', icon: Plug },
-    { id: 'skills', labelKey: 'settings.skills', icon: Sparkles },
     { id: 'media', labelKey: 'settings.media', icon: Music2 },
-    { id: 'channels', labelKey: 'settings.channels', icon: MessageSquare },
     { id: 'servers', labelKey: 'settings.servers', icon: Server },
     { id: 'security', labelKey: 'settings.security', icon: Shield },
     { id: 'logs', labelKey: 'settings.logs', icon: FileText },
@@ -595,6 +596,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'skills' && (
           <SkillsSettings />
+        )}
+
+        {tab === 'tools' && (
+          <ToolsSettings />
         )}
 
         {tab === 'media' && (
@@ -1476,6 +1481,75 @@ function LLMModelsSettings() {
   );
 }
 
+// ── 工具列表（展示所有可用工具）──────────────────
+
+function ToolsSettings() {
+  const { t } = useTranslation();
+  const [tools, setTools] = useState<ToolDefinition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [expandedTool, setExpandedTool] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getTools().then(setTools).finally(() => setLoading(false));
+  }, []);
+
+  const filteredTools = tools.filter(
+    (tool) =>
+      !searchQuery ||
+      tool.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      tool.description?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+        <input
+          type="text"
+          placeholder={t('settings.searchTools')}
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-3 py-2 text-sm text-gray-200 placeholder:text-gray-500 outline-none focus:ring-1 focus:ring-green-400/50"
+        />
+      </div>
+      {loading ? (
+        <div className="text-center py-4 text-gray-500">
+          <RefreshCw size={16} className="animate-spin inline mr-2" />
+          {t('common.loading')}
+        </div>
+      ) : filteredTools.length === 0 ? (
+        <div className="text-center py-4 text-gray-500">{t('settings.noTools')}</div>
+      ) : (
+        filteredTools.map((tool) => (
+          <div key={tool.name} className="rounded-lg bg-white/[0.03] border border-white/5 overflow-hidden">
+            <button
+              onClick={() => setExpandedTool(expandedTool === tool.name ? null : tool.name)}
+              className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/5"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                {expandedTool === tool.name ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                <span className="font-mono text-sm text-green-300 truncate">{tool.name}</span>
+              </div>
+              <CheckCircle size={14} className="text-green-400 flex-shrink-0" />
+            </button>
+            {expandedTool === tool.name && (
+              <div className="px-3 pb-3 border-t border-white/5 pt-2">
+                <p className="text-xs text-gray-400 mb-2">{tool.description || t('common.noDescription')}</p>
+                {tool.parameters && tool.parameters.length > 0 && (
+                  <pre className="text-xs font-mono bg-black/30 p-2 rounded overflow-x-auto">
+                    {JSON.stringify(tool.parameters, null, 2)}
+                  </pre>
+                )}
+              </div>
+            )}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 // ── Skills 发现与配置（API Key 等，支持从 Skill 描述自动推断需配置字段）──────────────────
 
 type SkillConfigField = { key: string; label?: string; description?: string };
@@ -1700,7 +1774,7 @@ function SkillsSettings() {
       {recommended.length > 0 && (
         <div className="rounded-lg border border-white/10 bg-white/[0.02] p-4 space-y-3">
           <h4 className="text-xs font-medium text-desktop-text">推荐 Skill</h4>
-          <p className="text-desktop-muted text-[11px]">一键安装常用 Skill，安装后可在下方配置 API Key。</p>
+          <p className="text-desktop-muted text-[11px]">点击复制安装指令，发送给我来安装 Skill。</p>
           <div className="flex flex-wrap gap-2">
             {recommended.map((r) => (
               <div
@@ -1708,7 +1782,10 @@ function SkillsSettings() {
                 className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 border border-white/5"
               >
                 <div>
-                  <span className="text-xs font-medium text-desktop-text">{r.name}</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-desktop-text">{r.name}</span>
+                    <span className="text-[9px] px-1 rounded bg-purple-500/20 text-purple-300">{(r as any).source === 'openclaw' ? 'OpenClaw' : 'SkillHub'}</span>
+                  </div>
                   <p className="text-[10px] text-desktop-muted line-clamp-1">{r.description}</p>
                 </div>
                 {r.installed ? (
@@ -1716,22 +1793,16 @@ function SkillsSettings() {
                 ) : (
                   <button
                     type="button"
-                    className="shrink-0 px-2 py-1 rounded text-[10px] bg-desktop-accent/30 hover:bg-desktop-accent/50 text-desktop-text disabled:opacity-50"
-                    disabled={installingSlug !== null}
-                    onClick={async () => {
+                    className="shrink-0 px-2 py-1 rounded text-[10px] bg-blue-500/30 hover:bg-blue-500/50 text-blue-300 flex items-center gap-1"
+                    onClick={() => {
+                      const source = (r as any).source === 'openclaw' ? 'openclaw' : 'skillhub';
+                      const text = `帮我安装 Skill ${r.name}，使用 ${source}:${r.slug}`;
+                      navigator.clipboard.writeText(text);
                       setInstallingSlug(r.slug);
-                      try {
-                        await api.installSkill(`skillhub:${r.slug}`);
-                        setRecommended((prev) => prev.map((x) => (x.slug === r.slug ? { ...x, installed: true } : x)));
-                        load();
-                      } catch (e) {
-                        setError(e instanceof Error ? e.message : '安装失败');
-                      } finally {
-                        setInstallingSlug(null);
-                      }
+                      setTimeout(() => setInstallingSlug(null), 2000);
                     }}
                   >
-                    {installingSlug === r.slug ? '安装中…' : '安装'}
+                    {installingSlug === r.slug ? <><CheckCircle size={10} /> 已复制</> : <><Copy size={10} /> 复制</>}
                   </button>
                 )}
               </div>

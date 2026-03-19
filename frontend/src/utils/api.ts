@@ -582,11 +582,15 @@ export const api = {
     return request<{ ok: boolean; skills?: Array<{ slug: string; version?: string; description: string; score?: number }>; error?: string }>(`/skills/search?${params}`);
   },
 
-  /** 精选 Skill 推荐：返回预设推荐列表，已安装的会标记 installed */
+  /** 精选 Skill 推荐：返回预设推荐列表，已安装的会标记 installed，source 表示来源（skillhub 或 openclaw） */
   getRecommendedSkills: () =>
-    request<Array<{ slug: string; name: string; description: string; category?: string; installed: boolean }>>('/skills/recommended'),
+    request<Array<{ slug: string; name: string; description: string; category?: string; source: string; installed: boolean }>>('/skills/recommended'),
 
-  /** 安装 Skill：source 格式 skillhub:<slug> */
+  /** 获取 OpenClaw Skill 详情：从 GitHub 获取 SKILL.md */
+  getOpenClawSkillDetail: (slug: string) =>
+    request<{ slug: string; content: string }>(`/skills/openclaw/${encodeURIComponent(slug)}`),
+
+  /** 安装 Skill：source 格式 skillhub:<slug> 或 openclaw:<slug> */
   installSkill: (source: string) =>
     request<{ success: boolean; message?: string; dirName?: string }>('/skills/install', {
       method: 'POST',

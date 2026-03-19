@@ -49,16 +49,7 @@ wss.on('connection', (ws) => {
   clients.add(info);
   console.log(`[WS] Client connected (total: ${clients.size})`);
 
-  ws.send(
-    JSON.stringify({
-      type: 'init',
-      data: {
-        mode: orchestrator.getMode(),
-        tasks: orchestrator.getAllTasks(),
-        auditLog: audit.getAll().slice(-50),
-      },
-    }),
-  );
+  // 注意：不在此处发送 init，等待 auth 后再发送（避免泄露其他用户数据）
 
   ws.on('close', () => {
     clients.delete(info);
@@ -102,6 +93,21 @@ function handleWSMessage(client: ClientInfo, msg: any) {
       if (msg.data?.userId && typeof msg.data.userId === 'string') {
         client.userId = msg.data.userId;
         console.log(`[WS] Client authenticated as: ${client.userId}`);
+        // 发送 init 数据（仅该用户的任务）
+        const allTasks = orchestrator.getAllTasks();
+        const userTasks = client.userId !== 'anonymous'
+          ? allTasks.filter((t) => (t.metadata as { userId?: string } | undefined)?.userId === client.userId)
+          : allTasks;
+        client.ws.send(
+          JSON.stringify({
+            type: 'init',
+            data: {
+              mode: orchestrator.getMode(),
+              tasks: userTasks,
+              auditLog: audit.getAll().slice(-50),
+            },
+          }),
+        );
       }
       break;
 

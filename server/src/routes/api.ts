@@ -77,7 +77,7 @@ import { setDiscordMessageHandler, getDiscordConnection, disconnectDiscord, pars
 import { handleDiscordMessage } from '../discord/discordLoop.js';
 import { setSlackMessageHandler, getSlackConnection, disconnectSlack, parseSlackConfig, reconnectSlackForConfiguredUsers, sendSlackMessage } from '../slack/slackService.js';
 import { handleSlackMessage } from '../slack/slackLoop.js';
-import { setQQMessageHandler, getQQConnection, disconnectQQ, parseQQConfig, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
+import { setQQMessageHandler, getQQConnection, disconnectQQ, reconnectQQ, parseQQConfig, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
 import { handleQQMessage } from '../qq/qqLoop.js';
 
 const MEMORY_DIR = 'memory';
@@ -2360,6 +2360,7 @@ export function createApiRouter(
         name: s.name,
         description: s.description,
         category: s.category,
+        source: s.source || 'skillhub',
         installed: installed.includes(s.slug),
       }));
       res.json(list);
@@ -2368,22 +2369,23 @@ export function createApiRouter(
     }
   });
 
-  /** 安装 Skill：source 格式 skillhub:<slug>，安装到用户工作区或默认 skills 目录 */
+  /** 安装 Skill：source 格式 skillhub:<slug> 或 openclaw:<slug>，安装到用户工作区或默认 skills 目录 */
   router.post('/skills/install', async (req, res) => {
     try {
       const { source } = req.body as { source?: string };
       if (!source || typeof source !== 'string') {
-        res.status(400).json({ error: '缺少 source，格式：skillhub:<slug>' });
+        res.status(400).json({ error: '缺少 source，格式：skillhub:<slug> 或 openclaw:<slug>' });
         return;
       }
       const lower = source.trim().toLowerCase();
-      if (!lower.startsWith('skillhub:')) {
-        res.status(400).json({ error: 'source 须以 skillhub: 开头，如 skillhub:serpapi-search' });
+      if (!lower.startsWith('skillhub:') && !lower.startsWith('openclaw:')) {
+        res.status(400).json({ error: 'source 须以 skillhub: 或 openclaw: 开头，如 skillhub:serpapi-search 或 openclaw:weather' });
         return;
       }
-      const slug = lower.slice(8).trim();
+      const isOpenClaw = lower.startsWith('openclaw:');
+      const slug = lower.slice(isOpenClaw ? 8 : 8).trim();
       if (!slug) {
-        res.status(400).json({ error: 'skillhub: 后需填写 slug' });
+        res.status(400).json({ error: `${isOpenClaw ? 'openclaw' : 'skillhub'}: 后需填写 slug` });
         return;
       }
       const userId = (req as { userId?: string }).userId;
@@ -2391,7 +2393,34 @@ export function createApiRouter(
         userId && userId !== 'anonymous' && userSandboxManager
           ? path.join(userSandboxManager.getUserWorkspaceRoot(userId), 'skills')
           : undefined;
-      const result = await installFromSkillHub(slug, targetRoot);
+
+      let result;
+      if (isOpenClaw) {
+        // 从 GitHub 下载 OpenClaw skill (直接下载 SKILL.md)
+        const skillsRoot = targetRoot || path.join(process.cwd(), 'skills');
+        const skillDir = path.join(skillsRoot, slug);
+
+        try {
+          const fs = await import('fs/promises');
+          await fs.mkdir(skillDir, { recursive: true });
+
+          // 下载 SKILL.md
+          const skillMdUrl = `https://raw.githubusercontent.com/openclaw/openclaw/main/skills/${slug}/SKILL.md`;
+          const response = await fetch(skillMdUrl);
+          if (!response.ok) {
+            res.status(404).json({ error: `未找到 OpenClaw Skill: ${slug}，请检查 slug 是否正确` });
+            return;
+          }
+          const content = await response.text();
+          await fs.writeFile(path.join(skillDir, 'SKILL.md'), content);
+
+          result = { ok: true, message: `OpenClaw Skill "${slug}" 安装成功`, dirName: slug };
+        } catch (e: any) {
+          result = { ok: false, message: `安装 OpenClaw Skill 失败: ${e.message}` };
+        }
+      } else {
+        result = await installFromSkillHub(slug, targetRoot);
+      }
       if (result.ok) {
         res.json({ success: true, message: result.message, dirName: result.dirName });
       } else {
@@ -2399,6 +2428,27 @@ export function createApiRouter(
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message ?? '安装 Skill 失败' });
+    }
+  });
+
+  /** 获取 OpenClaw Skill 详情：从 GitHub 获取 SKILL.md 内容 */
+  router.get('/skills/openclaw/:slug', async (req, res) => {
+    try {
+      const { slug } = req.params;
+      if (!slug) {
+        res.status(400).json({ error: '缺少 slug' });
+        return;
+      }
+      const url = `https://raw.githubusercontent.com/openclaw/openclaw/main/skills/${slug}/SKILL.md`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        res.status(404).json({ error: `未找到 Skill: ${slug}` });
+        return;
+      }
+      const content = await response.text();
+      res.json({ slug, content });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message ?? '获取 Skill 详情失败' });
     }
   });
 
@@ -3040,6 +3090,18 @@ export function createApiRouter(
       disconnectQQ(userId);
       res.json({ ok: true, message: '已断开' });
     } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '断开失败' }); }
+  });
+
+  /** 手动重连 QQ Bot（清除自动重连计数并重新连接） */
+  router.post('/qq/reconnect', async (req, res) => {
+    try {
+      const userId = (req as { userId?: string }).userId;
+      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
+      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
+      const result = await reconnectQQ(userId, db.getConfig.bind(db));
+      if (result.ok) res.json({ ok: true, message: '重连成功' });
+      else res.status(400).json({ ok: false, error: result.error });
+    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '重连失败' }); }
   });
 
   router.get('/qq/inbox', async (req, res) => {
@@ -3706,6 +3768,14 @@ export function createApiRouter(
         setImmediate(() => {
           (async () => {
             const memSvc = (await getMemoryServiceForUser(uid)) ?? memoryService;
+
+            // 每次聊天都简单记录到每日记忆（OpenClaw 风格），确保每日文件被创建
+            const userMsgPreview = lastUser!.content.trim().slice(0, 100);
+            const assistantPreview = content.trim().slice(0, 200);
+            const dailyLogEntry = `[对话] 用户: ${userMsgPreview}... | 助手: ${assistantPreview}...`;
+            await memSvc.appendDaily(dailyLogEntry);
+            serverLogger.info('memory', '每日记忆已记录', `userId=${uid}`);
+
             await runConsiderCapture({
               userMessage: lastUser!.content.trim(),
               assistantReply: content.trim(),
@@ -3884,6 +3954,31 @@ export function createApiRouter(
         serverLogger.warn('chat/with-tools', `模型未调用任何工具，仅返回文本回复`, `完整回复: ${result.content}`);
       }
 
+      const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
+      if (lastUser?.content?.trim() && result.content?.trim()) {
+        const uid = userId;
+        setImmediate(() => {
+          (async () => {
+            const memSvc = (await getMemoryServiceForUser(uid)) ?? memoryService;
+            const userMsgPreview = lastUser!.content.trim().slice(0, 100);
+            const assistantPreview = result.content.trim().slice(0, 200);
+            const dailyLogEntry = `[对话] 用户: ${userMsgPreview}... | 助手: ${assistantPreview}...`;
+            await memSvc.appendDaily(dailyLogEntry);
+            serverLogger.info('memory', '每日记忆已记录（with-tools）', `userId=${uid}`);
+            await runConsiderCapture({
+              userMessage: lastUser!.content.trim(),
+              assistantReply: result.content.trim(),
+              providerId,
+              modelId,
+              baseUrl,
+              apiKey,
+              memoryService: memSvc,
+              workspaceId: uid,
+            });
+          })().catch((err: any) => serverLogger.error('chat/with-tools (consider-capture)', err.message));
+        });
+      }
+
       res.json({ content: result.content, toolCalls: result.toolCalls, toolCallHistory });
     } catch (err: any) {
       serverLogger.error('chat/with-tools', `工具调用失败: ${err.message}`, err.stack);
@@ -4005,6 +4100,30 @@ export function createApiRouter(
         toolLoadingMode: !agentId ? toolLoadingMode : undefined,
         initialLoadedToolNames: Array.isArray(reqLoadedTools) ? reqLoadedTools : undefined,
       });
+      const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
+      if (lastUser?.content?.trim() && result.content?.trim()) {
+        const uid = userId;
+        setImmediate(() => {
+          (async () => {
+            const memSvc = (await getMemoryServiceForUser(uid)) ?? memoryService;
+            const userMsgPreview = lastUser!.content.trim().slice(0, 100);
+            const assistantPreview = result.content.trim().slice(0, 200);
+            const dailyLogEntry = `[对话] 用户: ${userMsgPreview}... | 助手: ${assistantPreview}...`;
+            await memSvc.appendDaily(dailyLogEntry);
+            serverLogger.info('memory', '每日记忆已记录（agent）', `userId=${uid}`);
+            await runConsiderCapture({
+              userMessage: lastUser!.content.trim(),
+              assistantReply: result.content.trim(),
+              providerId,
+              modelId,
+              baseUrl,
+              apiKey,
+              memoryService: memSvc,
+              workspaceId: uid,
+            });
+          })().catch((err: any) => serverLogger.error('chat/agent (consider-capture)', err.message));
+        });
+      }
       res.json({ content: result.content, ...(result.loadedToolNames?.length ? { loadedToolNames: result.loadedToolNames } : {}) });
     } catch (err: any) {
       serverLogger.error('chat/agent', err.message, err.stack);
@@ -4160,6 +4279,30 @@ export function createApiRouter(
           userId,
           lastUserMessage,
           lastAssistantContent: result.content ?? '',
+        });
+      }
+      const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
+      if (lastUser?.content?.trim() && result.content?.trim()) {
+        const uid = userId;
+        setImmediate(() => {
+          (async () => {
+            const memSvc = (await getMemoryServiceForUser(uid)) ?? memoryService;
+            const userMsgPreview = lastUser!.content.trim().slice(0, 100);
+            const assistantPreview = (result.content ?? '').trim().slice(0, 200);
+            const dailyLogEntry = `[对话] 用户: ${userMsgPreview}... | 助手: ${assistantPreview}...`;
+            await memSvc.appendDaily(dailyLogEntry);
+            serverLogger.info('memory', '每日记忆已记录（agent/stream）', `userId=${uid}`);
+            await runConsiderCapture({
+              userMessage: lastUser!.content.trim(),
+              assistantReply: (result.content ?? '').trim(),
+              providerId,
+              modelId,
+              baseUrl,
+              apiKey,
+              memoryService: memSvc,
+              workspaceId: uid,
+            });
+          })().catch((err: any) => serverLogger.error('chat/agent/stream (consider-capture)', err.message));
         });
       }
     } catch (err: any) {
