@@ -1578,7 +1578,6 @@ export function createApiRouter(
     }
   });
 
-  // ── Telegram 渠道路由 ──────────────────────────────────────
   // ── QQ 渠道路由 ────────────────────────────────────────────
 
   router.get('/qq/status', async (req, res) => {
