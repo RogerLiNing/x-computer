@@ -6,7 +6,9 @@ import { MemoryServiceWrapper } from '../services/MemoryServiceWrapper.js';
 import { v4 as uuid } from 'uuid';
 import { createTasksRouter } from './tasks.js';
 import { createSchedulerRouter } from './scheduler.js';
+import { createLLMRouter } from './llm.js';
 import { createSkillsRouter } from './skills.js';
+import { createHealthRouter } from './health.js';
 import { createXProactiveRouter } from './xProactive.js';
 import { createXPendingRouter } from './xPending.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
@@ -30,6 +32,7 @@ import { createAgentsRouter, loadAgentsFromDb } from './agents.js';
 import { createMcpRouter } from './mcp.js';
 import { createAppsRouter } from './apps.js';
 import { createCapabilitiesRouter } from './capabilities.js';
+import { createEditorAgentRouter } from './editorAgent.js';
 import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
 import {
   XScheduler,
@@ -40,7 +43,6 @@ import {
 } from '../scheduler/XScheduler.js';
 import { runScheduledIntent, runWithRetry } from '../scheduler/runScheduledIntent.js';
 import { loadDefaultConfig, getToolLoadingMode } from '../config/defaultConfig.js';
-import { fetchModelsFromProvider } from '../llm/fetchModels.js';
 
 const EMBED_BATCH_SIZE = 10;
 /** 精简系统提示中的能力列表以节省 token；设 X_COMPUTER_SYSTEM_PROMPT_CONDENSED=false 可恢复完整格式 */
@@ -312,11 +314,13 @@ export function createApiRouter(
   router.use(createAgentsRouter(orchestrator, db));
   router.use(createTasksRouter(orchestrator, userSandboxManager, db, subscriptionService));
   router.use(createSchedulerRouter());
+  router.use(createLLMRouter());
   router.use(createXProactiveRouter(db));
   router.use(createXPendingRouter(db));
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
+  router.use(createHealthRouter(orchestrator, audit));
   const vectorStore = new VectorStore(sandboxFS);
   const memoryService = new MemoryService(sandboxFS, vectorStore);
   
@@ -705,28 +709,6 @@ export function createApiRouter(
   } else {
     xScheduler.start();
   }
-
-
-  /** POST /api/llm/import-models - 由服务端请求提供商 /models 或 /v1/models，避免浏览器 CORS（如 NVIDIA） */
-  router.post('/llm/import-models', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') {
-        return res.status(401).json({ error: '需要已登录用户' });
-      }
-      const body = req.body as { baseUrl?: string; apiKey?: string };
-      const baseUrl = String(body?.baseUrl ?? '').trim();
-      if (!baseUrl) {
-        return res.status(400).json({ error: 'baseUrl 必填' });
-      }
-      const apiKey = body?.apiKey != null ? String(body.apiKey).trim() : undefined;
-      const models = await fetchModelsFromProvider(baseUrl, apiKey);
-      res.json({ models });
-    } catch (err: any) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
-    }
-  });
 
   /** 收集当前用户情况，用于生成个性化欢迎语（待办数、X 主动消息未读数、时段）；使用东八区 */
   async function buildGreetContext(uid: string | undefined): Promise<string> {
@@ -3502,6 +3484,8 @@ export function createApiRouter(
       if (!res.headersSent) res.status(400).json({ error: err.message || '请求失败' });
     }
   });
+
+  router.use(createEditorAgentRouter(aiQuota));
 
   // ── Health ───────────────────────────────────────────────
 
