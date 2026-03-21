@@ -13,6 +13,8 @@ import { createMemoryRouter } from './memory.js';
 import { createXProactiveRouter } from './xProactive.js';
 import { createXPendingRouter } from './xPending.js';
 import { createXGroupRunRouter } from './xGroupRun.js';
+import { createDiscordRouter } from './messaging/discord.js';
+import { createTelegramRouter } from './messaging/telegram.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
@@ -36,6 +38,7 @@ import { createAppsRouter } from './apps.js';
 import { createCapabilitiesRouter } from './capabilities.js';
 import { createEditorAgentRouter } from './editorAgent.js';
 import { createChatRouter } from './chat.js';
+import { createWhatsAppRouter } from './messaging/whatsapp.js';
 import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
 import {
   XScheduler,
@@ -75,6 +78,7 @@ import { workflowFireEvent } from '../workflow/workflowClient.js';
 import { executeWorkflowTask } from '../workflow/executeTask.js';
 import { startEmailCheckLoop, runEmailCheck } from '../email/emailCheckLoop.js';
 import { createEmailRouter } from './email.js';
+import { createSlackRouter } from './messaging/slack.js';
 import { aiCallsQuota, tasksQuota } from '../subscription/quotaMiddleware.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 import {
@@ -321,6 +325,8 @@ export function createApiRouter(
   router.use(createLLMRouter());
   router.use(createXProactiveRouter(db));
   router.use(createXPendingRouter(db));
+  router.use(createDiscordRouter(db));
+  router.use(createTelegramRouter(db));
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
@@ -1027,6 +1033,8 @@ export function createApiRouter(
       : null;
 
   router.use(createEmailRouter(db, signalFireDeps));
+  router.use(createWhatsAppRouter(db));
+  router.use(createSlackRouter(db));
 
   if (db && signalFireDeps) {
     registerHook('task_complete', async (payload) => {
@@ -1452,8 +1460,7 @@ export function createApiRouter(
     }
   });
 
-  // ── WhatsApp（R052）────────────────────────────────────────
-
+  
   /** WhatsApp 系统代理检测（macOS）：返回当前系统代理 URL，供前端预填。 */
   router.get('/whatsapp/system-proxy', (_req, res) => {
     try {
@@ -1572,149 +1579,6 @@ export function createApiRouter(
   });
 
   // ── Telegram 渠道路由 ──────────────────────────────────────
-
-  router.get('/telegram/status', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseTelegramConfig(await db.getConfig(userId, 'telegram_config'));
-      const conn = getTelegramConnection(userId, db.getConfig.bind(db));
-      res.json({ ok: true, enabled: config?.enabled ?? false, status: conn.getStatus(), botInfo: conn.getBotInfo(), allowFrom: config?.allowFrom ?? [], dmPolicy: config?.dmPolicy ?? 'allowlist' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '获取失败' }); }
-  });
-
-  router.post('/telegram/connect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseTelegramConfig(await db.getConfig(userId, 'telegram_config'));
-      if (!config?.enabled || !config.botToken) { res.status(400).json({ ok: false, error: '请先启用并填写 Bot Token' }); return; }
-      disconnectTelegram(userId);
-      const conn = getTelegramConnection(userId, db.getConfig.bind(db));
-      const result = await conn.connect(config.botToken);
-      if (result.ok) res.json({ ok: true });
-      else res.status(400).json({ ok: false, error: result.error });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '连接失败' }); }
-  });
-
-  router.post('/telegram/disconnect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      disconnectTelegram(userId);
-      res.json({ ok: true, message: '已断开' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '断开失败' }); }
-  });
-
-  router.get('/telegram/inbox', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const limit = Math.min(50, Math.max(1, parseInt(String(req.query?.limit)) || 20));
-      const rows = await db.getChannelMessagesByUser(userId, 'telegram', limit);
-      res.json({ ok: true, messages: rows });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '读取失败', messages: [] }); }
-  });
-
-  // ── Discord 渠道路由 ──────────────────────────────────────
-
-  router.get('/discord/status', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseDiscordConfig(await db.getConfig(userId, 'discord_config'));
-      const conn = getDiscordConnection(userId, db.getConfig.bind(db));
-      res.json({ ok: true, enabled: config?.enabled ?? false, status: conn.getStatus(), botInfo: conn.getBotInfo(), allowFrom: config?.allowFrom ?? [], dmPolicy: config?.dmPolicy ?? 'allowlist' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '获取失败' }); }
-  });
-
-  router.post('/discord/connect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseDiscordConfig(await db.getConfig(userId, 'discord_config'));
-      if (!config?.enabled || !config.botToken) { res.status(400).json({ ok: false, error: '请先启用并填写 Bot Token' }); return; }
-      disconnectDiscord(userId);
-      const conn = getDiscordConnection(userId, db.getConfig.bind(db));
-      const result = await conn.connect(config.botToken);
-      if (result.ok) res.json({ ok: true });
-      else res.status(400).json({ ok: false, error: result.error });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '连接失败' }); }
-  });
-
-  router.post('/discord/disconnect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      disconnectDiscord(userId);
-      res.json({ ok: true, message: '已断开' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '断开失败' }); }
-  });
-
-  router.get('/discord/inbox', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const limit = Math.min(50, Math.max(1, parseInt(String(req.query?.limit)) || 20));
-      const rows = await db.getChannelMessagesByUser(userId, 'discord', limit);
-      res.json({ ok: true, messages: rows });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '读取失败', messages: [] }); }
-  });
-
-  // ── Slack 渠道路由 ────────────────────────────────────────
-
-  router.get('/slack/status', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseSlackConfig(await db.getConfig(userId, 'slack_config'));
-      const conn = getSlackConnection(userId, db.getConfig.bind(db));
-      res.json({ ok: true, enabled: config?.enabled ?? false, status: conn.getStatus(), allowFrom: config?.allowFrom ?? [], dmPolicy: config?.dmPolicy ?? 'allowlist' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '获取失败' }); }
-  });
-
-  router.post('/slack/connect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseSlackConfig(await db.getConfig(userId, 'slack_config'));
-      if (!config?.enabled || !config.botToken || !config.appToken) { res.status(400).json({ ok: false, error: '请先启用并填写 Bot Token 和 App Token' }); return; }
-      disconnectSlack(userId);
-      const conn = getSlackConnection(userId, db.getConfig.bind(db));
-      const result = await conn.connect(config.botToken, config.appToken);
-      if (result.ok) res.json({ ok: true });
-      else res.status(400).json({ ok: false, error: result.error });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '连接失败' }); }
-  });
-
-  router.post('/slack/disconnect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      disconnectSlack(userId);
-      res.json({ ok: true, message: '已断开' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '断开失败' }); }
-  });
-
-  router.get('/slack/inbox', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const limit = Math.min(50, Math.max(1, parseInt(String(req.query?.limit)) || 20));
-      const rows = await db.getChannelMessagesByUser(userId, 'slack', limit);
-      res.json({ ok: true, messages: rows });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '读取失败', messages: [] }); }
-  });
-
   // ── QQ 渠道路由 ────────────────────────────────────────────
 
   router.get('/qq/status', async (req, res) => {
