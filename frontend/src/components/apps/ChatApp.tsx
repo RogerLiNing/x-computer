@@ -13,6 +13,7 @@ import { TASK_TEMPLATES, type TaskTemplateCategory } from '@/config/taskTemplate
 import { buildComputerContext, formatComputerContextForPrompt, formatTaskSummaryForPrompt } from '@/utils/computerContext';
 import type { TaskDomain } from '@shared/index';
 import { useDomainDetection } from './ChatApp/useDomainDetection';
+import { useImageHandling } from './ChatApp/useImageHandling';
 import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
 interface Message {
@@ -41,74 +42,6 @@ interface Props {
 }
 
 const TASK_KEYWORDS = ['帮我', '执行', '创建', '整理', '发送', '编写', '修改', '分析', '生成', '修复', '部署', '搜索', '下载', '安装', '运行'];
-
-/** 将图片 URL（data URL 或 http）转为 Blob */
-async function imageUrlToBlob(src: string): Promise<Blob> {
-  if (src.startsWith('data:')) {
-    const res = await fetch(src);
-    return res.blob();
-  }
-  const res = await fetch(src, { mode: 'cors' });
-  return res.blob();
-}
-
-/** 根据 data URL 或 blob 推断默认扩展名 */
-function getImageExtension(src: string, blob: Blob): string {
-  if (src.startsWith('data:')) {
-    const m = src.match(/data:image\/(\w+);/);
-    if (m) {
-      const ext = m[1].toLowerCase();
-      return ext === 'jpeg' ? '.jpg' : `.${ext}`;
-    }
-  }
-  const t = blob.type?.toLowerCase() || '';
-  if (t.includes('jpeg') || t.includes('jpg')) return '.jpg';
-  if (t.includes('png')) return '.png';
-  if (t.includes('webp')) return '.webp';
-  if (t.includes('gif')) return '.gif';
-  return '.png';
-}
-
-/** Blob 转 base64 字符串 */
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => {
-      const s = r.result as string;
-      resolve(s.includes(',') ? s.split(',')[1]! : s);
-    };
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(blob);
-  });
-}
-
-/** 将图片保存到用户沙箱（非宿主机），路径默认 图片/生成图-{timestamp}.{ext}；返回保存的沙箱路径或 null */
-async function saveImageToSandbox(src: string, _suggestedName: string): Promise<string | null> {
-  let blob: Blob;
-  try {
-    blob = await imageUrlToBlob(src);
-  } catch {
-    return null;
-  }
-  const ext = getImageExtension(src, blob);
-  const sandboxPath = `图片/生成图-${Date.now()}${ext}`;
-  let base64: string;
-  if (src.startsWith('data:') && src.includes(',')) {
-    base64 = src.split(',')[1]!;
-  } else {
-    try {
-      base64 = await blobToBase64(blob);
-    } catch {
-      return null;
-    }
-  }
-  try {
-    await api.writeFileBinary(sandboxPath, base64);
-    return sandboxPath;
-  } catch {
-    return null;
-  }
-}
 
 /** 请求 /api/chat 时携带的最近对话轮数（每轮 = user + assistant），对齐 OpenCode session 思路。 */
 const DEFAULT_MAX_CHAT_ROUNDS = 10;
@@ -339,6 +272,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   /** 已追加过「任务完成」跟帖的 taskId，避免重复 */
   const completedTaskFollowUpsRef = useRef<Set<string>>(new Set());
   const { detectDomain } = useDomainDetection();
+  const { imageUrlToBlob, blobToBase64, saveImageToSandbox, getImageExtension } = useImageHandling();
 
   /** 停止当前正在进行的 AI 生成 */
   const stopGenerating = useCallback(() => {
