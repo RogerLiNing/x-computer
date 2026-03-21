@@ -10,11 +10,13 @@ import { createLLMRouter } from './llm.js';
 import { createSkillsRouter } from './skills.js';
 import { createHealthRouter } from './health.js';
 import { createMemoryRouter } from './memory.js';
+import { createPromptRouter } from './prompt.js';
 import { createXProactiveRouter } from './xProactive.js';
 import { createXPendingRouter } from './xPending.js';
 import { createXGroupRunRouter } from './xGroupRun.js';
 import { createDiscordRouter } from './messaging/discord.js';
 import { createTelegramRouter } from './messaging/telegram.js';
+import { createQQRouter } from './messaging/qq.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
@@ -93,7 +95,7 @@ import { setDiscordMessageHandler, getDiscordConnection, disconnectDiscord, pars
 import { handleDiscordMessage } from '../discord/discordLoop.js';
 import { setSlackMessageHandler, getSlackConnection, disconnectSlack, parseSlackConfig, reconnectSlackForConfiguredUsers, sendSlackMessage } from '../slack/slackService.js';
 import { handleSlackMessage } from '../slack/slackLoop.js';
-import { setQQMessageHandler, getQQConnection, disconnectQQ, reconnectQQ, parseQQConfig, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
+import { setQQMessageHandler, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
 import { handleQQMessage } from '../qq/qqLoop.js';
 
 const MEMORY_DIR = 'memory';
@@ -322,6 +324,7 @@ export function createApiRouter(
   router.use(createXPendingRouter(db));
   router.use(createDiscordRouter(db));
   router.use(createTelegramRouter(db));
+  router.use(createQQRouter(db));
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
@@ -330,6 +333,7 @@ export function createApiRouter(
   const memoryService = new MemoryService(sandboxFS, vectorStore);
 
   router.use(createMemoryRouter(memoryService, sandboxFS, vectorStore, userSandboxManager, db, subscriptionService));
+  router.use(createPromptRouter(sandboxFS, vectorStore, userSandboxManager, db));
 
   // 配额中间件（如果提供了 subscriptionService）
   const aiQuota = subscriptionService ? aiCallsQuota(subscriptionService) : (req: any, res: any, next: any) => next();
@@ -372,17 +376,6 @@ export function createApiRouter(
     await mem.ensureAssistantPromptExists();
     return mem.readAssistantPrompt();
   }
-
-  // ── 主脑提示词自我进化（可对话中触发或定时任务调用 evolve_system_prompt） ──
-  router.get('/prompt/evolved', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      const content = await getEvolvedCorePromptForUser(userId);
-      res.json({ evolvedCorePrompt: content });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? '读取失败' });
-    }
-  });
 
   // ── X 主脑自主定时执行：到点以对应用户身份跑 Agent，不限制内容 ──
   const getSystemPromptForScheduler = async (uid: string) => {
@@ -1455,68 +1448,6 @@ export function createApiRouter(
     }
   });
 
-
-  // ── QQ 渠道路由 ────────────────────────────────────────────
-
-  router.get('/qq/status', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseQQConfig(await db.getConfig(userId, 'qq_config'));
-      const conn = getQQConnection(userId, db.getConfig.bind(db));
-      const selfOpenid = await db.getConfig(userId, 'qq_self_openid');
-      res.json({ ok: true, enabled: config?.enabled ?? false, status: conn.getStatus(), botInfo: conn.getBotInfo(), dmPolicy: config?.dmPolicy ?? 'open', groupPolicy: config?.groupPolicy ?? 'open', selfOpenid: selfOpenid ?? null });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '获取失败' }); }
-  });
-
-  router.post('/qq/connect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const config = parseQQConfig(await db.getConfig(userId, 'qq_config'));
-      if (!config?.enabled || !config.appId || !config.secret) { res.status(400).json({ ok: false, error: '请先启用并填写 AppID 和 Secret' }); return; }
-      disconnectQQ(userId);
-      const conn = getQQConnection(userId, db.getConfig.bind(db));
-      const result = await conn.connect(config.appId, config.secret, config.sandbox);
-      if (result.ok) res.json({ ok: true });
-      else res.status(400).json({ ok: false, error: result.error });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '连接失败' }); }
-  });
-
-  router.post('/qq/disconnect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      disconnectQQ(userId);
-      res.json({ ok: true, message: '已断开' });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '断开失败' }); }
-  });
-
-  /** 手动重连 QQ Bot（清除自动重连计数并重新连接） */
-  router.post('/qq/reconnect', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const result = await reconnectQQ(userId, db.getConfig.bind(db));
-      if (result.ok) res.json({ ok: true, message: '重连成功' });
-      else res.status(400).json({ ok: false, error: result.error });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '重连失败' }); }
-  });
-
-  router.get('/qq/inbox', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') { res.status(401).json({ ok: false, error: '需要登录' }); return; }
-      if (!db) { res.status(503).json({ ok: false, error: '服务不可用' }); return; }
-      const limit = Math.min(50, Math.max(1, parseInt(String(req.query?.limit)) || 20));
-      const rows = await db.getChannelMessagesByUser(userId, 'qq', limit);
-      res.json({ ok: true, messages: rows });
-    } catch (err: any) { res.status(500).json({ ok: false, error: err?.message ?? '读取失败', messages: [] }); }
-  });
-
   /** MCP 重载：按用户重载（有 userId 时从该用户工作区/云端加载） */
   router.post('/mcp/reload', async (req, res) => {
     try {
@@ -1579,25 +1510,6 @@ export function createApiRouter(
   router.delete('/logs', (_req, res) => {
     serverLogger.clear();
     res.json({ success: true });
-  });
-
-  // ── Prompts (主脑提示词) ────────────────────────────────────
-
-  router.get('/prompts/welcome', async (req, res) => {
-    let lang: 'en' | 'zh-CN' = 'zh-CN';
-    const queryLang = String(req.query?.lang ?? '').trim().toLowerCase();
-    if (queryLang === 'en' || queryLang === 'zh-cn') {
-      lang = queryLang === 'en' ? 'en' : 'zh-CN';
-    } else if (db) {
-      const userId = (req as { userId?: string }).userId;
-      if (userId && userId !== 'anonymous') {
-        lang = await getUserLanguage(db, userId);
-      } else {
-        const accept = (req.headers['accept-language'] as string) ?? '';
-        lang = accept.includes('en') && !accept.startsWith('zh') ? 'en' : 'zh-CN';
-      }
-    }
-    res.json({ content: getWelcomeMessage(lang) });
   });
 
 
