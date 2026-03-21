@@ -8,6 +8,7 @@ import { createTasksRouter } from './tasks.js';
 import { createSchedulerRouter } from './scheduler.js';
 import { createSkillsRouter } from './skills.js';
 import { createXProactiveRouter } from './xProactive.js';
+import { createXPendingRouter } from './xPending.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
@@ -27,6 +28,7 @@ import { callEmbedding, callEmbeddingBatch } from '../memory/embeddingService.js
 import { createChatSessionRouter } from './chatSessions.js';
 import { createAgentsRouter, loadAgentsFromDb } from './agents.js';
 import { createMcpRouter } from './mcp.js';
+import { createAppsRouter } from './apps.js';
 import { createCapabilitiesRouter } from './capabilities.js';
 import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
 import {
@@ -296,19 +298,6 @@ async function runLearnPromptExtract(params: {
   }
 }
 
-/** 生成注入到小程序 HTML 的脚本：上报 window.onerror 与 console.error 到后端，供 x.get_app_logs 查看 */
-function buildMiniAppLoggerScript(appId: string, userId: string): string {
-  const a = appId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const u = userId.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return (
-    '<script>(function(){var appId="' +
-    a +
-    '",userId="' +
-    u +
-    '",api="/api";function send(lvl,msg,det){try{fetch(api+"/apps/sandbox-logs",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({appId:appId,userId:userId,level:lvl,message:msg,detail:det||null})}).catch(function(){})}catch(e){}}window.onerror=function(m,s,l,c,e){send("error",m||"Unknown",e&&e.stack?e.stack:null);return false};if(typeof console!=="undefined"&&console.error){var o=console.error;console.error=function(){o.apply(console,arguments);var t=Array.prototype.slice.call(arguments);send("error",t.join(" "),null)}}})();<\/script>'
-  );
-}
-
 export function createApiRouter(
   orchestrator: AgentOrchestrator,
   policy: PolicyEngine,
@@ -324,7 +313,9 @@ export function createApiRouter(
   router.use(createTasksRouter(orchestrator, userSandboxManager, db, subscriptionService));
   router.use(createSchedulerRouter());
   router.use(createXProactiveRouter(db));
+  router.use(createXPendingRouter(db));
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
+  router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
   const vectorStore = new VectorStore(sandboxFS);
   const memoryService = new MemoryService(sandboxFS, vectorStore);
@@ -952,66 +943,6 @@ export function createApiRouter(
       res.status(500).json({ error: err?.message ?? '读取失败', runs: [] });
     }
   });
-
-  // ── R015：用户给 X 的待办/留言（X 通过 read_pending_requests 读取） ──
-  if (db) {
-    const PENDING_REQUESTS_KEY = 'x_pending_requests';
-    type PendingItem = { id: string; content: string; createdAt: number };
-    const getPendingList = async (uid: string): Promise<PendingItem[]> => {
-      try {
-        const raw = await db.getConfig(uid, PENDING_REQUESTS_KEY);
-        return raw ? (JSON.parse(raw) as PendingItem[]) : [];
-      } catch {
-        return [];
-      }
-    };
-    router.get('/x/pending-requests', async (req, res) => {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') {
-        res.status(401).json({ error: '请先登录' });
-        return;
-      }
-      const list = await getPendingList(userId);
-      res.json({ items: list, total: list.length });
-    });
-    router.post('/x/pending-requests', async (req, res) => {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') {
-        res.status(401).json({ error: '请先登录' });
-        return;
-      }
-      const { content } = (req.body ?? {}) as { content?: string };
-      const text = typeof content === 'string' ? content.trim() : '';
-      if (!text) {
-        res.status(400).json({ error: 'content 必填' });
-        return;
-      }
-      const list = await getPendingList(userId);
-      const id = `req-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      list.push({ id, content: text, createdAt: Date.now() });
-      await db.setConfig(userId, PENDING_REQUESTS_KEY, JSON.stringify(list));
-      res.status(201).json({ id, content: text, createdAt: list[list.length - 1].createdAt, total: list.length });
-    });
-    router.delete('/x/pending-requests', async (req, res) => {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') {
-        res.status(401).json({ error: '请先登录' });
-        return;
-      }
-      await db.setConfig(userId, PENDING_REQUESTS_KEY, JSON.stringify([]));
-      res.json({ success: true, remaining: 0 });
-    });
-    router.delete('/x/pending-requests/:id', async (req, res) => {
-      const userId = (req as { userId?: string }).userId;
-      if (!userId || userId === 'anonymous') {
-        res.status(401).json({ error: '请先登录' });
-        return;
-      }
-      const list = (await getPendingList(userId)).filter((x) => x.id !== req.params.id);
-      await db.setConfig(userId, PENDING_REQUESTS_KEY, JSON.stringify(list));
-      res.json({ success: true, remaining: list.length });
-    });
-  }
 
   // ── R014：事件驱动 X 执行（用户发消息 / 任务完成后触发，节流 60s 每用户每来源） ──
   const EVENT_DRIVEN_THROTTLE_MS = 60_000;
