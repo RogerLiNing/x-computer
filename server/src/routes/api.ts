@@ -22,6 +22,7 @@ import { createQQRouter } from './messaging/qq.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
+import { createAdminRouter } from './adminUtils.js';
 import type { CreateTaskRequest, ExecutionMode, AgentDefinition, AgentTeam, AgentGroup } from '../../../shared/src/index.js';
 import { callLLM, callLLMStream, callLLMWithTools, callLLMGenerateImage, type LLMToolDef, type ChatMessage } from '../chat/chatService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
@@ -333,6 +334,7 @@ export function createApiRouter(
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
   router.use(createHealthRouter(orchestrator, audit));
+  router.use(createAdminRouter(orchestrator, policy, audit, sandboxFS, userSandboxManager, db));
   const vectorStore = new VectorStore(sandboxFS);
   const memoryService = new MemoryService(sandboxFS, vectorStore);
 
@@ -1213,101 +1215,6 @@ export function createApiRouter(
       }),
     );
   }
-
-  /** Get current computer context (what the AI perceives) */
-  router.get('/context', (_req, res) => {
-    const ctx = orchestrator.getComputerContext();
-    res.json(ctx ?? { timestamp: 0, message: 'No context yet' });
-  });
-
-  
-  // ── Execution Mode ───────────────────────────────────────
-
-  router.get('/mode', (_req, res) => {
-    res.json({ mode: orchestrator.getMode() });
-  });
-
-  router.post('/mode', (req, res) => {
-    const { mode } = req.body as { mode: ExecutionMode };
-    if (mode !== 'auto' && mode !== 'approval') {
-      res.status(400).json({ error: 'Mode must be "auto" or "approval"' });
-      return;
-    }
-    orchestrator.setMode(mode);
-    res.json({ mode });
-  });
-
-  // ── Tools ────────────────────────────────────────────────
-
-  router.get('/tools', (_req, res) => {
-    res.json(orchestrator.getTools());
-  });
-
-
-
-  /** MCP 重载：按用户重载（有 userId 时从该用户工作区/云端加载） */
-  router.post('/mcp/reload', async (req, res) => {
-    try {
-      const userId = (req as { userId?: string }).userId;
-      const result =
-        userId && userId !== 'anonymous' && userSandboxManager
-          ? await loadMcpAndRegisterForUser(
-              orchestrator,
-              userId,
-              userSandboxManager.getUserWorkspaceRoot.bind(userSandboxManager),
-              db?.getConfig.bind(db),
-            )
-          : await reloadMcpAndRegister(orchestrator, sandboxFS.getRoot());
-      res.json({ success: true, result });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message ?? '重载失败' });
-    }
-  });
-
-  // ── Policy ───────────────────────────────────────────────
-
-  router.get('/policy/rules', (_req, res) => {
-    res.json(policy.getRules());
-  });
-
-  // ── Runtime ──────────────────────────────────────────────
-
-
-  // ── Audit ────────────────────────────────────────────────
-
-  /** 审计日志：有 userId 时优先从 DB 按用户查询，否则返回内存最近条目 */
-  router.get('/audit', async (req, res) => {
-    const limit = Math.min(500, parseInt(String(req.query?.limit)) || 100);
-    const userId = (req as { userId?: string }).userId;
-    if (userId && userId !== 'anonymous' && db) {
-      try {
-        const rows = await db.getAuditByUser(userId, limit);
-        return res.json(rows);
-      } catch (e: any) {
-        serverLogger.warn('audit', 'DB 查询失败，回退内存', e?.message);
-      }
-    }
-    const all = audit.getAll();
-    res.json(all.slice(-limit));
-  });
-
-  router.get('/audit/task/:taskId', (req, res) => {
-    res.json(audit.getTimeline(req.params.taskId));
-  });
-
-  // ── Server Logs ────────────────────────────────────────────
-
-  /** 获取后端日志（前端系统日志用） */
-  router.get('/logs', (req, res) => {
-    const limit = parseInt(String(req.query?.limit)) || 200;
-    res.json(serverLogger.getRecent(limit));
-  });
-
-  /** 清空后端日志 */
-  router.delete('/logs', (_req, res) => {
-    serverLogger.clear();
-    res.json({ success: true });
-  });
 
 
   router.use(createChatRouter(orchestrator, sandboxFS, aiQuota, userSandboxManager, db, subscriptionService));
