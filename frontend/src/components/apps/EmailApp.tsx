@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Mail, Star, Trash2, Send, Reply, Forward, Bot, Inbox, Archive, Search, Edit, RefreshCw } from 'lucide-react';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 import { api } from '@/utils/api';
 
 interface Email {
@@ -38,7 +38,7 @@ export function EmailApp({ windowId }: Props) {
   const [composing, setComposing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const addNotification = useDesktopStore((s) => s.addNotification);
+  const addNotification = useConnectionStore((s) => s.addNotification);
 
   const loadEmails = useCallback(async () => {
     setLoading(true);

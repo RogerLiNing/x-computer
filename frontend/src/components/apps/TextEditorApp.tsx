@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Save, Bold, Italic, Underline, AlignLeft, List, Bot, Type, Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 import { useAiDocumentStore } from '@/store/aiDocumentStore';
 
 const DEFAULT_TEXT = `# 欢迎使用 X-Computer 文本编辑器
@@ -36,7 +37,8 @@ export function TextEditorApp({ windowId, metadata }: Props) {
   const [filePath, setFilePath] = useState<string | null>(null);
   const [modified, setModified] = useState(false);
   const [loading, setLoading] = useState(false);
-  const { addNotification, setWindowTitle, setWindowMetadata } = useDesktopStore();
+  const { addNotification } = useConnectionStore();
+  const { setWindowTitle, setWindowMetadata } = useDesktopStore();
   const isAiDocument = metadata?.aiDocument === true;
   const suggestedPath = (metadata?.suggestedPath as string) ?? '文档/未命名.txt';
   const aiState = useAiDocumentStore((s) => (isAiDocument ? s.byWindowId[windowId] : undefined));

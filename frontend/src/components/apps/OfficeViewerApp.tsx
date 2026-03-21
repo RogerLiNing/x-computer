@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Save, FileText, AlertCircle, Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 
 interface Props {
   windowId: string;
@@ -25,7 +26,8 @@ export function OfficeViewerApp({ windowId, metadata }: Props) {
   const [docxTitle, setDocxTitle] = useState('');
   const [xlsxSheets, setXlsxSheets] = useState<{ name: string; rows: string[][] }[]>([]);
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
-  const { addNotification, setWindowTitle } = useDesktopStore();
+  const { addNotification } = useConnectionStore();
+  const { setWindowTitle } = useDesktopStore();
 
   useEffect(() => {
     setLoading(true);

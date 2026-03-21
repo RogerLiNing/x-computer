@@ -1,5 +1,6 @@
 import { useRef, useCallback, useMemo } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
 import { useMiniAppsStore } from '@/store/miniAppsStore';
 import { useAdminStore } from '@/store/adminStore';
 import { getAllApps } from '@/appRegistry';
@@ -62,8 +63,8 @@ const GAP = 10;
 export function DesktopIcons() {
   const containerRef = useRef<HTMLDivElement>(null);
   const openApp = useDesktopStore((s) => s.openApp);
-  const desktopIconPositions = useDesktopStore((s) => s.desktopIconPositions);
-  const setDesktopIconPosition = useDesktopStore((s) => s.setDesktopIconPosition);
+  const desktopIconPositions = useConfigStore((s) => s.desktopIconPositions);
+  const setDesktopIconPosition = useConfigStore((s) => s.setDesktopIconPosition);
   const miniApps = useMiniAppsStore((s) => s.list);
   const isAdmin = useAdminStore((s) => s.isAdmin);
   const apps = useMemo(() => getAllApps(), [miniApps, isAdmin]);

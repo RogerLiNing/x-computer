@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Bot, Save, Plus, BarChart3 } from 'lucide-react';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 
 const COLS = 8;
 const ROWS = 15;
@@ -22,7 +22,7 @@ export function SpreadsheetApp({ windowId }: Props) {
   const [data, setData] = useState<Record<string, string>>(INITIAL_DATA);
   const [selectedCell, setSelectedCell] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-  const addNotification = useDesktopStore((s) => s.addNotification);
+  const addNotification = useConnectionStore((s) => s.addNotification);
 
   const getCellKey = (col: number, row: number) => `${COL_LABELS[col]}${row}`;
 

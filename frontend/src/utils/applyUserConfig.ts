@@ -4,7 +4,7 @@
 
 import type { LLMSystemConfig, LLMProviderConfig } from '@shared/index';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
 import { getSystemLogStore, type SystemLogEntry } from '@/store/systemLogStore';
 import { setInstalledFromCloud, getInstalledApps, setMiniAppsFromApi } from '@/appRegistry';
 import { saveSecrets, loadSecrets } from '@/constants/llmPresets';
@@ -69,11 +69,11 @@ export function applyUserConfigToStores(c: UserConfigMap): void {
   } else if (logStore.entries.length > 0) {
     api.setUserConfigKey('system_logs', logStore.entries).catch(() => {});
   }
-  const desktopStore = useDesktopStore.getState();
+  const configStore = useConfigStore.getState();
   if (c?.desktop_layout && typeof c.desktop_layout === 'object' && !Array.isArray(c.desktop_layout)) {
-    desktopStore.setDesktopIconPositionsFromCloud(c.desktop_layout as Record<string, { col: number; row: number }>);
-  } else if (Object.keys(desktopStore.desktopIconPositions).length > 0) {
-    api.setUserConfigKey('desktop_layout', desktopStore.desktopIconPositions).catch(() => {});
+    configStore.setDesktopIconPositionsFromCloud(c.desktop_layout as Record<string, { col: number; row: number }>);
+  } else if (Object.keys(configStore.desktopIconPositions).length > 0) {
+    api.setUserConfigKey('desktop_layout', configStore.desktopIconPositions).catch(() => {});
   }
   if (c?.installed_apps != null && Array.isArray(c.installed_apps)) {
     setInstalledFromCloud(c.installed_apps);

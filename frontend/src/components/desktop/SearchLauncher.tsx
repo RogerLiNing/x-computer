@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
 import { useAdminStore } from '@/store/adminStore';
 import { useMiniAppsStore } from '@/store/miniAppsStore';
 import { getAllApps } from '@/appRegistry';
@@ -27,7 +28,8 @@ interface SearchItem {
 }
 
 export function SearchLauncher() {
-  const { searchOpen, setSearchOpen, openApp } = useDesktopStore();
+  const { openApp } = useDesktopStore();
+  const { searchOpen, setSearchOpen } = useConfigStore();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -45,7 +47,7 @@ export function SearchLauncher() {
     const handleKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
-        useDesktopStore.getState().toggleSearch();
+        useConfigStore.getState().toggleSearch();
       }
     };
     window.addEventListener('keydown', handleKey);

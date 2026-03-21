@@ -2,6 +2,9 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useConfigStore } from '@/store/configStore';
+import { useTaskStore } from '@/store/taskStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { useAiDocumentStore } from '@/store/aiDocumentStore';
 import { getSystemLogStore } from '@/store/systemLogStore';
@@ -366,8 +369,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     updateSessionTitle,
     refreshSessions,
   } = useChatSessions(setMessages);
-  const tasks = useDesktopStore((s) => s.tasks);
-  const { addNotification, openApp, setWindowTitle } = useDesktopStore();
+  const tasks = useTaskStore((s) => s.tasks);
+  const { openApp, setWindowTitle } = useDesktopStore();
+  const addNotification = useConnectionStore((s) => s.addNotification);
   const aiDoc = useAiDocumentStore();
 
   useEffect(() => {
@@ -587,17 +591,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     const hasOpenAiDocument = !!(activeAiWindowId && (activeAiContent != null && activeAiContent.length > 0));
 
     const desktopState = useDesktopStore.getState();
+    const configState = useConfigStore.getState();
+    const connectionState = useConnectionStore.getState();
     const computerContextStr = formatComputerContextForPrompt(
       buildComputerContext({
         windows: desktopState.windows,
         activeWindowId: desktopState.activeWindowId,
-        executionMode: desktopState.executionMode,
-        tasks: desktopState.tasks,
-        taskbarPinned: desktopState.taskbarPinned,
-        notifications: desktopState.notifications,
+        executionMode: configState.executionMode,
+        tasks: useTaskStore.getState().tasks,
+        taskbarPinned: configState.taskbarPinned,
+        notifications: connectionState.notifications,
       }),
     );
-    const taskSummaryStr = formatTaskSummaryForPrompt(desktopState.tasks);
+    const taskSummaryStr = formatTaskSummaryForPrompt(useTaskStore.getState().tasks);
 
     const llmConfig = useLLMConfigStore.getState().llmConfig;
     const vectorSel = llmConfig?.defaultByModality?.vector;
@@ -985,7 +991,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         }) as any;
 
         // 写入桌面 store，后续 task_complete 通过 WebSocket 更新同一任务，对话里「查看任务详情」状态会从旋转变为已完成
-        useDesktopStore.getState().upsertTask(task.id, task);
+        useTaskStore.getState().upsertTask(task.id, task);
 
         const domainLabel = { chat: '聊天', coding: '编程', agent: '智能体', office: '办公' }[domain];
 
@@ -1192,12 +1198,48 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
   /** 复制消息正文到剪贴板 */
   const copyMessage = useCallback((msg: Message) => {
-    const text = msg.content || '';
-    if (!text) return;
-    navigator.clipboard.writeText(text).then(
-      () => addNotification({ type: 'info', title: '已复制', message: '消息已复制到剪贴板' }),
-      () => addNotification({ type: 'error', title: '复制失败', message: '无法写入剪贴板' }),
-    );
+    const text = typeof msg.content === 'string' ? msg.content : String(msg.content ?? '');
+    if (!text) {
+      addNotification({ type: 'error', title: '复制失败', message: '消息内容为空' });
+      return;
+    }
+
+    // 优先使用 navigator.clipboard，不可用时使用 fallback
+    const doCopy = () => {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(text).then(
+          () => addNotification({ type: 'info', title: '已复制', message: '消息已复制到剪贴板' }),
+          () => fallbackCopy(text),
+        );
+      } else {
+        fallbackCopy(text);
+      }
+    };
+
+    const fallbackCopy = (copyText: string) => {
+      const textarea = document.createElement('textarea');
+      textarea.value = copyText;
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        const ok = document.execCommand('copy');
+        if (ok) {
+          addNotification({ type: 'info', title: '已复制', message: '消息已复制到剪贴板' });
+        } else {
+          addNotification({ type: 'error', title: '复制失败', message: '无法写入剪贴板' });
+        }
+      } catch {
+        addNotification({ type: 'error', title: '复制失败', message: '无法写入剪贴板' });
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    };
+
+    doCopy();
   }, [addNotification]);
 
   /** 删除一条消息（不删欢迎语）；若有当前会话则同步删除云端 */
@@ -1229,17 +1271,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     const desktopState = useDesktopStore.getState();
+    const configState = useConfigStore.getState();
+    const connectionState = useConnectionStore.getState();
     const computerContextStr = formatComputerContextForPrompt(
       buildComputerContext({
         windows: desktopState.windows,
         activeWindowId: desktopState.activeWindowId,
-        executionMode: desktopState.executionMode,
-        tasks: desktopState.tasks,
-        taskbarPinned: desktopState.taskbarPinned,
-        notifications: desktopState.notifications,
+        executionMode: configState.executionMode,
+        tasks: useTaskStore.getState().tasks,
+        taskbarPinned: configState.taskbarPinned,
+        notifications: connectionState.notifications,
       }),
     );
-    const taskSummaryStr = formatTaskSummaryForPrompt(desktopState.tasks);
+    const taskSummaryStr = formatTaskSummaryForPrompt(useTaskStore.getState().tasks);
     const llmConfig = useLLMConfigStore.getState().llmConfig;
     const vectorSel = llmConfig?.defaultByModality?.vector;
     const vectorConfig =

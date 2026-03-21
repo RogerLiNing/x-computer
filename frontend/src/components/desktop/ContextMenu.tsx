@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
 
 export function ContextMenu() {
-  const { contextMenu, hideContextMenu } = useDesktopStore();
+  const { contextMenu, hideContextMenu } = useConfigStore();
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {

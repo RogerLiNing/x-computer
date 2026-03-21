@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useTaskStore } from '@/store/taskStore';
 import { getAppTitle, getApp } from '@/appRegistry';
 import { getUserId } from '@/utils/userId';
 import {
@@ -20,11 +23,12 @@ const API_BASE = '/api';
 
 export function Taskbar() {
   const {
-    taskbarPinned, windows, activeWindowId,
+    windows, activeWindowId,
     openApp, focusWindow, minimizeWindow,
-    notifications, tasks, connected,
-    toggleSearch,
   } = useDesktopStore();
+  const { taskbarPinned, toggleSearch } = useConfigStore();
+  const { notifications, connected } = useConnectionStore();
+  const tasks = useTaskStore((s) => s.tasks);
 
   const [clock, setClock] = useState(new Date());
 

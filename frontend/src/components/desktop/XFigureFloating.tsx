@@ -6,10 +6,11 @@
 import { useState } from 'react';
 import { Brain } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 
 export function XFigureFloating() {
   const openApp = useDesktopStore((s) => s.openApp);
-  const xProactiveMessages = useDesktopStore((s) => s.xProactiveMessages);
+  const xProactiveMessages = useConnectionStore((s) => s.xProactiveMessages);
   const [figureLoaded, setFigureLoaded] = useState(false);
   const messages = Array.isArray(xProactiveMessages) ? xProactiveMessages : [];
   const unreadCount = messages.filter((m) => !m.read).length;

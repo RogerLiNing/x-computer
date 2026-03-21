@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Save, Play, FileCode, Bot, Undo, Redo, Plus, X, Loader2 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 
 interface Tab {
   id: string;
@@ -53,7 +54,8 @@ export function CodeEditorApp({ windowId, metadata }: Props) {
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const { addNotification, setWindowTitle } = useDesktopStore();
+  const { addNotification } = useConnectionStore();
+  const { setWindowTitle } = useDesktopStore();
 
   // Load file from metadata (opened from file manager)
   useEffect(() => {

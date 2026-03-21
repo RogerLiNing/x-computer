@@ -1,8 +1,8 @@
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 import { X, AlertTriangle, Info, AlertCircle, ShieldCheck } from 'lucide-react';
 
 export function NotificationCenter() {
-  const { notifications, markNotificationRead } = useDesktopStore();
+  const { notifications, markNotificationRead } = useConnectionStore();
   const list = Array.isArray(notifications) ? notifications : [];
   const recent = list.filter((n) => !n.read).slice(0, 5);
 

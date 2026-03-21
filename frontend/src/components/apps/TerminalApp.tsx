@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, isQuotaError } from '@/utils/api';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useTaskStore } from '@/store/taskStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 
 interface TerminalLine {
@@ -63,8 +64,8 @@ export function TerminalApp({ windowId }: Props) {
   const [currentDir, setCurrentDir] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const addTask = useDesktopStore((s) => s.addTask);
-  const addNotification = useDesktopStore((s) => s.addNotification);
+  const addTask = useTaskStore((s) => s.addTask);
+  const addNotification = useConnectionStore((s) => s.addNotification);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef } from 'react';
 import { getUserId } from '@/utils/userId';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 
 interface Props {
   appId: string;
@@ -21,7 +21,7 @@ export function MiniAppView({ appId }: Props) {
   const src = `${BASE}/apps/sandbox/${encodeURIComponent(userId)}/apps/${appId}/index.html`;
 
   useEffect(() => {
-    const store = useDesktopStore.getState();
+    const store = useConnectionStore.getState();
     store.sendWs?.({ type: 'subscribe_app', data: { appId } });
     const unsub = store.subscribeAppChannel(appId, (message) => {
       if (iframeRef.current?.contentWindow) {
@@ -30,7 +30,7 @@ export function MiniAppView({ appId }: Props) {
     });
     return () => {
       unsub();
-      useDesktopStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId } });
+      useConnectionStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId } });
     };
   }, [appId]);
 

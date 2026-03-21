@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useTaskStore } from '@/store/taskStore';
 import { api, isQuotaError } from '@/utils/api';
 import {
   Clock, CheckCircle2, XCircle, Loader2, AlertTriangle,
@@ -66,14 +67,15 @@ export function TaskTimelineApp({ windowId }: Props) {
   const { t } = useTranslation();
   const STATUS_CONFIG = useMemo(() => getStatusConfig(t), [t]);
   const DOMAIN_LABELS = useMemo(() => getDomainLabels(t), [t]);
-  const tasksRaw = useDesktopStore((s) => s.tasks);
+  const tasksRaw = useTaskStore((s) => s.tasks);
   const tasks = Array.isArray(tasksRaw) ? tasksRaw : [];
-  const auditLogRaw = useDesktopStore((s) => s.auditLog);
+  const auditLogRaw = useTaskStore((s) => s.auditLog);
   const auditLog = Array.isArray(auditLogRaw) ? auditLogRaw : [];
-  const toolsRaw = useDesktopStore((s) => s.tools);
+  const toolsRaw = useConnectionStore((s) => s.tools);
   const tools = Array.isArray(toolsRaw) ? toolsRaw : [];
-  const fetchTools = useDesktopStore((s) => s.fetchTools);
-  const { addNotification, addAuditEntry, syncAuditLog } = useDesktopStore();
+  const fetchTools = useConnectionStore((s) => s.fetchTools);
+  const { addNotification } = useConnectionStore();
+  const { addAuditEntry, syncAuditLog } = useTaskStore();
 
   useEffect(() => {
     fetchTools();
@@ -102,7 +104,7 @@ export function TaskTimelineApp({ windowId }: Props) {
         api.getAudit(200),
         api.getXSchedulerStatus().catch(() => ({ jobs: [] as SchedulerJob[] })),
       ]);
-      useDesktopStore.getState().syncTasks(tasksData);
+      useTaskStore.getState().syncTasks(tasksData);
       syncAuditLog(auditData);
       setScheduledJobs(Array.isArray(schedulerRes?.jobs) ? schedulerRes.jobs : []);
     } catch (err) {
@@ -117,7 +119,7 @@ export function TaskTimelineApp({ windowId }: Props) {
     if (!selectedTaskId) return;
     try {
       const task = await api.getTask(selectedTaskId);
-      useDesktopStore.getState().upsertTask(selectedTaskId, task);
+      useTaskStore.getState().upsertTask(selectedTaskId, task);
     } catch {
       // 可能 403/404，忽略
     }

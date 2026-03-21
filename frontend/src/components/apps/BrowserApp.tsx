@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { ArrowLeft, ArrowRight, RotateCw, Lock, ExternalLink } from 'lucide-react';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 
 interface Props {
   windowId: string;
@@ -93,7 +93,7 @@ export function BrowserApp({ windowId, metadata }: Props) {
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
   useEffect(() => {
-    const store = useDesktopStore.getState();
+    const store = useConnectionStore.getState();
     store.sendWs?.({ type: 'subscribe_app', data: { appId: 'browser' } });
     const unsub = store.subscribeAppChannel('browser', (message: unknown) => {
       const msg = message as { action?: string; url?: string };
@@ -103,7 +103,7 @@ export function BrowserApp({ windowId, metadata }: Props) {
     });
     return () => {
       unsub();
-      useDesktopStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId: 'browser' } });
+      useConnectionStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId: 'browser' } });
     };
   }, []);
 

@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { Settings } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useConfigStore } from '@/store/configStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { setInstalledFromCloud, getInstalledApps, setMiniAppsFromApi } from '@/appRegistry';
 import { useAdminStore } from '@/store/adminStore';
@@ -25,7 +27,9 @@ import { ChatApp } from '@/components/apps/ChatApp';
 import { OnboardingOverlay } from '@/components/OnboardingOverlay';
 
 export function Desktop() {
-  const { showContextMenu, hideContextMenu, connected, openApp } = useDesktopStore();
+  const { openApp } = useDesktopStore();
+  const { showContextMenu, hideContextMenu } = useConfigStore();
+  const { connected } = useConnectionStore();
   const isMobile = useMobileViewport();
 
   // Connect WebSocket
@@ -33,7 +37,7 @@ export function Desktop() {
 
   // 订阅浏览器通道：X 调用 browser.navigate 且 openIfNeeded 时，若浏览器未打开则自动打开
   useEffect(() => {
-    const store = useDesktopStore.getState();
+    const store = useConnectionStore.getState();
     store.sendWs?.({ type: 'subscribe_app', data: { appId: 'browser' } });
     const unsub = store.subscribeAppChannel('browser', (message: unknown) => {
       const msg = message as { action?: string; url?: string; openIfNeeded?: boolean };
@@ -47,7 +51,7 @@ export function Desktop() {
     });
     return () => {
       unsub();
-      useDesktopStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId: 'browser' } });
+      useConnectionStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId: 'browser' } });
     };
   }, []);
 
@@ -106,11 +110,11 @@ export function Desktop() {
           // 云端无日志但本地有：一次性上传，实现“所有数据在云端”
           api.setUserConfigKey('system_logs', logStore.entries).catch(() => {});
         }
-        const desktopStore = useDesktopStore.getState();
+        const cfg = useConfigStore.getState();
         if (c?.desktop_layout && typeof c.desktop_layout === 'object' && !Array.isArray(c.desktop_layout)) {
-          desktopStore.setDesktopIconPositionsFromCloud(c.desktop_layout as Record<string, { col: number; row: number }>);
-        } else if (Object.keys(desktopStore.desktopIconPositions).length > 0) {
-          api.setUserConfigKey('desktop_layout', desktopStore.desktopIconPositions).catch(() => {});
+          cfg.setDesktopIconPositionsFromCloud(c.desktop_layout as Record<string, { col: number; row: number }>);
+        } else if (Object.keys(cfg.desktopIconPositions).length > 0) {
+          api.setUserConfigKey('desktop_layout', cfg.desktopIconPositions).catch(() => {});
         }
         if (c?.installed_apps != null && Array.isArray(c.installed_apps)) {
           setInstalledFromCloud(c.installed_apps);
@@ -136,17 +140,18 @@ export function Desktop() {
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    const s = useDesktopStore.getState();
+    const ds = useDesktopStore.getState();
+    const cfg = useConfigStore.getState();
     showContextMenu(e.clientX, e.clientY, [
-      { label: '新建文件夹', action: () => s.openApp('file-manager'), shortcut: '⌘N' },
-      { label: '打开终端', action: () => s.openApp('terminal'), shortcut: '⌘T' },
-      { label: '打开 AI 助手', action: () => s.openApp('chat') },
-      { label: '打开 X 主脑', action: () => s.openApp('x') },
+      { label: '新建文件夹', action: () => ds.openApp('file-manager'), shortcut: '⌘N' },
+      { label: '打开终端', action: () => ds.openApp('terminal'), shortcut: '⌘T' },
+      { label: '打开 AI 助手', action: () => ds.openApp('chat') },
+      { label: '打开 X 主脑', action: () => ds.openApp('x') },
       { label: '', action: () => {}, separator: true },
-      { label: '搜索', action: () => s.toggleSearch(), shortcut: '⌘K' },
-      { label: '系统设置', action: () => s.openApp('settings') },
+      { label: '搜索', action: () => cfg.toggleSearch(), shortcut: '⌘K' },
+      { label: '系统设置', action: () => ds.openApp('settings') },
       { label: '', action: () => {}, separator: true },
-      { label: '锁定屏幕', action: () => s.lockScreen(), shortcut: '⌘L' },
+      { label: '锁定屏幕', action: () => cfg.lockScreen(), shortcut: '⌘L' },
     ]);
   };
 
@@ -157,8 +162,8 @@ export function Desktop() {
         className="w-full h-full flex flex-col bg-desktop-bg relative overflow-hidden"
         onContextMenu={handleContextMenu}
         onClick={() => {
-          const s = useDesktopStore.getState();
-          if (s.contextMenu.visible) hideContextMenu();
+          const cfg = useConfigStore.getState();
+          if (cfg.contextMenu.visible) hideContextMenu();
         }}
       >
         <div
@@ -199,8 +204,8 @@ export function Desktop() {
       className="w-full h-full flex flex-col bg-desktop-bg relative overflow-hidden"
       onContextMenu={handleContextMenu}
       onClick={() => {
-        const s = useDesktopStore.getState();
-        if (s.contextMenu.visible) hideContextMenu();
+        const cfg = useConfigStore.getState();
+        if (cfg.contextMenu.visible) hideContextMenu();
       }}
     >
       {/* Desktop wallpaper gradient */}

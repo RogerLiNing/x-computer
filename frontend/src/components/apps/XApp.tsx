@@ -5,6 +5,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Brain, Send, Loader2, Bell, Key, HelpCircle, Info, Sparkles, Play, Clock, Bot, User, Wrench, ChevronDown, ChevronRight, CheckCircle2, XCircle, Copy, Check, Users, MessageCircle, Square, MessageSquare, Plus } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { setMiniAppsFromApi } from '@/appRegistry';
 import { api } from '@/utils/api';
@@ -102,8 +103,8 @@ function TeamRunResultCard({ input, output }: { input?: Record<string, unknown>;
 /** 可展开的工具调用块（与 AI 助手一致）；群组/团队执行用专用卡片展示协作过程 */
 function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
   const [expanded, setExpanded] = useState(false);
-  const tools = useDesktopStore((s) => s.tools);
-  const fetchTools = useDesktopStore((s) => s.fetchTools);
+  const tools = useConnectionStore((s) => s.tools);
+  const fetchTools = useConnectionStore((s) => s.fetchTools);
   useEffect(() => {
     fetchTools();
   }, [fetchTools]);
@@ -183,9 +184,9 @@ function ToolCallBlock({ tc }: { tc: ToolCallRecord }) {
 }
 
 export function XApp() {
-  const xProactiveMessages = useDesktopStore((s) => s.xProactiveMessages);
-  const setXProactiveMessages = useDesktopStore((s) => s.setXProactiveMessages);
-  const markXProactiveRead = useDesktopStore((s) => s.markXProactiveRead);
+  const xProactiveMessages = useConnectionStore((s) => s.xProactiveMessages);
+  const setXProactiveMessages = useConnectionStore((s) => s.setXProactiveMessages);
+  const markXProactiveRead = useConnectionStore((s) => s.markXProactiveRead);
   const openApp = useDesktopStore((s) => s.openApp);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -230,7 +231,7 @@ export function XApp() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    const store = useDesktopStore.getState();
+    const store = useConnectionStore.getState();
     store.sendWs?.({ type: 'subscribe_app', data: { appId: 'x' } });
     const unsub = store.subscribeAppChannel('x', (message: unknown) => {
       const m = message as { type?: string; groupId?: string; goal?: string; results?: unknown[]; totalAgents?: number; currentAgentName?: string; done?: boolean; cancelled?: boolean };
@@ -251,7 +252,7 @@ export function XApp() {
     });
     return () => {
       unsub();
-      useDesktopStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId: 'x' } });
+      useConnectionStore.getState().sendWs?.({ type: 'unsubscribe_app', data: { appId: 'x' } });
     };
   }, []);
 
@@ -911,11 +912,18 @@ export function XApp() {
                     <span className="text-[9px] text-desktop-muted/40">
                       {new Date(m.timestamp).toLocaleTimeString('zh-CN', { timeZone: DISPLAY_TIMEZONE, hour: '2-digit', minute: '2-digit' })}
                     </span>
-                    {m.content && (
+                    {typeof m.content === 'string' && m.content.length > 0 && (
                       <button
                         type="button"
                         className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text transition-colors ml-1"
-                        onClick={() => navigator.clipboard?.writeText(m.content)}
+                        onClick={() => {
+                          const text = String(m.content);
+                          if (!text) return;
+                          navigator.clipboard?.writeText(text).then(
+                            () => { /* 复制成功，无需提示 */ },
+                            () => { /* 静默处理复制失败 */ },
+                          );
+                        }}
                         title="复制"
                       >
                         <Copy size={10} />

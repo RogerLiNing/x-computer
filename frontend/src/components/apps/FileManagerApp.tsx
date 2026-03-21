@@ -6,7 +6,15 @@ import {
 } from 'lucide-react';
 import { api } from '@/utils/api';
 import { useDesktopStore } from '@/store/desktopStore';
-import type { FileEntry } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useConfigStore } from '@/store/configStore';
+interface FileEntry {
+  name: string;
+  type: 'file' | 'directory';
+  size: number;
+  modified?: string;
+  created?: string;
+}
 
 interface Props {
   windowId: string;
@@ -29,7 +37,9 @@ export function FileManagerApp({ windowId, metadata }: Props) {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [workspacePath, setWorkspacePath] = useState<string | null>(null);
 
-  const { openApp, showContextMenu, addNotification } = useDesktopStore();
+  const { openApp } = useDesktopStore();
+  const { showContextMenu } = useConfigStore();
+  const { addNotification } = useConnectionStore();
 
   useEffect(() => {
     api.getWorkspacePath()

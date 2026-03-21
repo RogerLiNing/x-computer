@@ -1,5 +1,8 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
+import { useConfigStore } from '@/store/configStore';
+import { useTaskStore } from '@/store/taskStore';
 import { useAiDocumentStore } from '@/store/aiDocumentStore';
 import { buildComputerContext } from '@/utils/computerContext';
 import { getUserId } from '@/utils/userId';
@@ -26,7 +29,10 @@ export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<number | null>(null);
   const reconnectDelay = useRef(RECONNECT_DELAY);
-  const store = useDesktopStore;
+  const desktopStore = useDesktopStore;
+  const connectionStore = useConnectionStore;
+  const configStore = useConfigStore;
+  const taskStore = useTaskStore;
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -38,9 +44,9 @@ export function useWebSocket() {
       ws.onopen = () => {
         console.log('[WS] Connected to X-Computer server');
         reconnectDelay.current = RECONNECT_DELAY;
-        const s = store.getState();
-        s.setConnected(true);
-        s.setSendWs((msg) => {
+        const cs = connectionStore.getState();
+        cs.setConnected(true);
+        cs.setSendWs((msg) => {
           if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
         });
         // 连接后立即发送 auth 消息关联 userId
@@ -50,8 +56,8 @@ export function useWebSocket() {
 
       ws.onclose = () => {
         console.log('[WS] Disconnected, scheduling reconnect...');
-        store.getState().setConnected(false);
-        store.getState().setSendWs(null);
+        connectionStore.getState().setConnected(false);
+        connectionStore.getState().setSendWs(null);
         scheduleReconnect();
       };
 
@@ -82,34 +88,35 @@ export function useWebSocket() {
   }, [connect]);
 
   const handleMessage = useCallback((msg: WSMessage) => {
-    const s = store.getState();
+    const cs = connectionStore.getState();
+    const cfg = configStore.getState();
 
     switch (msg.type) {
       case 'init':
         // Sync initial server state
-        if (msg.data.mode) s.setExecutionMode(msg.data.mode);
-        if (msg.data.tasks) s.syncTasks(msg.data.tasks);
+        if (msg.data.mode) cfg.setExecutionMode(msg.data.mode);
+        if (msg.data.tasks) taskStore.getState().syncTasks(msg.data.tasks);
         break;
 
       case 'task_event': {
         const event = msg.data;
         switch (event.type) {
           case 'status_change':
-            s.upsertTask(event.taskId, event.data);
+            taskStore.getState().upsertTask(event.taskId, event.data);
             break;
           case 'step_start':
-            s.updateTaskStep(event.taskId, event.stepId, { status: 'running', ...event.data });
+            taskStore.getState().updateTaskStep(event.taskId, event.stepId, { status: 'running', ...event.data });
             break;
           case 'step_complete':
-            s.updateTaskStep(event.taskId, event.stepId, { status: 'completed', ...event.data });
+            taskStore.getState().updateTaskStep(event.taskId, event.stepId, { status: 'completed', ...event.data });
             break;
           case 'step_error':
-            s.updateTaskStep(event.taskId, event.stepId, { status: 'failed', ...event.data });
+            taskStore.getState().updateTaskStep(event.taskId, event.stepId, { status: 'failed', ...event.data });
             break;
           case 'approval_needed':
-            s.upsertTask(event.taskId, { status: 'awaiting_approval' });
-            s.addApproval(event.data);
-            s.addNotification({
+            taskStore.getState().upsertTask(event.taskId, { status: 'awaiting_approval' });
+            taskStore.getState().addApproval(event.data);
+            cs.addNotification({
               type: 'approval',
               title: '需要审批',
               message: `任务步骤 "${event.data.action}" 需要你的确认`,
@@ -118,11 +125,11 @@ export function useWebSocket() {
             });
             break;
           case 'task_complete':
-            s.upsertTask(event.taskId, {
+            taskStore.getState().upsertTask(event.taskId, {
               status: event.data.success ? 'completed' : 'failed',
               result: event.data,
             });
-            s.addNotification({
+            cs.addNotification({
               type: event.data.success ? 'info' : 'error',
               title: event.data.success ? '任务完成' : '任务失败',
               message: event.data.success ? '任务已成功完成' : (event.data.error || '任务执行失败'),
@@ -134,11 +141,11 @@ export function useWebSocket() {
       }
 
       case 'task_created':
-        s.upsertTask(msg.data.id, msg.data);
+        taskStore.getState().upsertTask(msg.data.id, msg.data);
         break;
 
       case 'mode_changed':
-        s.setExecutionMode(msg.data.mode);
+        cfg.setExecutionMode(msg.data.mode);
         break;
 
       case 'editor_stream':
@@ -151,7 +158,7 @@ export function useWebSocket() {
 
       case 'editor_stream_error':
         useAiDocumentStore.getState().setStreaming(msg.data.windowId, false);
-        s.addNotification({
+        cs.addNotification({
           type: 'error',
           title: '编辑器助手',
           message: msg.data?.error ?? '生成失败',
@@ -159,11 +166,11 @@ export function useWebSocket() {
         break;
 
       case 'x_proactive_message':
-        s.addXProactiveMessage(msg.data);
+        cs.addXProactiveMessage(msg.data);
         break;
 
       case 'app_channel':
-        s.notifyAppChannel(msg.data?.appId ?? '', msg.data?.message);
+        cs.notifyAppChannel(msg.data?.appId ?? '', msg.data?.message);
         break;
 
       case 'fs_result':
@@ -185,14 +192,17 @@ export function useWebSocket() {
   }, []);
 
   const sendComputerContext = useCallback(() => {
-    const s = store.getState();
+    const ds = desktopStore.getState();
+    const cs = connectionStore.getState();
+    const cfg = configStore.getState();
+    const ts = taskStore.getState();
     const ctx = buildComputerContext({
-      windows: s.windows,
-      activeWindowId: s.activeWindowId,
-      executionMode: s.executionMode,
-      tasks: s.tasks,
-      taskbarPinned: s.taskbarPinned,
-      notifications: s.notifications,
+      windows: ds.windows,
+      activeWindowId: ds.activeWindowId,
+      executionMode: cfg.executionMode,
+      tasks: ts.tasks,
+      taskbarPinned: cfg.taskbarPinned,
+      notifications: cs.notifications,
     });
     send({ type: 'set_computer_context', data: ctx });
   }, [send]);
@@ -209,7 +219,7 @@ export function useWebSocket() {
   useEffect(() => {
     const CONTEXT_THROTTLE_MS = 1500;
     let throttleTimer: number | null = null;
-    const unsub = store.subscribe(() => {
+    const unsub = desktopStore.subscribe(() => {
       if (wsRef.current?.readyState !== WebSocket.OPEN) return;
       if (throttleTimer != null) return;
       throttleTimer = window.setTimeout(() => {

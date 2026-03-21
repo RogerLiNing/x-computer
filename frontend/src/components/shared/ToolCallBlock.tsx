@@ -4,7 +4,7 @@
 
 import { useState, useEffect } from 'react';
 import { Wrench, ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle } from 'lucide-react';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConnectionStore } from '@/store/connectionStore';
 import type { ToolCallRecord } from './types';
 
 interface ToolCallBlockProps {
@@ -13,8 +13,8 @@ interface ToolCallBlockProps {
 
 export function ToolCallBlock({ tc }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
-  const tools = useDesktopStore((s) => s.tools);
-  const fetchTools = useDesktopStore((s) => s.fetchTools);
+  const tools = useConnectionStore((s) => s.tools);
+  const fetchTools = useConnectionStore((s) => s.fetchTools);
 
   useEffect(() => {
     fetchTools();

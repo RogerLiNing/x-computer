@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
 
 /**
  * Global keyboard shortcuts for the desktop environment.
@@ -8,6 +9,7 @@ export function useKeyboardShortcuts() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const s = useDesktopStore.getState();
+      const config = useConfigStore.getState();
       const cmd = e.metaKey || e.ctrlKey;
 
       // Cmd+K: Search launcher (handled in SearchLauncher)
@@ -16,7 +18,7 @@ export function useKeyboardShortcuts() {
       // Cmd+L: Lock screen
       if (cmd && e.key === 'l' && !e.shiftKey) {
         e.preventDefault();
-        s.lockScreen();
+        config.lockScreen();
         return;
       }
 
@@ -73,8 +75,8 @@ export function useKeyboardShortcuts() {
 
       // Escape: Close context menu / search
       if (e.key === 'Escape') {
-        if (s.contextMenu.visible) {
-          s.hideContextMenu();
+        if (config.contextMenu.visible) {
+          config.hideContextMenu();
         }
       }
     };

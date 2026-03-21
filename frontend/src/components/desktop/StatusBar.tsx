@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
+import { useConnectionStore } from '@/store/connectionStore';
 import { Wifi, WifiOff, Battery, Lock, Search } from 'lucide-react';
 
 export function StatusBar() {
-  const { connected, toggleSearch, lockScreen } = useDesktopStore();
+  const { connected } = useConnectionStore();
+  const { toggleSearch, lockScreen } = useConfigStore();
   const [time, setTime] = useState(new Date());
 
   useEffect(() => {

@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { useDesktopStore } from '@/store/desktopStore';
+import { useConfigStore } from '@/store/configStore';
 import { Lock, Fingerprint, ArrowRight } from 'lucide-react';
 
 export function LockScreen() {
-  const { isLocked, unlockScreen } = useDesktopStore();
+  const { isLocked, unlockScreen } = useConfigStore();
   const [password, setPassword] = useState('');
   const [shake, setShake] = useState(false);
   const [time, setTime] = useState(new Date());
