@@ -4,6 +4,7 @@ import fs from 'fs';
 import { DoneLogService } from '../services/DoneLogService.js';
 import { MemoryServiceWrapper } from '../services/MemoryServiceWrapper.js';
 import { v4 as uuid } from 'uuid';
+import { createTasksRouter } from './tasks.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
@@ -315,6 +316,7 @@ export function createApiRouter(
 ): Router {
   const router = Router();
   router.use(createAgentsRouter(orchestrator, db));
+  router.use(createTasksRouter(orchestrator, userSandboxManager, db, subscriptionService));
   const vectorStore = new VectorStore(sandboxFS);
   const memoryService = new MemoryService(sandboxFS, vectorStore);
   
@@ -1528,100 +1530,13 @@ export function createApiRouter(
   /** 最近一次向量/嵌入错误（重建索引或召回时），供 GET /memory/status 展示，对齐 OpenClaw status */
   let lastMemoryEmbedError: string | undefined;
 
-  // ── Tasks ────────────────────────────────────────────────
-
-  /** Create and run a task（带 llmConfig 时会走 Agent 循环，需先加载该用户 MCP 以便任务内可调用 MCP 且鉴权正确）。每次创建任务计 1 次 AI 调用。 */
-  router.post('/tasks', taskQuota, aiQuota, async (req, res) => {
-    try {
-      const request = req.body as CreateTaskRequest;
-      if (!request.domain || !request.title || !request.description) {
-        res.status(400).json({ error: 'Missing required fields: domain, title, description' });
-        return;
-      }
-      const userId = (req as { userId?: string }).userId;
-      if (request.llmConfig && userSandboxManager && db) {
-        await ensureUserMcpLoaded(
-          orchestrator,
-          userId,
-          userSandboxManager.getUserWorkspaceRoot.bind(userSandboxManager),
-          db.getConfig.bind(db),
-        );
-      }
-      const task = await orchestrator.createAndRun(request, userId);
-      res.status(201).json(task);
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  /** Get all tasks（按用户过滤：有 userId 时只返回该用户任务） */
-  router.get('/tasks', (req, res) => {
-    const userId = (req as { userId?: string }).userId;
-    const all = orchestrator.getAllTasks();
-    const list =
-      userId && userId !== 'anonymous'
-        ? all.filter((t) => (t.metadata as { userId?: string } | undefined)?.userId === userId)
-        : all;
-    res.json(list);
-  });
-
   /** Get current computer context (what the AI perceives) */
   router.get('/context', (_req, res) => {
     const ctx = orchestrator.getComputerContext();
     res.json(ctx ?? { timestamp: 0, message: 'No context yet' });
   });
 
-  /** Get a specific task（运行用户只能查看自己的任务） */
-  router.get('/tasks/:id', (req, res) => {
-    const userId = (req as { userId?: string }).userId;
-    const task = orchestrator.getTask(req.params.id);
-    if (!task) {
-      res.status(404).json({ error: 'Task not found' });
-      return;
-    }
-    const taskUserId = (task.metadata as { userId?: string } | undefined)?.userId;
-    if (userId && userId !== 'anonymous' && taskUserId && taskUserId !== userId) {
-      res.status(403).json({ error: '无权查看该任务' });
-      return;
-    }
-    res.json(task);
-  });
-
-  /** Pause a task */
-  router.post('/tasks/:id/pause', (req, res) => {
-    const ok = orchestrator.pauseTask(req.params.id);
-    res.json({ success: ok });
-  });
-
-  /** Resume a task */
-  router.post('/tasks/:id/resume', (req, res) => {
-    const ok = orchestrator.resumeTask(req.params.id);
-    res.json({ success: ok });
-  });
-
-  /** Approve a step */
-  router.post('/tasks/:id/steps/:stepId/approve', (req, res) => {
-    const ok = orchestrator.approveStep(req.params.id, req.params.stepId);
-    res.json({ success: ok });
-  });
-
-  /** Reject a step */
-  router.post('/tasks/:id/steps/:stepId/reject', (req, res) => {
-    const ok = orchestrator.rejectStep(req.params.id, req.params.stepId);
-    res.json({ success: ok });
-  });
-
-  /** 失败任务重试：body { mode: 'restart' | 'from_failure' }，默认 restart */
-  router.post('/tasks/:id/retry', async (req, res) => {
-    const mode = (req.body?.mode === 'from_failure' ? 'from_failure' : 'restart') as 'restart' | 'from_failure';
-    const ok = await orchestrator.retryTask(req.params.id, mode);
-    if (!ok) {
-      res.status(400).json({ error: 'Task not found or not in failed state' });
-      return;
-    }
-    res.json({ success: true, mode });
-  });
-
+  
   // ── Execution Mode ───────────────────────────────────────
 
   router.get('/mode', (_req, res) => {
