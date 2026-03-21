@@ -35,6 +35,7 @@ import { createMcpRouter } from './mcp.js';
 import { createAppsRouter } from './apps.js';
 import { createCapabilitiesRouter } from './capabilities.js';
 import { createEditorAgentRouter } from './editorAgent.js';
+import { createChatRouter } from './chat.js';
 import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
 import {
   XScheduler,
@@ -320,15 +321,6 @@ export function createApiRouter(
   router.use(createLLMRouter());
   router.use(createXProactiveRouter(db));
   router.use(createXPendingRouter(db));
-  router.use(createXGroupRunRouter(
-    orchestrator,
-    db,
-    getSystemPromptForScheduler,
-    getLLMConfigForScheduler,
-    ensureUserMcpForScheduler,
-    ensureDefaultScheduleForUser,
-    triggerXRunForUser,
-  ));
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
@@ -993,6 +985,15 @@ export function createApiRouter(
       }
     });
   };
+  router.use(createXGroupRunRouter(
+    orchestrator,
+    db,
+    getSystemPromptForScheduler,
+    getLLMConfigForScheduler,
+    ensureUserMcpForScheduler,
+    ensureDefaultScheduleForUser,
+    triggerXRunForUser,
+  ));
   const signalToSource = (signal?: string): 'chat' | 'task' | 'email' => {
     if (signal === 'email_received') return 'email';
     if (signal === 'task_completed') return 'task';
