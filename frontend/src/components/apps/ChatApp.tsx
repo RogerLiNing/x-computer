@@ -12,6 +12,7 @@ import { api, ApiError } from '@/utils/api';
 import { TASK_TEMPLATES, type TaskTemplateCategory } from '@/config/taskTemplates';
 import { buildComputerContext, formatComputerContextForPrompt, formatTaskSummaryForPrompt } from '@/utils/computerContext';
 import type { TaskDomain } from '@shared/index';
+import { useDomainDetection } from './ChatApp/useDomainDetection';
 import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
 interface Message {
@@ -37,19 +38,6 @@ interface Props {
   windowId: string;
   /** 嵌入手机模式布局时使用，隐藏完整 header 仅保留会话切换 */
   embeddedInMobile?: boolean;
-}
-
-// Detect task domain from user input.
-// Office (含 file.write 保存结果) 优先于 agent，这样「帮我生成本周工作周报」会走 office 并生成文件。
-function detectDomain(text: string): TaskDomain {
-  const t = text.toLowerCase();
-  if (t.includes('代码') || t.includes('编程') || t.includes('修复') || t.includes('bug') || t.includes('编写') || t.includes('函数'))
-    return 'coding';
-  if (t.includes('邮件') || t.includes('文档') || t.includes('表格') || t.includes('报告') || t.includes('整理') || t.includes('周报') || t.includes('工作周报'))
-    return 'office';
-  if (t.includes('帮我') || t.includes('执行') || t.includes('自动') || t.includes('任务') || t.includes('搜索') || t.includes('下载'))
-    return 'agent';
-  return 'chat';
 }
 
 const TASK_KEYWORDS = ['帮我', '执行', '创建', '整理', '发送', '编写', '修改', '分析', '生成', '修复', '部署', '搜索', '下载', '安装', '运行'];
@@ -350,6 +338,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const abortControllerRef = useRef<AbortController | null>(null);
   /** 已追加过「任务完成」跟帖的 taskId，避免重复 */
   const completedTaskFollowUpsRef = useRef<Set<string>>(new Set());
+  const { detectDomain } = useDomainDetection();
 
   /** 停止当前正在进行的 AI 生成 */
   const stopGenerating = useCallback(() => {
