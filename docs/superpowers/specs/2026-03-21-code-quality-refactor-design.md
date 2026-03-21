@@ -17,64 +17,114 @@
 - Helper 函数（appendToDoneLog、runConsiderCapture）侵入路由层
 - 后台初始化（emailCheckLoop、scheduler、信号处理器）在路由设置中执行
 - Service 直接在路由处理器内实例化（MemoryService 等）
+- `handleChannelMessageAsChat`（约120行）及其依赖链全部定义在路由文件内部
 
-**路由分类（识别自 api.ts）：**
+**完整路由分类（识别自 api.ts）：**
 
 | 路由前缀 | 数量 | 说明 |
 |----------|------|------|
+| `/chat` | ~8 | 对话、agent、图像生成 |
+| `/memory` | ~7 | 记忆状态/读取/召回/捕获 |
+| `/email/inbox`, `/email/sync` | ~2 | 邮件 |
+| `/whatsapp/*` | ~7 | WhatsApp 集成 |
+| `/telegram/*` | ~5 | Telegram 集成 |
+| `/discord/*` | ~4 | Discord 集成 |
+| `/slack/*` | ~4 | Slack 集成 |
+| `/qq/*` | ~5 | QQ 集成 |
 | `/agents`, `/teams`, `/groups` | ~15 | Agent 团队管理 |
 | `/tasks` | ~12 | 任务 CRUD + 状态 |
 | `/x/scheduler-*`, `/x/scheduled-*` | ~3 | 调度器状态 |
-| `/x/proactive-*`, `/x/done-log`, `/x/greet`, `/x/run-now`, `/x/board`, `/x/pending-*` | ~15 | X 主脑杂项 |
-| `/apps/*` | ~8 | 应用沙箱、KV、Queue |
+| `/x/proactive-*` | ~2 | 主动消息 |
+| `/x/done-log`, `/x/greet`, `/x/run-now`, `/x/pending-*` | ~8 | X 主脑操作 |
+| `/x/board/*` | ~4 | 任务看板 |
+| `/x/group-run-*` | ~2 | 组合运行 |
+| `/apps/sandbox`, `/apps/sandbox-logs` | ~6 | 沙箱应用 |
+| `/x-apps/backend/kv/*` | ~5 | 应用 KV 存储 |
+| `/x-apps/backend/queue/*` | ~3 | 应用队列 |
 | `/skills/*` | ~6 | Skill 发现/安装 |
 | `/mcp/*` | ~5 | MCP 配置/状态/测试 |
 | `/capabilities/*` | ~2 | 能力注册 |
 | `/llm/import-models` | ~1 | LLM 模型导入 |
 | `/editor-agent-stream` | ~1 | 流式编辑器 Agent |
 | `/health` | ~1 | 健康检查 |
-| `/prompt/*` | ~1 | 提示词 |
+| `/prompt/*` | ~2 | 提示词 |
 | `/signals/*` | ~1 | 信号触发 |
 | `/workflow/*` | ~1 | 工作流执行 |
-| `/tools`, `/apps`, `/context`, `/mode` | ~6 | 工具/模式 |
+| `/tools`, `/context`, `/mode` | ~3 | 工具/模式 |
 
 **Helper/业务函数：**
-- `appendToDoneLog` — 写入已完成清单
-- `runConsiderCapture` — 记忆捕获判断
-- `runLearnPromptExtract` — 提示词学习提取
-- `buildMiniAppLoggerScript` — 小程序日志脚本构建
-- `loadAgentsForSignals` — 信号处理器加载 Agent 配置
-- `notifyWorkflowOnSignal` — 信号触发工作流
+
+| 函数 | 作用域依赖 | 可提取为 |
+|------|-----------|---------|
+| `appendToDoneLog` | `db` | 纯工具函数 |
+| `runConsiderCapture` | orchestrator, vectorStore, memoryService, getMemoryServiceForUser | 共享 Service（需先提取 getMemoryServiceForUser） |
+| `runLearnPromptExtract` | memoryService, getMemoryServiceForUser | 共享 Service |
+| `buildMiniAppLoggerScript` | 无闭包依赖 | 纯工具函数 |
+| `loadAgentsForSignals` | 无闭包依赖（仅类型依赖） | 纯工具函数 |
+| `notifyWorkflowOnSignal` | 无闭包依赖 | 纯工具函数 |
+| `handleChannelMessageAsChat` | orchestrator, getConfig, db, scheduler, vectorStore, memoryService 等 | **核心依赖链，需先构建 Service 层** |
 
 ---
 
 ## 重构方案
 
-### Phase 1: api.ts 拆分（优先）
+### Phase 0: 共享 Service 层提取（关键前置）
+
+**在拆分路由之前，必须先提取以下依赖链，否则无法迁移消息平台路由。**
+
+```
+server/src/
+├── services/                    # 新建目录
+│   ├── MemoryServiceWrapper.ts  # getMemoryServiceForUser 闭包逻辑提取为可注入服务
+│   ├── ChannelMessageHandler.ts  # handleChannelMessageAsChat 及其依赖链
+│   └── DoneLogService.ts        # appendToDoneLog
+├── routes/
+│   └── ...（路由拆分，同下）
+```
+
+**提取顺序：**
+
+1. `DoneLogService.ts` — `appendToDoneLog`（无复杂依赖，最简单）
+2. `MemoryServiceWrapper.ts` — `getMemoryServiceForUser` + 相关的 `runConsiderCapture`、`runLearnPromptExtract` 逻辑
+3. `ChannelMessageHandler.ts` — `handleChannelMessageAsChat`（依赖 MemoryServiceWrapper 和 scheduler）
+
+### Phase 1: api.ts 拆分
 
 #### 目录结构
 
 ```
 server/src/routes/
 ├── index.ts              # createApiRouter 聚合入口
-├── api.ts                # 主路由（精简到 ~100 行，聚合子路由）
+├── api.ts                # 主路由（精简到 ~80 行，聚合子路由）
 ├── agents.ts             # /agents, /teams, /groups
 ├── tasks.ts              # /tasks CRUD + 状态
-├── scheduler.ts          # /x/scheduler-status, /x/scheduled-jobs
-├── xBrain.ts            # /x/* 杂项
-├── apps.ts              # /apps/* (sandbox, kv, queue)
-├── skills.ts            # /skills/*
-├── mcp.ts               # /mcp/*
-├── llm.ts               # /llm/*
-├── capabilities.ts       # /capabilities/*
-├── editorAgent.ts       # /editor-agent-stream
-├── health.ts            # /health
-└── workflow.ts          # /signals/*, /workflow/*
+├── scheduler.ts          # /x/scheduler-*, /x/scheduled-*
+├── xProactive.ts       # /x/proactive-*, /x/done-log, /x/greet, /x/run-now
+├── xBoard.ts           # /x/board/*
+├── xGroupRun.ts        # /x/run-now, /x/cancel-group-run, /x/group-run-*
+├── xPending.ts         # /x/pending-*
+├── apps.ts             # /apps/sandbox, /apps/sandbox-logs
+├── xApps.ts            # /x-apps/backend/kv/*, /x-apps/backend/queue/*
+├── skills.ts           # /skills/*
+├── mcp.ts              # /mcp/*
+├── capabilities.ts     # /capabilities/*
+├── llm.ts              # /llm/import-models
+├── editorAgent.ts      # /editor-agent-stream
+├── health.ts           # /health
+├── workflow.ts         # /signals/*, /workflow/*
+├── chat.ts            # /chat/*
+├── memory.ts           # /memory/*
+├── email.ts            # /email/*
+├── messaging/          # 消息平台路由
+│   ├── whatsapp.ts    # /whatsapp/*
+│   ├── telegram.ts    # /telegram/*
+│   ├── discord.ts     # /discord/*
+│   ├── slack.ts       # /slack/*
+│   └── qq.ts          # /qq/*
+└── prompt.ts          # /prompt/*
 ```
 
 #### 新建模块模式
-
-每个子路由文件遵循统一模式：
 
 ```typescript
 // routes/agents.ts
@@ -88,14 +138,6 @@ export function createAgentsRouter(orchestrator: AgentOrchestrator): Router {
 }
 ```
 
-#### 主入口精简
-
-`api.ts` 原有代码分类迁出后，保留：
-- 所有 `import` 语句（整理归类到各子模块）
-- `createApiRouter` 函数签名和依赖注入
-- 子路由的聚合注册（每个一行）
-- 移除所有路由处理器和 helper 函数
-
 #### 后台初始化迁移
 
 将以下初始化代码从 `api.ts` 移到 `app.ts` 或新建 `bootstrap.ts`：
@@ -103,33 +145,49 @@ export function createAgentsRouter(orchestrator: AgentOrchestrator): Router {
 - `startEmailCheckLoop` 调用
 - `setDefaultScheduler` + 定时任务加载
 - 消息平台信号处理器注入（WhatsApp/Telegram/Discord/Slack/QQ）
-- `startEmailCheckLoop` 循环
 
-#### 迁移顺序
+#### 迁移顺序（按依赖层次）
 
-| 顺序 | 模块 | 风险 |
-|------|------|------|
-| 1 | `agents.ts` | 低 |
-| 2 | `tasks.ts` | 低 |
-| 3 | `scheduler.ts` | 低 |
-| 4 | `xBrain.ts` | 低 |
-| 5 | `apps.ts` | 低 |
-| 6 | `skills.ts` | 低 |
-| 7 | `mcp.ts` | 低 |
-| 8 | `capabilities.ts` | 低 |
-| 9 | `llm.ts` | 低 |
-| 10 | `editorAgent.ts` | 低 |
-| 11 | `workflow.ts` | 低 |
-| 12 | `health.ts` | 低 |
-| 13 | 初始化迁移 | 中 |
-| 14 | `api.ts` 最终精简 | 低 |
+| 顺序 | 模块 | 依赖前提 | 风险 |
+|------|------|---------|------|
+| 0a | `services/DoneLogService.ts` | 无 | 低 |
+| 0b | `services/MemoryServiceWrapper.ts` | 0a 可选 | 低 |
+| 0c | `services/ChannelMessageHandler.ts` | 0b | 中 |
+| 1 | `agents.ts` | 无 | 低 |
+| 2 | `tasks.ts` | 无 | 低 |
+| 3 | `scheduler.ts` | 无 | 低 |
+| 4 | `xProactive.ts` | 无 | 低 |
+| 5 | `xBoard.ts` | 无 | 低 |
+| 6 | `xGroupRun.ts` | 无 | 低 |
+| 7 | `xPending.ts` | 无 | 低 |
+| 8 | `apps.ts` | 无 | 低 |
+| 9 | `xApps.ts` | 无 | 低 |
+| 10 | `skills.ts` | 无 | 低 |
+| 11 | `mcp.ts` | 无 | 低 |
+| 12 | `capabilities.ts` | 无 | 低 |
+| 13 | `llm.ts` | 无 | 低 |
+| 14 | `editorAgent.ts` | 无 | 低 |
+| 15 | `workflow.ts` | 无 | 低 |
+| 16 | `health.ts` | 无 | 低 |
+| 17 | `chat.ts` | Phase 0c（部分） | 低 |
+| 18 | `memory.ts` | Phase 0c（部分） | 低 |
+| 19 | `email.ts` | 无 | 低 |
+| 20 | `messaging/whatsapp.ts` | Phase 0c | 中 |
+| 21 | `messaging/telegram.ts` | Phase 0c | 中 |
+| 22 | `messaging/discord.ts` | Phase 0c | 中 |
+| 23 | `messaging/slack.ts` | Phase 0c | 中 |
+| 24 | `messaging/qq.ts` | Phase 0c | 中 |
+| 25 | `prompt.ts` | 无 | 低 |
+| 26 | 初始化迁移 | Phase 0 + 所有路由就位 | 中 |
+| 27 | `api.ts` 最终精简 | Phase 0 + 所有路由就位 | 低 |
 
 #### 验收标准
 
-- [ ] 每个子路由模块独立可用（可单独 `import { createXxxRouter }`）
-- [ ] `api.ts` 行数减少到 < 150 行
-- [ ] 所有现有路由功能不变（端点路径、请求/响应格式不变）
+- [ ] 每个子路由模块独立可用
+- [ ] `api.ts` 行数减少到 < 100 行
+- [ ] 所有现有路由端点路径不变
 - [ ] 后台初始化不在路由文件中执行
+- [ ] Phase 0 Service 层可独立测试
 - [ ] 可运行测试全部通过
 
 ---
@@ -196,13 +254,36 @@ frontend/src/components/apps/ChatApp/
 
 ---
 
+## 测试策略
+
+### 路由层
+
+1. **端点不变性测试** — 每步迁移后，验证所有路由端点响应格式与迁移前一致
+2. **集成测试** — 使用测试数据库，验证各路由模块与数据库交互正确
+3. **依赖注入测试** — 每个子路由模块接受 mock 依赖，验证路由逻辑
+
+### 前端
+
+1. **组件测试** — ChatApp 拆分后，验证 UI 组件渲染正确
+2. **Store 测试** — 各新 store 独立测试，验证状态管理正确
+
+## 回滚策略
+
+1. **每步独立 Git Commit** — 每个 Phase 的子步骤独立提交，失败时可 `git revert`
+2. **Feature Flag** — 关键路由（如 messaging）可通过环境变量切换新旧实现
+3. **Smoke Test** — 每步迁移后运行 `npm test` 和手动冒烟测试
+4. **金丝雀发布** — 生产环境采用新路由子集验证后再全量
+
+---
+
 ## 实施原则
 
-1. **稳定优先** — 每步重构后验证测试通过，再进行下一步
-2. **渐进式** — 不重写，只拆分和移动代码
-3. **端点不变** — 对外 API 保持完全兼容
-4. **可回滚** — 每步用 git commit 记录，失败可直接回退
-5. **渐进迁移** — 前端两个阶段可与 api.ts 重构并行
+1. **Phase 0 先行** — 共享 Service 层不提取，路由拆分无法进行
+2. **稳定优先** — 每步重构后验证测试通过，再进行下一步
+3. **渐进式** — 不重写，只拆分和移动代码
+4. **端点不变** — 对外 API 保持完全兼容
+5. **可回滚** — 每步用 git commit 记录，失败可直接回退
+6. **渐进迁移** — 前端两个阶段可与 api.ts 重构并行
 
 ---
 
