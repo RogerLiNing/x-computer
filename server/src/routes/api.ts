@@ -27,6 +27,7 @@ import { callEmbedding, callEmbeddingBatch } from '../memory/embeddingService.js
 import { createChatSessionRouter } from './chatSessions.js';
 import { createAgentsRouter, loadAgentsFromDb } from './agents.js';
 import { createMcpRouter } from './mcp.js';
+import { createCapabilitiesRouter } from './capabilities.js';
 import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
 import {
   XScheduler,
@@ -324,6 +325,7 @@ export function createApiRouter(
   router.use(createSchedulerRouter());
   router.use(createXProactiveRouter(db));
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
+  router.use(createCapabilitiesRouter(orchestrator));
   const vectorStore = new VectorStore(sandboxFS);
   const memoryService = new MemoryService(sandboxFS, vectorStore);
   
@@ -1840,25 +1842,6 @@ export function createApiRouter(
     }
     const len = await db!.appBackendQueueLen(userId, appId, queueName);
     res.json({ length: len });
-  });
-
-  /** 能力列表（内置 + 已注册 MCP/Skill），供主脑与前端使用 */
-  router.get('/capabilities', (_req, res) => {
-    res.json(listAllCapabilities(orchestrator.getTools()));
-  });
-
-  router.post('/capabilities/register', (req, res) => {
-    try {
-      const { name, description, source } = req.body as { name?: string; description?: string; source?: 'builtin' | 'mcp' | 'skill' };
-      if (!name || typeof description !== 'string') {
-        res.status(400).json({ error: '缺少 name 或 description' });
-        return;
-      }
-      registerCapability({ name, description, source });
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message ?? '注册失败' });
-    }
   });
 
 
