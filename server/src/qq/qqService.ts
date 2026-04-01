@@ -74,6 +74,8 @@ class UserQQConnection {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private readonly HEARTBEAT_INTERVAL = 60000; // 60秒心跳
   private readonly MAX_SEND_RETRIES = 3; // 发送消息最大重试次数
+  private heartbeatFailCount = 0;
+  private readonly MAX_HEARTBEAT_FAILURES = 3; // 心跳连续失败超过此次数则停止重连
 
   constructor(
     private userId: string,
@@ -106,14 +108,22 @@ class UserQQConnection {
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
+    this.heartbeatFailCount = 0;
     this.heartbeatTimer = setInterval(async () => {
       if (!this.bot || !this.running) return;
       try {
         // 发送心跳包保持连接活跃
         await this.bot.getSelfInfo();
         serverLogger.debug('qq', `心跳保活成功 userId=${this.userId}`);
+        this.heartbeatFailCount = 0;
       } catch (err) {
-        serverLogger.warn('qq', `心跳保活失败 userId=${this.userId}`, err instanceof Error ? err.message : String(err));
+        this.heartbeatFailCount++;
+        serverLogger.warn('qq', `心跳保活失败(${this.heartbeatFailCount}/${this.MAX_HEARTBEAT_FAILURES}) userId=${this.userId}`, err instanceof Error ? err.message : String(err));
+        if (this.heartbeatFailCount >= this.MAX_HEARTBEAT_FAILURES) {
+          serverLogger.error('qq', `QQ 心跳连续失败 ${this.heartbeatFailCount} 次，Token 可能已过期，停止重连。请重新配置 QQ Bot。 userId=${this.userId}`);
+          this.stopHeartbeat();
+          this.running = false;
+        }
       }
     }, this.HEARTBEAT_INTERVAL);
   }
