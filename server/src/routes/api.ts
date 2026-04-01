@@ -318,6 +318,8 @@ export function createApiRouter(
   if (db) {
     router.use(createDiscordRouter(db));
     router.use(createTelegramRouter(db));
+    router.use(createWhatsAppRouter(db));
+    router.use(createSlackRouter(db));
     router.use(createQQRouter(db));
   }
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
@@ -1017,8 +1019,6 @@ export function createApiRouter(
       : null;
 
   router.use(createEmailRouter(db, signalFireDeps));
-  router.use(createWhatsAppRouter(db));
-  router.use(createSlackRouter(db));
 
   if (db && signalFireDeps) {
     registerHook('task_complete', async (payload) => {
