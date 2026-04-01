@@ -18,23 +18,13 @@ import { useChatSessions, WELCOME_FALLBACK } from './ChatApp/useChatSessions';
 import { useFormatChatError } from './ChatApp/useFormatChatError';
 import { getMessagesForChat } from './ChatApp/chatHelpers';
 import type { Message } from './ChatApp/Message';
+import { TASK_KEYWORDS, DEFAULT_MAX_CHAT_ROUNDS, type AgentOption } from './ChatApp/chatConstants';
 import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
 interface Props {
   windowId: string;
   /** 嵌入手机模式布局时使用，隐藏完整 header 仅保留会话切换 */
   embeddedInMobile?: boolean;
-}
-
-const TASK_KEYWORDS = ['帮我', '执行', '创建', '整理', '发送', '编写', '修改', '分析', '生成', '修复', '部署', '搜索', '下载', '安装', '运行'];
-
-/** 请求 /api/chat 时携带的最近对话轮数（每轮 = user + assistant），对齐 OpenCode session 思路。 */
-const DEFAULT_MAX_CHAT_ROUNDS = 10;
-
-/** 智能体简要（用于选择器） */
-interface AgentOption {
-  id: string;
-  name: string;
 }
 
 export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
