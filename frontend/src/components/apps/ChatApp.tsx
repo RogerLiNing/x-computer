@@ -15,6 +15,7 @@ import type { TaskDomain } from '@shared/index';
 import { useDomainDetection } from './ChatApp/useDomainDetection';
 import { useImageHandling } from './ChatApp/useImageHandling';
 import { useChatSessions, WELCOME_FALLBACK } from './ChatApp/useChatSessions';
+import { useFormatChatError } from './ChatApp/useFormatChatError';
 import type { Message } from './ChatApp/Message';
 import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
@@ -50,21 +51,6 @@ function getMessagesForChat(
 interface AgentOption {
   id: string;
   name: string;
-}
-
-/** 格式化 API 错误为展示内容；配额超限时返回 quotaError 以显示升级入口 */
-function useFormatChatError() {
-  const { t } = useTranslation();
-  return useCallback((err: unknown): { content: string; quotaError: boolean } => {
-    if (err instanceof ApiError && (err.code === 'quota_exceeded' || err.status === 429)) {
-      return { content: t('errors.quotaExceededFriendly'), quotaError: true };
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes('quota_exceeded') || msg.includes('quota')) {
-      return { content: t('errors.quotaExceededFriendly'), quotaError: true };
-    }
-    return { content: msg, quotaError: false };
-  }, [t]);
 }
 
 export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
