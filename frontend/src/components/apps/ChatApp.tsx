@@ -19,7 +19,7 @@ import { useFormatChatError } from './ChatApp/useFormatChatError';
 import { getMessagesForChat } from './ChatApp/chatHelpers';
 import type { Message } from './ChatApp/Message';
 import { TASK_KEYWORDS, DEFAULT_MAX_CHAT_ROUNDS, type AgentOption } from './ChatApp/chatConstants';
-import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
+import { ToolCallBlock, MarkdownContent, MarkdownWithThink, type ToolCallRecord } from '@/components/shared';
 
 interface Props {
   windowId: string;
@@ -1307,7 +1307,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
               {(msg.content || (msg.role === 'assistant' && isLoading && messages[messages.length - 1]?.id === msg.id)) && (
                 <div className={msg.toolCalls?.length ? 'mt-2' : ''}>
-                  {(msg.role === 'assistant' || msg.role === 'system') ? (
+                  {msg.role === 'assistant' ? (
+                    <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
+                      <MarkdownWithThink content={msg.content} />
+                    </div>
+                  ) : msg.role === 'system' ? (
                     <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
                       <MarkdownContent content={msg.content} />
                     </div>
