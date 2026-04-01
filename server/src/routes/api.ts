@@ -39,7 +39,7 @@ import { createCapabilitiesRouter } from './capabilities.js';
 import { createEditorAgentRouter } from './editorAgent.js';
 import { createChatRouter } from './chat.js';
 import { createWhatsAppRouter } from './messaging/whatsapp.js';
-import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
+import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage } from '../x/XProactiveMessages.js';
 import {
   XScheduler,
   setDefaultScheduler,
@@ -73,11 +73,11 @@ import {
   sendWhatsAppMessage,
 } from '../whatsapp/whatsappService.js';
 import { handleWhatsAppMessage } from '../whatsapp/whatsappLoop.js';
-import { setTelegramMessageHandler, getTelegramConnection, disconnectTelegram, parseTelegramConfig, reconnectTelegramForConfiguredUsers, sendTelegramMessage } from '../telegram/telegramService.js';
+import { setTelegramMessageHandler, reconnectTelegramForConfiguredUsers, sendTelegramMessage } from '../telegram/telegramService.js';
 import { handleTelegramMessage } from '../telegram/telegramLoop.js';
-import { setDiscordMessageHandler, getDiscordConnection, disconnectDiscord, parseDiscordConfig, reconnectDiscordForConfiguredUsers, sendDiscordMessage } from '../discord/discordService.js';
+import { setDiscordMessageHandler, reconnectDiscordForConfiguredUsers, sendDiscordMessage } from '../discord/discordService.js';
 import { handleDiscordMessage } from '../discord/discordLoop.js';
-import { setSlackMessageHandler, getSlackConnection, disconnectSlack, parseSlackConfig, reconnectSlackForConfiguredUsers, sendSlackMessage } from '../slack/slackService.js';
+import { setSlackMessageHandler, reconnectSlackForConfiguredUsers, sendSlackMessage } from '../slack/slackService.js';
 import { handleSlackMessage } from '../slack/slackLoop.js';
 import { setQQMessageHandler, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
 import { handleQQMessage } from '../qq/qqLoop.js';
