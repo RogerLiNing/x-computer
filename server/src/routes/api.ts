@@ -315,9 +315,11 @@ export function createApiRouter(
   router.use(createXPendingRouter(db));
   router.use(createXBoardRouter(db));
   router.use(createXAppsRouter(db));
-  router.use(createDiscordRouter(db));
-  router.use(createTelegramRouter(db));
-  router.use(createQQRouter(db));
+  if (db) {
+    router.use(createDiscordRouter(db));
+    router.use(createTelegramRouter(db));
+    router.use(createQQRouter(db));
+  }
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));

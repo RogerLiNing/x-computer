@@ -71,6 +71,9 @@ class UserQQConnection {
   private maxReconnectAttempts = 10;
   private reconnectDelay = 5000; // 初始重连延迟 5 秒
   private savedConfig: { appId: string; secret: string; sandbox?: boolean } | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly HEARTBEAT_INTERVAL = 60000; // 60秒心跳
+  private readonly MAX_SEND_RETRIES = 3; // 发送消息最大重试次数
 
   constructor(
     private userId: string,
@@ -80,12 +83,13 @@ class UserQQConnection {
 
   private setupReconnect(): void {
     if (!this.bot) return;
-    
+
     // 监听 WebSocket 断开事件
     this.bot.on('close', (hadError: boolean) => {
       if (this.reconnectTimer) return; // 防止重复触发
       serverLogger.warn('qq', `WebSocket 连接断开${hadError ? '（有错误）' : ''} userId=${this.userId}`);
       this.running = false;
+      this.stopHeartbeat();
       this.scheduleReconnect();
     });
 
@@ -93,6 +97,32 @@ class UserQQConnection {
     this.bot.on('error', (err: Error) => {
       serverLogger.warn('qq', `WebSocket 错误 userId=${this.userId}`, err.message);
     });
+
+    // 监听 ready 事件（重连成功时）
+    this.bot.on('ready', () => {
+      serverLogger.info('qq', `Bot ready 事件触发 userId=${this.userId}`);
+    });
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(async () => {
+      if (!this.bot || !this.running) return;
+      try {
+        // 发送心跳包保持连接活跃
+        await this.bot.getSelfInfo();
+        serverLogger.debug('qq', `心跳保活成功 userId=${this.userId}`);
+      } catch (err) {
+        serverLogger.warn('qq', `心跳保活失败 userId=${this.userId}`, err instanceof Error ? err.message : String(err));
+      }
+    }, this.HEARTBEAT_INTERVAL);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
   }
 
   private scheduleReconnect(): void {
@@ -137,6 +167,7 @@ class UserQQConnection {
         ],
         mode: ReceiverMode.WEBSOCKET,
         logLevel: 'warn',
+        maxRetry: 5, // SDK 内部重连次数
       });
 
       this.setupReconnect();
@@ -168,6 +199,7 @@ class UserQQConnection {
       this.running = true;
       this.reconnectAttempts = 0;
       this.reconnectDelay = 5000;
+      this.startHeartbeat();
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -210,18 +242,30 @@ class UserQQConnection {
 
   async sendMessage(target: { type: 'private' | 'group' | 'guild'; id: string }, text: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.bot || !this.running) return { ok: false, error: '未连接，请先配置并连接 QQ Bot' };
-    try {
-      if (target.type === 'private') {
-        await this.bot.sendPrivateMessage(target.id, text);
-      } else if (target.type === 'group') {
-        await this.bot.sendGroupMessage(target.id, text);
-      } else {
-        await this.bot.sendGuildMessage(target.id, text);
+
+    let lastError: string = '';
+    for (let attempt = 0; attempt < this.MAX_SEND_RETRIES; attempt++) {
+      try {
+        if (target.type === 'private') {
+          await this.bot.sendPrivateMessage(target.id, text);
+        } else if (target.type === 'group') {
+          await this.bot.sendGroupMessage(target.id, text);
+        } else {
+          await this.bot.sendGuildMessage(target.id, text);
+        }
+        return { ok: true };
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        serverLogger.warn('qq', `发送消息失败（第 ${attempt + 1}/${this.MAX_SEND_RETRIES} 次）userId=${this.userId}`, lastError);
+
+        // 如果不是最后一次尝试，等待后重试（指数退避）
+        if (attempt < this.MAX_SEND_RETRIES - 1) {
+          const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
       }
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+    return { ok: false, error: lastError };
   }
 
   getStatus(): 'connected' | 'disconnected' {
@@ -233,6 +277,7 @@ class UserQQConnection {
   }
 
   disconnect(): void {
+    this.stopHeartbeat();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;

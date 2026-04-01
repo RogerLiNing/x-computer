@@ -251,10 +251,10 @@ export function FileManagerApp({ windowId, metadata }: Props) {
         cmp = a.size - b.size;
         break;
       case 'modified':
-        cmp = new Date(a.modified).getTime() - new Date(b.modified).getTime();
+        cmp = (new Date(a.modified ?? '').getTime() || 0) - (new Date(b.modified ?? '').getTime() || 0);
         break;
       case 'created':
-        cmp = new Date(a.created || a.modified).getTime() - new Date(b.created || b.modified).getTime();
+        cmp = (new Date(a.created ?? a.modified ?? '').getTime() || 0) - (new Date(b.created ?? b.modified ?? '').getTime() || 0);
         break;
       default:
         cmp = a.name.localeCompare(b.name, 'zh-CN');
