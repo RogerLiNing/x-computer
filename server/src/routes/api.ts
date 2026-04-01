@@ -20,7 +20,7 @@ import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
 import { createAdminRouter } from './adminUtils.js';
 import type { AgentDefinition } from '../../../shared/src/index.js';
-import { callLLM, callLLMWithTools } from '../chat/chatService.js';
+import { callLLM } from '../chat/chatService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE, SCHEDULED_RUN_MANDATE } from '../prompts/systemCore.js';
 import { getUserLanguage } from '../prompts/systemCore/promptLoader.js';
