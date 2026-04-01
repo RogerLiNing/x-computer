@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { DoneLogService } from '../services/DoneLogService.js';
 import { createTasksRouter } from './tasks.js';
 import { createSchedulerRouter } from './scheduler.js';
 import { createLLMRouter } from './llm.js';
@@ -91,39 +92,10 @@ import { handleQQMessage } from '../qq/qqLoop.js';
 
 const MEMORY_DIR = 'memory';
 
-/** X 主脑「近期已完成」清单的 user_config key，值为结构化 JSON 数组，最多保留 50 条 */
+/** X 主脑「近期已完成」清单的 user_config key */
 const X_DONE_LOG_KEY = 'x_done_log';
-const X_DONE_LOG_MAX = 50;
+/** X 主脑「近期已完成」清单中显示在提示词里的条数 */
 const X_DONE_LOG_SHOW_IN_PROMPT = 15;
-
-type DoneLogEntry = { at: number; summary: string; scheduled?: boolean; schedule?: string; title?: string; action?: string };
-
-async function appendToDoneLog(
-  db: AppDatabase,
-  userId: string,
-  summary: string,
-  detail?: { scheduled?: boolean; schedule?: string; title?: string; action?: string },
-): Promise<void> {
-  const raw = await Promise.resolve(db.getConfig(userId, X_DONE_LOG_KEY));
-  let arr: DoneLogEntry[] = [];
-  try {
-    if (raw) arr = JSON.parse(raw) as DoneLogEntry[];
-    if (!Array.isArray(arr)) arr = [];
-  } catch {
-    arr = [];
-  }
-  const entry: DoneLogEntry = {
-    at: Date.now(),
-    summary,
-    ...(detail?.scheduled && { scheduled: true }),
-    ...(detail?.schedule && { schedule: detail.schedule }),
-    ...(detail?.title && { title: detail.title }),
-    ...(detail?.action && { action: detail.action }),
-  };
-  arr.push(entry);
-  arr = arr.slice(-X_DONE_LOG_MAX);
-  await Promise.resolve(db.setConfig(userId, X_DONE_LOG_KEY, JSON.stringify(arr)));
-}
 
 /** R041：信号触发后通知工作流引擎（若有 event 类型触发器） */
 async function notifyWorkflowOnSignal(userId: string, signal: string): Promise<void> {
@@ -1021,6 +993,8 @@ export function createApiRouter(
   router.use(createEmailRouter(db, signalFireDeps));
 
   if (db && signalFireDeps) {
+    const doneLogService = new DoneLogService(db);
+
     registerHook('task_complete', async (payload) => {
       const task = orchestrator.getTask(payload.taskId);
       const meta = task?.metadata as { userId?: string; actionFingerprint?: string; source?: string; sourceId?: string; description?: string; llmConfig?: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string } } | undefined;
@@ -1084,7 +1058,7 @@ export function createApiRouter(
             ? `失败：${String(result.error).slice(0, 80)}`
             : '';
       const summary = resultBrief ? `任务【${title}】已完成，${resultBrief}` : `任务【${title}】已完成`;
-      await appendToDoneLog(db, userId, summary, {
+      await doneLogService.append(userId, summary, {
         title,
         action: resultBrief || undefined,
       });
