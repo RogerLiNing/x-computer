@@ -20,10 +20,10 @@ import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
 import { createAdminRouter } from './adminUtils.js';
 import type { CreateTaskRequest, ExecutionMode, AgentDefinition, AgentTeam, AgentGroup } from '../../../shared/src/index.js';
-import { callLLM, callLLMStream, callLLMWithTools, callLLMGenerateImage, type LLMToolDef, type ChatMessage } from '../chat/chatService.js';
+import { callLLM, callLLMWithTools } from '../chat/chatService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE, SCHEDULED_RUN_MANDATE } from '../prompts/systemCore.js';
-import { getWelcomeMessage, getUserLanguage } from '../prompts/systemCore/promptLoader.js';
+import { getUserLanguage } from '../prompts/systemCore/promptLoader.js';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
 import type { AppDatabase } from '../db/database.js';
@@ -50,21 +50,13 @@ import {
 import { runScheduledIntent, runWithRetry } from '../scheduler/runScheduledIntent.js';
 import { loadDefaultConfig, getToolLoadingMode } from '../config/defaultConfig.js';
 
-const EMBED_BATCH_SIZE = 10;
 /** 精简系统提示中的能力列表以节省 token；设 X_COMPUTER_SYSTEM_PROMPT_CONDENSED=false 可恢复完整格式 */
 const USE_CONDENSED_SYSTEM_PROMPT = process.env.X_COMPUTER_SYSTEM_PROMPT_CONDENSED !== 'false';
-import { listAllCapabilities, registerCapability } from '../capabilities/CapabilityRegistry.js';
+import { listAllCapabilities } from '../capabilities/CapabilityRegistry.js';
 import {
-  getMcpStatus,
-  loadMcpConfig,
-  saveMcpConfig,
-  reloadMcpAndRegister,
-  getMcpConfigPath,
-  normalizeMcpConfig,
   loadMcpAndRegisterForUser,
   ensureUserMcpLoaded,
 } from '../mcp/loadAndRegister.js';
-import type { McpServerConfig } from '../mcp/types.js';
 import { getDiscoveredSkills } from '../skills/discovery.js';
 import { truncateChatMessages, MAX_CHAT_MESSAGES } from '../utils/chatContext.js';
 import { fire as fireHook, registerHook } from '../hooks/HookRegistry.js';
