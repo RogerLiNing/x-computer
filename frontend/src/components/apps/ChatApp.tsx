@@ -16,6 +16,7 @@ import { useDomainDetection } from './ChatApp/useDomainDetection';
 import { useImageHandling } from './ChatApp/useImageHandling';
 import { useChatSessions, WELCOME_FALLBACK } from './ChatApp/useChatSessions';
 import { useFormatChatError } from './ChatApp/useFormatChatError';
+import { getMessagesForChat } from './ChatApp/chatHelpers';
 import type { Message } from './ChatApp/Message';
 import { ToolCallBlock, MarkdownContent, type ToolCallRecord } from '@/components/shared';
 
@@ -29,23 +30,6 @@ const TASK_KEYWORDS = ['帮我', '执行', '创建', '整理', '发送', '编写
 
 /** 请求 /api/chat 时携带的最近对话轮数（每轮 = user + assistant），对齐 OpenCode session 思路。 */
 const DEFAULT_MAX_CHAT_ROUNDS = 10;
-
-/**
- * 取最近 N 轮对话（仅 user/assistant），用于 API 请求。后端会注入 system 提示，此处不传首条 system。
- * 若需扩展可配置 N，可从设置或 llmConfig 读取。
- */
-function getMessagesForChat(
-  messages: Message[],
-  userMsg: Message,
-  maxRounds: number,
-): Array<{ role: 'system' | 'user' | 'assistant'; content: string }> {
-  const conversation = [...messages, userMsg].filter(
-    (m) => m.role === 'user' || m.role === 'assistant',
-  ) as Message[];
-  const take = maxRounds * 2;
-  const last = conversation.length <= take ? conversation : conversation.slice(-take);
-  return last.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-}
 
 /** 智能体简要（用于选择器） */
 interface AgentOption {
