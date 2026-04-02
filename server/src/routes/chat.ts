@@ -635,10 +635,14 @@ export function createChatRouter(
         return;
       }
       const userId = (req as { userId?: string }).userId;
+      // 确保用户记录存在
+      if (db && userId) {
+        await db.ensureUser(userId);
+      }
       if (userSandboxManager && db) {
         await ensureUserMcpLoaded(
           orchestrator,
-          userId,
+          userId ?? 'anonymous',
           userSandboxManager.getUserWorkspaceRoot.bind(userSandboxManager),
           db.getConfig.bind(db),
         );
@@ -780,10 +784,14 @@ export function createChatRouter(
         return;
       }
       const userId = (req as { userId?: string }).userId;
+      // 确保用户记录存在
+      if (db && userId) {
+        await db.ensureUser(userId);
+      }
       if (userSandboxManager && db) {
         await ensureUserMcpLoaded(
           orchestrator,
-          userId,
+          userId ?? 'anonymous',
           userSandboxManager.getUserWorkspaceRoot.bind(userSandboxManager),
           db.getConfig.bind(db),
         );
