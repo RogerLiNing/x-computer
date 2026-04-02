@@ -1,0 +1,104 @@
+# x-computer Docker Compose - 一键启动前后端
+# 使用方式：
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# 或包含可选依赖（MySQL、Qdrant）：
+#   cp docker/.env.example .env
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# 停止：
+#   docker compose -f docker/docker-compose.yml down
+
+services:
+  # === 后端服务 ===
+  server:
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    container_name: x-computer-server
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      # 数据库配置
+      - DB_HOST=${DB_HOST:-mysql}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - DB_NAME=${DB_NAME:-xcomputer}
+      # Qdrant 配置
+      - QDRANT_URL=http://qdrant:6333
+      # 可选服务
+      - REDIS_URL=${REDIS_URL:-}
+      # 前端 URL（用于 CORS）
+      - FRONTEND_URL=http://frontend:80
+    volumes:
+      # 持久化数据
+      - server-data:/app/data
+      # 配置文件（可选）
+      - ..///.x-config.json:/app/.x-config.json:ro
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+  # === 前端服务 ===
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend/Dockerfile
+    container_name: x-computer-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      server:
+        condition: service_started
+
+  # === 可选依赖服务 ===
+  mysql:
+    image: mysql:8.0
+    container_name: x-computer-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-password}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-xcomputer}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: x-computer-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+# 网络
+networks:
+  default:
+    name: x-computer-network
+
+# 命名卷持久化数据
+volumes:
+  server-data:
+  mysql_data:
+  qdrant_data:

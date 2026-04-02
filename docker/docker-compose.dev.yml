@@ -1,0 +1,104 @@
+# x-computer Docker Compose - 开发模式
+# 使用方式：
+#   docker compose -f docker/docker-compose.dev.yml up -d
+
+services:
+  # === 后端服务（开发模式 - 热重载） ===
+  server:
+    build:
+      context: ..
+      dockerfile: docker/server/Dockerfile
+    container_name: x-computer-server
+    restart: unless-stopped
+    command: npx tsx watch src/index.ts
+    ports:
+      - "4000:4000"
+      - "9229:9229"  # Node.js debugger
+    environment:
+      - NODE_ENV=development
+      - PORT=4000
+      # 数据库配置
+      - DB_HOST=${DB_HOST:-mysql}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-root}
+      - DB_PASSWORD=${DB_PASSWORD:-password}
+      - DB_NAME=${DB_NAME:-xcomputer}
+      # Qdrant 配置
+      - QDRANT_URL=http://qdrant:6333
+      # 前端 URL（用于 CORS）
+      - FRONTEND_URL=http://localhost:3000
+    volumes:
+      # 持久化数据
+      - server-data:/app/data
+      # 源代码挂载（热重载）
+      - ../server/src:/app/server/src
+      - ../shared/src:/app/shared/src
+      - ../package.json:/app/package.json
+    depends_on:
+      mysql:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+  # === 前端服务（开发模式 - Vite HMR） ===
+  frontend:
+    image: node:22-alpine
+    container_name: x-computer-frontend
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../frontend:/app
+      - ../shared:/app/shared
+      - ../package.json:/app/package.json:ro
+      - ../frontend/package.json:/app/frontend/package.json:ro
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://localhost:4000
+    depends_on:
+      - server
+
+  # === 可选依赖服务 ===
+  mysql:
+    image: mysql:8.0
+    container_name: x-computer-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-password}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-xcomputer}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: x-computer-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  default:
+    name: x-computer-network
+
+volumes:
+  server-data:
+  mysql_data:
+  qdrant_data:
