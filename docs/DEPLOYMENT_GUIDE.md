@@ -400,11 +400,34 @@ pm2 logs x-computer --lines 100
 - [ ] 启用容器隔离（`container.enabled: true`）
 - [ ] 禁用网络访问（`networkMode: "none"`）
 - [ ] 禁用匿名访问（`allowAnonymous: false`）
+- [ ] 配置管理员邮箱（`admin.emails`）以便访问管理后台
 - [ ] 配置 HTTPS/WSS
 - [ ] 设置防火墙规则
 - [ ] 配置定期备份
 - [ ] 启用日志监控
 - [ ] 配置告警通知
+
+---
+
+## 👤 管理员配置
+
+部署后需要配置管理员才能访问管理后台：
+
+```json
+// server/.x-config.json 或 ~/.x-computer/.x-config.json
+{
+  "admin": {
+    "emails": ["your@email.com"]
+  }
+}
+```
+
+**或通过环境变量**：
+```bash
+export X_COMPUTER_ADMIN_EMAILS="admin@example.com,ops@yourcompany.com"
+```
+
+管理员可通过桌面端的 **Admin** 应用管理用户、查看统计等。
 
 ---
 

@@ -389,6 +389,34 @@ docker ps -a --filter "name=x-computer-user" -q | xargs -r docker rm -f
 
 **注意**：此功能尚未实现（TODO）。
 
+### `admin`
+
+管理员配置。指定哪些邮箱的用户具有管理后台访问权限。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `emails` | `string[]` | `[]` | 管理员邮箱列表（小写匹配） |
+
+**示例**：
+```json
+{
+  "admin": {
+    "emails": ["admin@example.com", "ops@yourcompany.com"]
+  }
+}
+```
+
+**环境变量**（可替代配置文件）：
+```bash
+export X_COMPUTER_ADMIN_EMAILS="admin@example.com,ops@yourcompany.com"
+```
+
+**使用说明**：
+- 管理员可访问桌面端的 Admin 应用（用户管理、封禁/解封、套餐调整、统计概览）
+- 也可直接访问 `/api/admin/*` 接口
+- 邮箱匹配不区分大小写
+- 推荐在生产环境配置，生产环境默认 `allowAnonymous: false` 更安全
+
 ---
 
 ## 🔧 高级用法
@@ -573,6 +601,9 @@ ALLOW_ANONYMOUS=true npm test
     "memoryLimit": "256m",
     "pidsLimit": 100,
     "networkMode": "none"
+  },
+  "admin": {
+    "emails": ["admin@example.com"]
   }
 }
 ```
@@ -606,6 +637,9 @@ ALLOW_ANONYMOUS=true npm test
     "memoryLimit": "512m",
     "pidsLimit": 100,
     "networkMode": "bridge"
+  },
+  "admin": {
+    "emails": ["admin@example.com"]
   }
 }
 ```
