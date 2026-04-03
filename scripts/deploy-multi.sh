@@ -402,6 +402,9 @@ ${SSH_PREFIX}ssh $SSH_OPTS $SSH_PORT_OPT $SSH_KEY_OPT "$DEPLOY_HOST" "export LC_
   # 重启服务
   echo '>>> 重启服务'
   pm2 delete x-computer 2>/dev/null || true
+  # 彻底清理端口 4000 上的旧进程，防止 EADDRINUSE
+  fuser -k 4000/tcp 2>/dev/null || true
+  sleep 1
   X_COMPUTER_WORKSPACE=$DEPLOY_PATH pm2 start server/dist/server/src/index.js --name x-computer --interpreter node --cwd $DEPLOY_PATH
   pm2 delete x-computer-workflow 2>/dev/null || true
   pm2 start workflow-engine/dist/index.js --name x-computer-workflow --interpreter node --cwd $DEPLOY_PATH
