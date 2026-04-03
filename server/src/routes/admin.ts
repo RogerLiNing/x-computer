@@ -52,7 +52,7 @@ export function createAdminRouter(db: AsyncDatabase, subscriptionService?: Subsc
                       concurrentTasksLimit: limits.concurrentTasksLimit === Infinity ? -1 : limits.concurrentTasksLimit,
                     }
                   : null,
-                usage: usage ? { aiCalls: usage.aiCalls, storage, tasks: usage.tasks } : null,
+                usage: usage ? { aiCalls: Number(usage.aiCalls) || 0, storage, tasks: usage.tasks } : null,
               };
             } catch {
               return { ...u, planId: 'free', planStatus: null, limits: null, usage: null };
