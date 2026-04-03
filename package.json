@@ -28,13 +28,7 @@
     "deploy:prod": "./scripts/deploy-multi.sh production",
     "test:fal": "node scripts/test-fal-api.mjs",
     "db:migrate": "tsx scripts/run-mysql-migration.ts",
-    "upgrade:pro": "tsx scripts/upgrade-user-to-pro.ts",
-    "docker:start": "./scripts/docker-start.sh",
-    "docker:up": "docker compose -f docker/docker-compose.yml up -d",
-    "docker:up:dev": "docker compose -f docker/docker-compose.dev.yml up -d",
-    "docker:down": "docker compose -f docker/docker-compose.yml down",
-    "docker:build": "docker compose -f docker/docker-compose.yml build",
-    "docker:logs": "docker compose -f docker/docker-compose.yml logs -f"
+    "upgrade:pro": "tsx scripts/upgrade-user-to-pro.ts"
   },
   "workspaces": [
     "shared",
