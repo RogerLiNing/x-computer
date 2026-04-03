@@ -47,6 +47,9 @@ workflow-engine/workflow-data.sqlite
 # Deploy config (contains host/password)
 scripts/deploy.config.json
 
+# User data (sandboxes, workspaces)
+users/
+
 # Runtime data
 /projects-for-reference
 /qdrant_data
