@@ -99,9 +99,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   const containerPidsLimit = config.container?.pidsLimit ?? 
     (process.env.CONTAINER_PIDS_LIMIT ? parseInt(process.env.CONTAINER_PIDS_LIMIT) : 100);
   
-  const containerNetworkMode = (config.container?.networkMode ?? 
-    process.env.CONTAINER_NETWORK_MODE ?? 
+  const containerNetworkMode = (config.container?.networkMode ??
+    process.env.CONTAINER_NETWORK_MODE ??
     'none') as 'none' | 'bridge' | 'host';
+
+  const containerIdleTimeout = config.container?.idleTimeout ?? 300000;
+  const containerMaxIdleTime = config.container?.maxIdleTime ?? 86400000;
 
   const policy = new PolicyEngine();
   const audit = new AuditLogger();
@@ -115,9 +118,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
         memoryLimit: containerMemoryLimit,
         pidsLimit: containerPidsLimit,
         networkMode: containerNetworkMode,
+        idleTimeout: containerIdleTimeout,
+        maxIdleTime: containerMaxIdleTime,
       });
       await containerManager.ensureImageExists();
-      serverLogger.info('app', `✅ 容器隔离已启用（安全模式）CPU=${containerCpuLimit} MEM=${containerMemoryLimit} PIDS=${containerPidsLimit} NET=${containerNetworkMode}`);
+      serverLogger.info('app', `✅ 容器隔离已启用（安全模式）CPU=${containerCpuLimit} MEM=${containerMemoryLimit} PIDS=${containerPidsLimit} NET=${containerNetworkMode} idleTimeout=${containerIdleTimeout}ms maxIdleTime=${containerMaxIdleTime}ms`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       serverLogger.error('app', '❌ 容器隔离启动失败，回退到直接模式（不安全）', msg);

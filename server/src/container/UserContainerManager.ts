@@ -40,17 +40,25 @@ export interface UserContainerManagerOptions {
   memoryLimit?: string;
   pidsLimit?: number;
   networkMode?: 'none' | 'bridge' | 'host';
+  /** 容器空闲超时（毫秒），超时后自动停止容器，默认 300000（5分钟），0=禁用 */
+  idleTimeout?: number;
+  /** 容器最大空闲时间（毫秒），超时后自动删除容器，默认 86400000（24小时），0=禁用 */
+  maxIdleTime?: number;
 }
 
 export class UserContainerManager {
   private docker: Docker;
   private containers: Map<string, string> = new Map(); // userId -> containerId
+  private lastActivity: Map<string, number> = new Map(); // userId -> timestamp
   private workspaceBasePath: string;
   private imageName: string;
   private defaultCpuLimit: number;
   private defaultMemoryLimit: string;
   private defaultPidsLimit: number;
   private defaultNetworkMode: string;
+  private idleTimeout: number;
+  private maxIdleTime: number;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor(workspaceBasePath: string, options: UserContainerManagerOptions = {}) {
     this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
@@ -60,6 +68,58 @@ export class UserContainerManager {
     this.defaultMemoryLimit = options.memoryLimit ?? '512m';
     this.defaultPidsLimit = options.pidsLimit ?? 100;
     this.defaultNetworkMode = options.networkMode ?? 'none';
+    // 0 表示禁用，默认 5 分钟空闲停止，24 小时最大空闲删除
+    this.idleTimeout = options.idleTimeout ?? 300000;
+    this.maxIdleTime = options.maxIdleTime ?? 86400000;
+
+    // 启动后台清理定时器（每分钟检查一次）
+    this.startCleanupTimer();
+  }
+
+  private startCleanupTimer(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupIdleContainers().catch((err) => {
+        serverLogger.error('container', '空闲容器清理失败', err instanceof Error ? err.message : String(err));
+      });
+    }, 60_000);
+    serverLogger.info('container', `容器清理定时器已启动（idleTimeout=${this.idleTimeout}ms, maxIdleTime=${this.maxIdleTime}ms）`);
+  }
+
+  /**
+   * 清理空闲超时的容器
+   */
+  private async cleanupIdleContainers(): Promise<void> {
+    const now = Date.now();
+
+    for (const [userId, lastActive] of this.lastActivity.entries()) {
+      const idleMs = now - lastActive;
+
+      // 检查是否超过最大空闲时间（删除容器）
+      if (this.maxIdleTime > 0 && idleMs >= this.maxIdleTime) {
+        serverLogger.info('container', `容器超过最大空闲时间(${this.maxIdleTime}ms)，删除: ${userId}`);
+        await this.removeContainer(userId);
+        continue;
+      }
+
+      // 检查是否超过空闲超时（停止容器）
+      if (this.idleTimeout > 0 && idleMs >= this.idleTimeout) {
+        const containerId = this.containers.get(userId);
+        if (!containerId) continue;
+
+        try {
+          const container = this.docker.getContainer(containerId);
+          const info = await container.inspect();
+          if (info.State.Running) {
+            serverLogger.info('container', `容器超过空闲超时(${this.idleTimeout}ms)，停止: ${userId}`);
+            await container.stop({ t: 10 });
+            // 停止后不删除缓存，下次使用会重新启动
+          }
+        } catch (err) {
+          // 容器可能已被删除，忽略错误
+        }
+      }
+    }
   }
 
   /**
@@ -72,10 +132,11 @@ export class UserContainerManager {
     if (this.containers.has(userId)) {
       const containerId = this.containers.get(userId)!;
       const container = this.docker.getContainer(containerId);
-      
+
       try {
         const info = await container.inspect();
         if (info.State.Running) {
+          this.lastActivity.set(userId, Date.now());
           serverLogger.info('container', `用户容器已存在并运行中: ${userId}`);
           return containerId;
         }
@@ -228,8 +289,10 @@ export class UserContainerManager {
     options: ExecOptions = {}
   ): Promise<ExecResult> {
     const containerId = await this.getOrCreateContainer({ userId });
+    // 记录容器活动（用于空闲超时判断）
+    this.lastActivity.set(userId, Date.now());
     const container = this.docker.getContainer(containerId);
-    
+
     const { cwd = '/workspace', timeout = 30000 } = options;
     
     // 安全审计日志（R060）
@@ -331,14 +394,19 @@ export class UserContainerManager {
    * 清理所有容器
    */
   async cleanup(): Promise<void> {
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = undefined;
+    }
+
     serverLogger.info('container', `清理所有用户容器，共 ${this.containers.size} 个`);
-    
+
     const promises = Array.from(this.containers.keys()).map(userId =>
       this.removeContainer(userId)
     );
-    
+
     await Promise.all(promises);
-    
+
     serverLogger.info('container', '所有用户容器已清理');
   }
 
