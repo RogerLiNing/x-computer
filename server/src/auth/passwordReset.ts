@@ -6,6 +6,7 @@ import type { AsyncDatabase } from '../db/database.js';
 import { EmailVerificationService } from './emailVerification.js';
 import { hashPassword } from './password.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { sendSystemEmail } from '../email/emailService.js';
 
 export class PasswordResetService {
   private verificationService: EmailVerificationService;
@@ -21,6 +22,7 @@ export class PasswordResetService {
     );
 
     if (!user) {
+      // 为了安全，即使邮箱不存在也返回成功消息
       serverLogger.warn('auth/password-reset', `密码重置请求失败：邮箱不存在`, `email=${email}`);
       return {
         code: '',
@@ -38,9 +40,28 @@ export class PasswordResetService {
     }
 
     const code = await this.verificationService.createVerificationCode(email, 'password_reset', 15);
-    serverLogger.info('auth/password-reset', `密码重置验证码已生成`, `email=${email}`);
+
+    // 发送邮件
+    const emailResult = await sendSystemEmail({
+      to: email,
+      subject: 'X-Computer 密码重置验证码',
+      body: `您正在重置密码，验证码是：${code}，15 分钟内有效。\n\n如果不是您本人操作，请忽略此邮件。`,
+      html: false,
+    });
+
+    if (!emailResult.ok) {
+      serverLogger.warn('auth/password-reset', `密码重置邮件发送失败`, `email=${email} error=${emailResult.error}`);
+      // 仍然返回成功，避免攻击者通过响应判断 SMTP 是否配置
+      return {
+        code: '',
+        success: true,
+        message: emailResult.error ?? 'Reset code sent.',
+      };
+    }
+
+    serverLogger.info('auth/password-reset', `密码重置验证码已发送至邮箱`, `email=${email}`);
     return {
-      code,
+      code: process.env.NODE_ENV === 'development' ? code : '',
       success: true,
       message: 'Reset code sent successfully.',
     };

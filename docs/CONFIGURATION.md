@@ -419,6 +419,40 @@ export X_COMPUTER_ADMIN_EMAILS="admin@example.com,ops@yourcompany.com"
 
 ---
 
+### `email`
+
+系统邮件配置，用于发送验证码等系统通知邮件。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `smtp.host` | `string` | SMTP 服务器地址 |
+| `smtp.port` | `number` | SMTP 端口（默认 465） |
+| `smtp.secure` | `boolean` | 是否使用 SSL/TLS（默认 true） |
+| `smtp.user` | `string` | SMTP 用户名 |
+| `smtp.pass` | `string` | SMTP 密码 |
+| `smtp.from` | `string` | 发件人显示名（可选，如 "X Computer <noreply@example.com>"） |
+
+**示例**：
+```json
+{
+  "email": {
+    "smtp": {
+      "host": "smtp.qq.com",
+      "port": 465,
+      "secure": true,
+      "user": "your-email@qq.com",
+      "pass": "{env:SMTP_PASSWORD}"
+    }
+  }
+}
+```
+
+**使用场景**：
+- 注册时发送邮箱验证码
+- 密码重置验证码
+
+---
+
 ## 🔧 高级用法
 
 ### 环境变量占位符

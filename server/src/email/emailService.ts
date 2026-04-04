@@ -9,6 +9,7 @@ import type { Transporter } from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { marked } from 'marked';
 import { simpleParser } from 'mailparser';
+import { loadDefaultConfig } from '../config/defaultConfig.js';
 
 export interface EmailSmtpConfig {
   host: string;
@@ -110,6 +111,69 @@ export async function sendEmail(
   try {
     const transporter = getTransporter(config);
     const html = options.html === false ? undefined : (await marked.parse(body)) as string;
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject,
+      ...(html ? { html, text: body } : { text: body }),
+    });
+    return { ok: true, messageId: info.messageId };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `发送失败: ${msg}` };
+  }
+}
+
+// ── 系统邮件发送（用于验证码等系统通知）───────────────────────────────────
+
+let systemTransporter: Transporter | null = null;
+
+function getSystemTransporter(): Transporter | null {
+  const config = loadDefaultConfig();
+  const smtp = config.email?.smtp;
+  if (!smtp) return null;
+
+  if (!systemTransporter) {
+    systemTransporter = nodemailer.createTransport({
+      host: smtp.host,
+      port: smtp.port ?? 465,
+      secure: smtp.secure ?? smtp.port === 465,
+      auth: { user: smtp.user, pass: smtp.pass },
+    });
+  }
+  return systemTransporter;
+}
+
+export interface SystemEmailOptions {
+  to: string;
+  subject: string;
+  body: string;
+  /** 若为 false，body 作为纯文本发送；默认 true，将 body 从 Markdown 转成 HTML 发送富文本 */
+  html?: boolean;
+}
+
+export interface SystemEmailResult {
+  ok: boolean;
+  error?: string;
+  messageId?: string;
+}
+
+/**
+ * 使用系统级 SMTP 配置发送邮件（用于验证码等系统通知）
+ */
+export async function sendSystemEmail(options: SystemEmailOptions): Promise<SystemEmailResult> {
+  const transporter = getSystemTransporter();
+  if (!transporter) {
+    return { ok: false, error: '系统未配置邮件 SMTP（请在 .x-config.json 的 email.smtp 中配置）' };
+  }
+
+  const { to, subject, body } = options;
+  const config = loadDefaultConfig();
+  const smtp = config.email!.smtp!;
+  const from = smtp.from || smtp.user;
+
+  try {
+    const html = options.html !== false ? (await marked.parse(body)) as string : undefined;
     const info = await transporter.sendMail({
       from,
       to,

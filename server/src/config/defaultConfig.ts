@@ -78,6 +78,20 @@ export interface XConfigMcpServer {
   headers?: Record<string, string>;
 }
 
+export interface XConfigEmail {
+  /** 系统邮件 SMTP 配置（用于发送验证码等系统邮件） */
+  smtp?: {
+    host: string;
+    port?: number;
+    secure?: boolean;
+    user: string;
+    pass: string;
+    from?: string;
+  };
+  /** 系统通知收件邮箱（用于接收错误报告等），不配置则不发送 */
+  notifyTo?: string;
+}
+
 export interface XConfig {
   llm_config?: XConfigLLM;
   auth?: XConfigAuth;
@@ -88,6 +102,8 @@ export interface XConfig {
   tool_loading_mode?: ToolLoadingMode;
   /** 默认 MCP 服务器（联网搜索等），用户无 mcp_config 时使用；格式同 mcp-servers.json 的 servers 或 mcpServers 对象 */
   mcp_servers?: XConfigMcpServer[] | Record<string, Record<string, unknown>>;
+  /** 系统邮件配置（发送验证码等系统邮件） */
+  email?: XConfigEmail;
   [key: string]: unknown;
 }
 

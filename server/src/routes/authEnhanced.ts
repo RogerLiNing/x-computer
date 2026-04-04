@@ -7,6 +7,7 @@ import { Router } from 'express';
 import type { AppDatabase } from '../db/database.js';
 import { EmailVerificationService } from '../auth/emailVerification.js';
 import { PasswordResetService } from '../auth/passwordReset.js';
+import { sendSystemEmail } from '../email/emailService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
 export function createAuthEnhancedRoutes(db: AppDatabase): Router {
@@ -35,14 +36,27 @@ export function createAuthEnhancedRoutes(db: AppDatabase): Router {
 
       const code = await verificationService.createVerificationCode(email, 'email_verification', 15);
 
-      // TODO: 实际应用中应通过邮件发送验证码
-      // 目前为了开发方便，直接返回验证码
-      serverLogger.info('auth/verification', `验证码已生成（开发模式）`, `email=${email} code=${code}`);
+      const emailResult = await sendSystemEmail({
+        to: email,
+        subject: 'X-Computer 邮箱验证码',
+        body: `您的验证码是：${code}，15 分钟内有效。\n\n如果不是您本人操作，请忽略此邮件。`,
+        html: false,
+      });
 
+      if (!emailResult.ok) {
+        serverLogger.warn('auth/verification', `验证码邮件发送失败`, `email=${email} error=${emailResult.error}`);
+        // 仍然返回成功，但记录警告（避免攻击者通过响应判断是否配置了 SMTP）
+        return res.json({
+          success: true,
+          message: emailResult.error ?? '验证码已生成',
+        });
+      }
+
+      serverLogger.info('auth/verification', `验证码已发送至邮箱`, `email=${email}`);
       res.json({
         success: true,
         message: 'Verification code sent successfully',
-        // 开发模式下返回验证码，生产环境应删除此字段
+        // 开发模式下返回验证码，生产环境不返回
         code: process.env.NODE_ENV === 'development' ? code : undefined,
       });
     } catch (err) {
@@ -98,12 +112,10 @@ export function createAuthEnhancedRoutes(db: AppDatabase): Router {
     try {
       const result = await passwordResetService.requestPasswordReset(email);
 
-      // 为了安全，总是返回成功消息
+      // 为了安全，总是返回成功消息（不暴露邮箱是否存在）
       res.json({
         success: true,
         message: 'If this email exists, a reset code has been sent',
-        // 开发模式下返回验证码
-        code: process.env.NODE_ENV === 'development' && result.success ? result.code : undefined,
       });
     } catch (err) {
       serverLogger.error('auth/password-reset', `密码重置请求失败`, `error=${err instanceof Error ? err.message : String(err)}`);

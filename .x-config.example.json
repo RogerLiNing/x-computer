@@ -42,5 +42,14 @@
   ],
   "admin": {
     "emails": []
+  },
+  "email": {
+    "smtp": {
+      "host": "smtp.example.com",
+      "port": 465,
+      "secure": true,
+      "user": "noreply@example.com",
+      "pass": "{env:SMTP_PASSWORD}"
+    }
   }
 }
