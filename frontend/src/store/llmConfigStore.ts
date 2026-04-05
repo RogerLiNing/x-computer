@@ -9,26 +9,15 @@ import type { ImportedModel, ImportedModelsByProvider } from '@/constants/llmPre
 import {
   loadFromStorage,
   saveToStorage,
-  loadSecrets,
-  saveSecrets,
   loadImportedModels,
   saveImportedModels,
   PROVIDER_META,
 } from '@/constants/llmPresets';
 import { api } from '@/utils/api';
 
-/** 构建要同步到云端的配置（含 API Key），供定时任务等从 db 读取 */
-function buildConfigForCloud(
-  config: LLMSystemConfig,
-  secrets: Record<string, string>,
-): LLMSystemConfig & { providers: Array<LLMProviderConfig & { apiKey?: string }> } {
-  return {
-    ...config,
-    providers: config.providers.map((p) => ({
-      ...p,
-      apiKey: secrets[p.id] ?? undefined,
-    })),
-  };
+/** 构建要同步到云端的配置（不含 API Key，由服务器端统一管理） */
+function buildConfigForCloud(config: LLMSystemConfig): LLMSystemConfig {
+  return { ...config };
 }
 
 /** D.3 离线/降级：配置与云端的同步状态 */
@@ -82,7 +71,7 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
     try {
       await api.setUserConfigKey(
         'llm_config',
-        buildConfigForCloud(get().llmConfig, loadSecrets()),
+        buildConfigForCloud(get().llmConfig),
       );
       set({ configSyncStatus: 'ok' });
     } catch {
@@ -91,7 +80,7 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
   },
 
   syncToCloud: () => {
-    const payload = buildConfigForCloud(get().llmConfig, loadSecrets());
+    const payload = buildConfigForCloud(get().llmConfig);
     api
       .setUserConfigKey('llm_config', payload)
       .then(() => set({ configSyncStatus: 'ok' }))
@@ -99,7 +88,7 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
   },
 
   syncToCloudNow: async () => {
-    const payload = buildConfigForCloud(get().llmConfig, loadSecrets());
+    const payload = buildConfigForCloud(get().llmConfig);
     await api.setUserConfigKey('llm_config', payload);
     set({ configSyncStatus: 'ok' });
   },
@@ -132,7 +121,7 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
       id: providerId,
       name,
       baseUrl: baseUrl || undefined,
-      apiKeyConfigured: !!get().getProviderApiKey(providerId),
+      apiKeyConfigured: false, // API Key 由服务器端管理，前端不存储
     };
     set((s) => {
       if (s.llmConfig.providers.some((p) => p.id === providerId)) return {};
@@ -145,9 +134,6 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
   },
 
   removeProvider: (providerId) => {
-    const secrets = loadSecrets();
-    delete secrets[providerId];
-    saveSecrets(secrets);
     const imported = loadImportedModels();
     delete imported[providerId];
     saveImportedModels(imported);
@@ -184,37 +170,20 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
     get().syncToCloud();
   },
 
-  setProviderApiKey: (providerId, apiKey) => {
-    const secrets = loadSecrets();
-    secrets[providerId] = apiKey;
-    saveSecrets(secrets);
-    set((s) => {
-      const providers = s.llmConfig.providers.map((p) =>
-        p.id === providerId ? { ...p, apiKeyConfigured: !!apiKey } : p,
-      );
-      const config: LLMSystemConfig = { ...s.llmConfig, providers };
-      saveToStorage(config);
-      return { llmConfig: config };
-    });
-    get().syncToCloud();
+  /** 设置提供商 API Key（已废弃：API Key 只存服务器端，前端不再存 key）
+   *  @deprecated 此函数已废弃，API Key 由服务器端统一管理
+   */
+  setProviderApiKey: (_providerId: string, _apiKey: string) => {
+    // no-op: API Key 只存在于服务器端，前端不再存储
   },
-
-  clearProviderApiKey: (providerId) => {
-    const secrets = loadSecrets();
-    delete secrets[providerId];
-    saveSecrets(secrets);
-    set((s) => {
-      const providers = s.llmConfig.providers.map((p) =>
-        p.id === providerId ? { ...p, apiKeyConfigured: false } : p,
-      );
-      const config: LLMSystemConfig = { ...s.llmConfig, providers };
-      saveToStorage(config);
-      return { llmConfig: config };
-    });
-    get().syncToCloud();
+  /** 清除提供商 API Key（已废弃）
+   *  @deprecated 此函数已废弃
+   */
+  clearProviderApiKey: (_providerId: string) => {
+    // no-op: API Key 只存服务器端
   },
-
-  getProviderApiKey: (providerId) => {
-    return loadSecrets()[providerId] ?? '';
-  },
+  /** 获取某提供商的 API Key（已废弃：始终返回空字符串）
+   *  @deprecated 此函数已废弃，API Key 由服务器端统一管理
+   */
+  getProviderApiKey: (_providerId: string) => '',
 }));

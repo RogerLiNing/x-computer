@@ -395,8 +395,6 @@ export function XApp() {
     const providerId = sel?.providerId ?? llmConfig?.providers?.[0]?.id;
     const modelId = sel?.modelId ?? '__custom__';
     const provider = llmConfig?.providers?.find((p: { id: string }) => p.id === providerId);
-    const baseUrl = provider?.baseUrl ?? '';
-    const apiKey = useLLMConfigStore.getState().getProviderApiKey(providerId ?? '');
 
     if (!providerId || !provider) {
       setMessages((prev) => [
@@ -433,8 +431,6 @@ export function XApp() {
           messages: chatMessages,
           providerId,
           modelId,
-          baseUrl: baseUrl || undefined,
-          apiKey: apiKey || undefined,
           scene: 'x_direct',
           loadedToolNames: loadedToolNamesX.length > 0 ? loadedToolNamesX : undefined,
         },
@@ -532,8 +528,6 @@ export function XApp() {
     const providerId = sel?.providerId ?? llmConfig?.providers?.[0]?.id;
     const modelId = sel?.modelId ?? '__custom__';
     const provider = llmConfig?.providers?.find((p: { id: string }) => p.id === providerId);
-    const baseUrl = provider?.baseUrl ?? '';
-    const apiKey = useLLMConfigStore.getState().getProviderApiKey(providerId ?? '');
     if (!providerId || !provider) {
       setError('请先在「系统设置 → 大模型配置」中配置聊天模型，X 才能执行。');
       setMessages((prev) => [
@@ -553,8 +547,6 @@ export function XApp() {
       const res = await api.postXRunNow(undefined, {
         providerId,
         modelId,
-        baseUrl: baseUrl || undefined,
-        apiKey: apiKey || undefined,
       });
       const content = res?.content ?? res?.error ?? '（无回复）';
       setMessages((prev) => [

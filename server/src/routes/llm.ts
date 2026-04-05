@@ -1,8 +1,15 @@
 import { Router } from 'express';
 import { fetchModelsFromProvider } from '../llm/fetchModels.js';
+import { buildPublicLLMConfig } from '../llm/credentialResolver.js';
 
 export function createLLMRouter(): Router {
   const router = Router();
+
+  /** GET /api/llm/config - 公开接口：返回服务器可用 LLM 配置（不含 apiKey） */
+  router.get('/config', (_req, res) => {
+    const config = buildPublicLLMConfig();
+    res.json(config);
+  });
 
   /** POST /api/llm/import-models - 由服务端请求提供商 /models 或 /v1/models，避免浏览器 CORS（如 NVIDIA） */
   router.post('/import-models', async (req, res) => {

@@ -322,7 +322,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             providerId: vectorSel.providerId,
             modelId: vectorSel.modelId,
             baseUrl: llmConfig?.providers?.find((p: { id: string }) => p.id === vectorSel.providerId)?.baseUrl ?? '',
-            apiKey: useLLMConfigStore.getState().getProviderApiKey(vectorSel.providerId),
+            apiKey: '', // API Key 由服务器端统一管理，前端不存储
           }
         : undefined;
 
@@ -362,8 +362,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       const sel = llmConfig?.defaultByModality?.chat;
       const providerId = sel?.providerId ?? llmConfig?.providers?.[0]?.id;
       const provider = llmConfig?.providers?.find((p: { id: string }) => p.id === providerId);
-      const baseUrl = provider?.baseUrl ?? '';
-      const apiKey = useLLMConfigStore.getState().getProviderApiKey(providerId ?? '');
       if (!providerId || !provider) {
         const reply = '请先在「系统设置 → 大模型配置」中配置聊天模型。';
         setMessages((prev) => [
@@ -380,8 +378,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         hasOpenAiDocument,
         providerId,
         modelId: sel?.modelId ?? '__custom__',
-        baseUrl: baseUrl || undefined,
-        apiKey: apiKey || undefined,
       });
 
       // 图片生成：仅当用户未附带参考图时走直接文生图；附带了图片则必须走 Agent 流程，以便主脑使用 llm.edit_image 等工具基于参考图修改
@@ -389,8 +385,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         const imageSel = llmConfig?.defaultByModality?.image;
         const imgProviderId = imageSel?.providerId ?? llmConfig?.providers?.[0]?.id;
         const imgProvider = llmConfig?.providers?.find((p: { id: string }) => p.id === imgProviderId);
-        const imgBaseUrl = imgProvider?.baseUrl ?? '';
-        const imgApiKey = useLLMConfigStore.getState().getProviderApiKey(imgProviderId ?? '');
         if (!imageSel || !imgProviderId || !imgProvider) {
           const reply = '请先在「系统设置 → 大模型配置」中为「图片」模态选择并保存一个模型（如 OpenRouter 的 bytedance-seed/seedream-4.5）。';
           setMessages((prev) => [
@@ -406,8 +400,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             prompt: text,
             providerId: imgProviderId,
             modelId: imageSel.modelId ?? '__custom__',
-            baseUrl: imgBaseUrl || undefined,
-            apiKey: imgApiKey || undefined,
           });
           const assistantContent = result.content?.trim() || (result.images?.length ? '已根据你的描述生成以下图片。' : '未生成到图片。');
           const images = result.images ?? [];
@@ -458,8 +450,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             tools: [writeToEditorTool],
             providerId,
             modelId: sel?.modelId ?? '__custom__',
-            baseUrl: baseUrl || undefined,
-            apiKey: apiKey || undefined,
             scene: 'write_to_editor',
             computerContext: computerContextStr,
             taskSummary: taskSummaryStr,
@@ -540,8 +530,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               assistantReply: replyForMemory,
               providerId,
               modelId: sel?.modelId ?? '__custom__',
-              baseUrl: baseUrl || undefined,
-              apiKey: apiKey || undefined,
               vectorConfig,
             }).catch(() => {});
           }
@@ -588,8 +576,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             instruction: text,
             providerId,
             modelId: sel?.modelId ?? '__custom__',
-            baseUrl: baseUrl || undefined,
-            apiKey: apiKey || undefined,
           });
           const replyContent = `编辑器助手已开始写入「${fileName}」，请在编辑器中查看实时输出，确认后点击保存。`;
           setMessages((prev) => [
@@ -634,8 +620,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               messages: editMessages,
               providerId,
               modelId: sel?.modelId ?? '__custom__',
-              baseUrl: baseUrl || undefined,
-              apiKey: apiKey || undefined,
               scene: 'edit_current_document',
               computerContext: computerContextStr,
               taskSummary: taskSummaryStr,
@@ -660,8 +644,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               assistantReply: fullContent.trim(),
               providerId,
               modelId: sel?.modelId ?? '__custom__',
-              baseUrl: baseUrl || undefined,
-              apiKey: apiKey || undefined,
               vectorConfig,
             }).catch(() => {});
           }
@@ -683,7 +665,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 providerId,
                 modelId: sel?.modelId ?? '__custom__',
                 baseUrl: provider?.baseUrl ?? undefined,
-                apiKey: llmState.getProviderApiKey(providerId) || undefined,
+                apiKey: '', // API Key 由服务器端统一管理
               }
             : undefined;
         const chatContext = messages
@@ -725,8 +707,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         const providerId = sel?.providerId ?? llmConfig.providers[0]?.id;
         const modelId = sel?.modelId ?? '__custom__';
         const provider = llmConfig.providers.find((p) => p.id === providerId);
-        const baseUrl = provider?.baseUrl ?? '';
-        const apiKey = useLLMConfigStore.getState().getProviderApiKey(providerId ?? '');
 
         if (!providerId || !provider) {
           const replyContent = '请先在「系统设置 → 大模型配置」中添加提供商并选择聊天默认模型。';
@@ -756,8 +736,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 messages: chatMessages,
                 providerId,
                 modelId,
-                baseUrl: baseUrl || undefined,
-                apiKey: apiKey || undefined,
                 scene: 'normal_chat',
                 computerContext: computerContextStr,
                 taskSummary: taskSummaryStr,
@@ -832,8 +810,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 assistantReply: trimmed,
                 providerId,
                 modelId,
-                baseUrl: baseUrl || undefined,
-                apiKey: apiKey || undefined,
                 vectorConfig,
               }).catch(() => {});
               api
@@ -842,8 +818,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   assistantReply: trimmed,
                   providerId,
                   modelId,
-                  baseUrl: baseUrl || undefined,
-                  apiKey: apiKey || undefined,
                 })
                 .then((r) => {
                   if (r?.suggestions?.length) {
@@ -1001,7 +975,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             providerId: vectorSel.providerId,
             modelId: vectorSel.modelId,
             baseUrl: llmConfig?.providers?.find((p: { id: string }) => p.id === vectorSel.providerId)?.baseUrl ?? '',
-            apiKey: useLLMConfigStore.getState().getProviderApiKey(vectorSel.providerId),
+            apiKey: '', // API Key 由服务器端统一管理，前端不存储
           }
         : undefined;
     let memoryStr = '';
@@ -1014,8 +988,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     const sel = llmConfig?.defaultByModality?.chat;
     const providerId = sel?.providerId ?? llmConfig?.providers?.[0]?.id;
     const provider = llmConfig?.providers?.find((p: { id: string }) => p.id === providerId);
-    const baseUrl = provider?.baseUrl ?? '';
-    const apiKey = useLLMConfigStore.getState().getProviderApiKey(providerId ?? '');
     if (!providerId || !provider) {
       setMessages((prev) => {
         const i = prev.findIndex((m) => m.id === replyId);
@@ -1034,8 +1006,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           messages: chatMessages,
           providerId,
           modelId: sel?.modelId ?? '__custom__',
-          baseUrl: baseUrl || undefined,
-          apiKey: apiKey || undefined,
           scene: 'normal_chat',
           computerContext: computerContextStr,
           taskSummary: taskSummaryStr,
@@ -1092,8 +1062,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           assistantReply: trimmed,
           providerId,
           modelId: sel?.modelId ?? '__custom__',
-          baseUrl: baseUrl || undefined,
-          apiKey: apiKey || undefined,
           vectorConfig,
         }).catch(() => {});
         api
@@ -1102,8 +1070,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             assistantReply: trimmed,
             providerId,
             modelId: sel?.modelId ?? '__custom__',
-            baseUrl: baseUrl || undefined,
-            apiKey: apiKey || undefined,
           })
           .then((r) => {
             if (r?.suggestions?.length) {

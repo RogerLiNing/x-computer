@@ -18,6 +18,7 @@ import { aiCallsQuota } from '../subscription/quotaMiddleware.js';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import { VectorStore } from '../memory/vectorStore.js';
 import { MemoryService } from '../memory/MemoryService.js';
+import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 
 // ── Constants and helpers also used in api.ts ─────────────────────────────────
 
@@ -171,64 +172,14 @@ async function runLearnPromptExtract(params: {
 
 const USE_CONDENSED_SYSTEM_PROMPT = process.env.X_COMPUTER_SYSTEM_PROMPT_CONDENSED !== 'false';
 
+/** 统一凭证查找：委托给 credentialResolver，保留 getLLMConfigForScheduler 签名供其他模块使用 */
 async function getLLMConfigForScheduler(
   uid: string,
   db: AppDatabase | undefined,
   subscriptionService: SubscriptionService | undefined,
   overrides?: { providerId?: string; modelId?: string },
 ) {
-  const fromConfig = (
-    config: {
-      providers?: Array<{ id: string; baseUrl?: string; apiKey?: string }>;
-      defaultByModality?: { chat?: { providerId: string; modelId: string } };
-    } | null,
-  ) => {
-    if (!config?.providers?.length) return null;
-    const chat = config.defaultByModality?.chat;
-    const providerId = overrides?.providerId ?? chat?.providerId ?? config.providers?.[0]?.id;
-    const modelId = overrides?.modelId ?? chat?.modelId ?? '__custom__';
-    const provider = config.providers?.find((p) => p.id === providerId);
-    if (!providerId || !modelId || !provider?.apiKey) return null;
-    return {
-      providerId,
-      modelId,
-      baseUrl: provider?.baseUrl,
-      apiKey: provider?.apiKey,
-    };
-  };
-
-  const canUseUserConfig =
-    !subscriptionService ||
-    (await (async () => {
-      const sub = await subscriptionService.getUserSubscription(uid);
-      return sub ? ['pro', 'enterprise'].includes(sub.planId) : false;
-    })());
-  if (canUseUserConfig && db) {
-    const raw = await db.getConfig(uid, 'llm_config');
-    if (raw) {
-      try {
-        const config = JSON.parse(raw) as Parameters<typeof fromConfig>[0];
-        const result = fromConfig(config);
-        if (result) return result;
-      } catch {
-        // fall through
-      }
-    }
-  }
-  const defaults = loadDefaultConfig();
-  const defaultResult = fromConfig(defaults?.llm_config as Parameters<typeof fromConfig>[0] ?? null);
-  if (defaultResult) return defaultResult;
-  const apiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.LLM_API_KEY?.trim();
-  const model = process.env.OPENROUTER_MODEL?.trim() || process.env.LLM_MODEL?.trim() || 'openai/gpt-4o-mini';
-  if (apiKey) {
-    return {
-      providerId: 'openrouter',
-      modelId: model,
-      baseUrl: 'https://openrouter.ai/api/v1',
-      apiKey,
-    };
-  }
-  return null;
+  return resolveLLMCredentials(uid, db as any, subscriptionService, overrides);
 }
 
 // ── Chat Router ────────────────────────────────────────────────────────────────
@@ -245,6 +196,18 @@ export function createChatRouter(
 
   const vectorStore = new VectorStore(sandboxFS);
   const defaultMemoryService = new MemoryService(sandboxFS, vectorStore);
+
+  /**
+   * 获取当前对话的 LLM 凭证（服务器端凭证查找，不从请求体取 apiKey）。
+   * 优先级：pro 用户自定义配置 > 服务器默认配置 > 环境变量
+   */
+  async function getChatLLMConfig(userId: string, providerId: string, modelId: string) {
+    const creds = await resolveLLMCredentials(userId, db, subscriptionService, { providerId, modelId });
+    if (!creds) {
+      throw new Error('未配置大模型，请联系管理员配置 .x-config.json 或设置 OPENROUTER_API_KEY 环境变量');
+    }
+    return creds;
+  }
 
   /** 按用户取 MemoryService（多用户时用该用户沙箱，否则用默认） */
   async function getMemoryServiceForUser(userId: string | undefined): Promise<MemoryService | null> {
@@ -288,12 +251,10 @@ export function createChatRouter(
 
   router.post('/chat', aiQuota, async (req, res) => {
     try {
-      const { messages, providerId, modelId, baseUrl, apiKey, stream, scene, capabilities, computerContext, taskSummary, memory, vectorConfig } = req.body as {
+      const { messages, providerId, modelId, stream, scene, capabilities, computerContext, taskSummary, memory, vectorConfig } = req.body as {
         messages?: Array<{ role: string; content: string }>;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
         stream?: boolean;
         scene?: string;
         capabilities?: string;
@@ -308,9 +269,10 @@ export function createChatRouter(
         return;
       }
 
+      const userId = (req as { userId?: string }).userId ?? '';
+      const llmConfig = await getChatLLMConfig(userId, providerId, modelId);
       serverLogger.info('chat', `POST /chat [${providerId}/${modelId}] messages=${messages.length} stream=${!!stream} scene=${scene ?? 'none'}`);
 
-      const userId = (req as { userId?: string }).userId;
       const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
         getLearnedPromptForUser(userId),
         getEvolvedCorePromptForUser(userId),
@@ -362,18 +324,18 @@ export function createChatRouter(
         try {
           for await (const chunk of callLLMStream({
             messages: chatMessages,
-            providerId,
-            modelId,
-            baseUrl,
-            apiKey,
+            providerId: llmConfig.providerId,
+            modelId: llmConfig.modelId,
+            baseUrl: llmConfig.baseUrl,
+            apiKey: llmConfig.apiKey,
           })) {
             res.write(`data: ${JSON.stringify({ content: chunk })}\n\n`);
             (res as any).flush?.();
           }
           res.write('data: [DONE]\n\n');
-          serverLogger.info('chat', `流式聊天完成 [${providerId}/${modelId}]`);
+          serverLogger.info('chat', `流式聊天完成 [${llmConfig.providerId}/${llmConfig.modelId}]`);
         } catch (err: any) {
-          serverLogger.error('chat', `流式聊天失败 [${providerId}/${modelId}]: ${err.message}`, err.stack);
+          serverLogger.error('chat', `流式聊天失败 [${llmConfig.providerId}/${llmConfig.modelId}]: ${err.message}`, err.stack);
           res.write(`data: ${JSON.stringify({ error: err.message || 'LLM 流式调用失败' })}\n\n`);
         }
         res.end();
@@ -382,12 +344,12 @@ export function createChatRouter(
 
       const content = await callLLM({
         messages: chatMessages,
-        providerId,
-        modelId,
-        baseUrl,
-        apiKey,
+        providerId: llmConfig.providerId,
+        modelId: llmConfig.modelId,
+        baseUrl: llmConfig.baseUrl,
+        apiKey: llmConfig.apiKey,
       });
-      serverLogger.info('chat', `聊天完成 [${providerId}/${modelId}] 回复长度=${content.length}`);
+      serverLogger.info('chat', `聊天完成 [${llmConfig.providerId}/${llmConfig.modelId}] 回复长度=${content.length}`);
       const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
       if (lastUser?.content?.trim() && content?.trim()) {
         const uid = userId;
@@ -405,10 +367,10 @@ export function createChatRouter(
             await runConsiderCapture({
               userMessage: lastUser!.content.trim(),
               assistantReply: content.trim(),
-              providerId,
-              modelId,
-              baseUrl,
-              apiKey,
+              providerId: llmConfig.providerId,
+              modelId: llmConfig.modelId,
+              baseUrl: llmConfig.baseUrl,
+              apiKey: llmConfig.apiKey,
               vectorProviderId: vectorConfig?.providerId,
               vectorModelId: vectorConfig?.modelId,
               vectorBaseUrl: vectorConfig?.baseUrl,
@@ -419,10 +381,10 @@ export function createChatRouter(
             await runLearnPromptExtract({
               userMessage: lastUser!.content.trim(),
               assistantReply: content.trim(),
-              providerId,
-              modelId,
-              baseUrl,
-              apiKey,
+              providerId: llmConfig.providerId,
+              modelId: llmConfig.modelId,
+              baseUrl: llmConfig.baseUrl,
+              apiKey: llmConfig.apiKey,
               memoryService: memSvc,
             });
           })().catch((err: any) => serverLogger.error('chat (consider-capture / learn-prompt)', err.message));
@@ -438,12 +400,10 @@ export function createChatRouter(
   /** 带 tools 的聊天：用于由模型通过 function call 决定写入内容等；支持 scene 注入主脑提示。会合并当前用户 MCP 工具，服务端工具（如 MCP）在本轮执行，仅客户端工具（如 write_to_editor）返回给前端。 */
   router.post('/chat/with-tools', aiQuota, async (req, res) => {
     try {
-      const { messages, providerId, modelId, baseUrl, apiKey, tools: toolsBody, scene, capabilities, computerContext, taskSummary, memory } = req.body as {
+      const { messages, providerId, modelId, tools: toolsBody, scene, capabilities, computerContext, taskSummary, memory } = req.body as {
         messages?: Array<{ role: string; content: string }>;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
         tools?: LLMToolDef[];
         scene?: string;
         capabilities?: string;
@@ -458,6 +418,14 @@ export function createChatRouter(
       }
 
       const userId = (req as { userId?: string }).userId;
+      let resolvedLLMConfig;
+      try {
+        resolvedLLMConfig = await getChatLLMConfig(userId ?? '', providerId, modelId);
+      } catch (credsErr: any) {
+        serverLogger.error('chat/with-tools', `获取 LLM 凭证失败: ${credsErr.message}`);
+        res.status(500).json({ error: credsErr.message || 'LLM 凭证获取失败' });
+        return;
+      }
       if (userSandboxManager && db) {
         await ensureUserMcpLoaded(
           orchestrator,
@@ -516,12 +484,12 @@ export function createChatRouter(
         chatMessages = [{ role: 'system', content: systemPrompt }, ...chatMessages.filter((m) => m.role !== 'system')];
       }
 
-      const llmConfig = { providerId, modelId, baseUrl: baseUrl || undefined, apiKey: apiKey || undefined };
+      const llmConfig = resolvedLLMConfig;
       /** 本轮请求中所有工具调用记录（服务端执行的 + 最终返回给前端的），供前端展示调用过程 */
       const toolCallHistory: Array<{ id: string; name: string; input: Record<string, unknown>; output?: unknown; error?: string; duration?: number }> = [];
 
       let result = await callLLMWithTools(
-        { messages: chatMessages, providerId, modelId, baseUrl, apiKey },
+        { messages: chatMessages, providerId: llmConfig.providerId, modelId: llmConfig.modelId, baseUrl: llmConfig.baseUrl, apiKey: llmConfig.apiKey },
         finalTools,
       );
       const maxToolSteps = 5;
@@ -555,7 +523,7 @@ export function createChatRouter(
           const content = tr?.error != null ? JSON.stringify({ error: tr.error }) : JSON.stringify(tr?.output ?? null);
           chatMessages.push({ role: 'tool', content, tool_call_id: serverCalls[i].id });
         }
-        result = await callLLMWithTools({ messages: chatMessages, providerId, modelId, baseUrl, apiKey }, finalTools);
+        result = await callLLMWithTools({ messages: chatMessages, providerId: llmConfig.providerId, modelId: llmConfig.modelId, baseUrl: llmConfig.baseUrl, apiKey: llmConfig.apiKey }, finalTools);
         steps++;
       }
 
@@ -594,10 +562,10 @@ export function createChatRouter(
             await runConsiderCapture({
               userMessage: lastUser!.content.trim(),
               assistantReply: result.content.trim(),
-              providerId,
-              modelId,
-              baseUrl,
-              apiKey,
+              providerId: llmConfig.providerId,
+              modelId: llmConfig.modelId,
+              baseUrl: llmConfig.baseUrl,
+              apiKey: llmConfig.apiKey,
               memoryService: memSvc,
               workspaceId: uid,
             });
@@ -615,12 +583,10 @@ export function createChatRouter(
   /** 聊天 Agent 循环：带工具执行。可选 agentId：与指定智能体对话（用其 systemPrompt 与 toolNames）。 */
   router.post('/chat/agent', aiQuota, async (req, res) => {
     try {
-      const { messages, providerId, modelId, baseUrl, apiKey, scene, computerContext, taskSummary, memory, agentId, referenceImagePaths, attachedFilePaths, loadedToolNames: reqLoadedTools } = req.body as {
+      const { messages, providerId, modelId, scene, computerContext, taskSummary, memory, agentId, referenceImagePaths, attachedFilePaths, loadedToolNames: reqLoadedTools } = req.body as {
         messages?: Array<{ role: string; content: string }>;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
         scene?: string;
         computerContext?: string;
         taskSummary?: string;
@@ -646,6 +612,14 @@ export function createChatRouter(
           userSandboxManager.getUserWorkspaceRoot.bind(userSandboxManager),
           db.getConfig.bind(db),
         );
+      }
+      let resolvedLLMConfig;
+      try {
+        resolvedLLMConfig = await getChatLLMConfig(userId ?? '', providerId, modelId);
+      } catch (credsErr: any) {
+        serverLogger.error('chat/agent', `获取 LLM 凭证失败: ${credsErr.message}`);
+        res.status(500).json({ error: credsErr.message || 'LLM 凭证获取失败' });
+        return;
       }
       let systemPrompt: string;
       let allowedToolNames: string[] | undefined;
@@ -712,12 +686,7 @@ export function createChatRouter(
           chatMessages[idx]!.content += `\n\n[用户附带了以下文件（沙箱路径），可直接使用 file.read 读取；若文件较大可先用 memory_embed_add 转向量再用 memory_search 检索相关内容：${pathsStr}]`;
         }
       }
-      const llmConfig = {
-        providerId,
-        modelId,
-        baseUrl: baseUrl || undefined,
-        apiKey: apiKey || undefined,
-      };
+      const llmConfig = resolvedLLMConfig;
       const toolLoadingMode = !agentId ? getToolLoadingMode() : 'all';
       serverLogger.info('chat/agent', `POST /chat/agent [${providerId}/${modelId}] messages=${chatMessages.length}${agentId ? ` agentId=${agentId}` : ''} toolMode=${toolLoadingMode}`);
       const result = await orchestrator.runChatAgentLoop({
@@ -744,10 +713,10 @@ export function createChatRouter(
             await runConsiderCapture({
               userMessage: lastUser!.content.trim(),
               assistantReply: result.content.trim(),
-              providerId,
-              modelId,
-              baseUrl,
-              apiKey,
+              providerId: llmConfig.providerId,
+              modelId: llmConfig.modelId,
+              baseUrl: llmConfig.baseUrl,
+              apiKey: llmConfig.apiKey,
               memoryService: memSvc,
               workspaceId: uid,
             });
@@ -764,12 +733,10 @@ export function createChatRouter(
   /** 聊天 Agent 流式：SSE 推送工具调用进度及最终回复。可选 agentId：与指定智能体对话。 */
   router.post('/chat/agent/stream', aiQuota, async (req, res) => {
     try {
-      const { messages, providerId, modelId, baseUrl, apiKey, scene, computerContext, taskSummary, memory, agentId, referenceImagePaths, attachedFilePaths, loadedToolNames: reqLoadedTools } = req.body as {
+      const { messages, providerId, modelId, scene, computerContext, taskSummary, memory, agentId, referenceImagePaths, attachedFilePaths, loadedToolNames: reqLoadedTools } = req.body as {
         messages?: Array<{ role: string; content: string }>;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
         scene?: string;
         computerContext?: string;
         taskSummary?: string;
@@ -795,6 +762,18 @@ export function createChatRouter(
           userSandboxManager.getUserWorkspaceRoot.bind(userSandboxManager),
           db.getConfig.bind(db),
         );
+      }
+      let resolvedLLMConfig;
+      try {
+        resolvedLLMConfig = await getChatLLMConfig(userId ?? '', providerId, modelId);
+      } catch (credsErr: any) {
+        serverLogger.error('chat/agent/stream', `获取 LLM 凭证失败: ${credsErr.message}`);
+        if (res.headersSent) {
+          res.write(`event: error\ndata: ${JSON.stringify({ error: credsErr.message })}\n\n`);
+        } else {
+          res.status(500).json({ error: credsErr.message || 'LLM 凭证获取失败' });
+        }
+        return;
       }
       let systemPrompt: string;
       let allowedToolNames: string[] | undefined;
@@ -868,12 +847,7 @@ export function createChatRouter(
           chatMessages[idx]!.content += `\n\n[用户附带了以下文件（沙箱路径），可直接使用 file.read 读取；若文件较大可先用 memory_embed_add 转向量再用 memory_search 检索相关内容：${pathsStr}]`;
         }
       }
-      const llmConfig = {
-        providerId,
-        modelId,
-        baseUrl: baseUrl || undefined,
-        apiKey: apiKey || undefined,
-      };
+      const llmConfig = resolvedLLMConfig;
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
@@ -932,10 +906,10 @@ export function createChatRouter(
             await runConsiderCapture({
               userMessage: lastUser!.content.trim(),
               assistantReply: (result.content ?? '').trim(),
-              providerId,
-              modelId,
-              baseUrl,
-              apiKey,
+              providerId: llmConfig.providerId,
+              modelId: llmConfig.modelId,
+              baseUrl: llmConfig.baseUrl,
+              apiKey: llmConfig.apiKey,
               memoryService: memSvc,
               workspaceId: uid,
             });
@@ -957,16 +931,20 @@ export function createChatRouter(
   /** 写作意图分类：使用主脑 intent_classify 场景，返回 intent 与可选的 suggestedPath */
   router.post('/chat/classify-writing-intent', async (req, res) => {
     try {
-      const { userMessage, hasOpenAiDocument, providerId, modelId, baseUrl, apiKey } = req.body as {
+      const { userMessage, hasOpenAiDocument, providerId, modelId } = req.body as {
         userMessage?: string;
         hasOpenAiDocument?: boolean;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
       };
       if (typeof userMessage !== 'string' || !providerId || !modelId) {
         res.status(400).json({ error: '缺少 userMessage、providerId 或 modelId' });
+        return;
+      }
+      const userId = (req as { userId?: string }).userId ?? '';
+      const creds = await getLLMConfigForScheduler(userId, db, subscriptionService, { providerId, modelId });
+      if (!creds) {
+        res.status(500).json({ error: '未配置大模型' });
         return;
       }
       const systemPrompt = getAssembledSystemPrompt({ scene: 'intent_classify', promptMode: 'minimal' });
@@ -978,10 +956,10 @@ export function createChatRouter(
       try {
         content = await callLLM({
           messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }],
-          providerId,
-          modelId,
-          baseUrl,
-          apiKey,
+          providerId: creds.providerId,
+          modelId: creds.modelId,
+          baseUrl: creds.baseUrl,
+          apiKey: creds.apiKey,
         });
       } catch (llmErr: any) {
         const msg = llmErr?.message || '';
@@ -1025,34 +1003,22 @@ export function createChatRouter(
 要求：每行只输出一个问题，不要编号、不要引号、不要其他解释。问题要具体、可操作，长度尽量控制在一行内。`;
   router.post('/chat/suggest-follow-ups', async (req, res) => {
     try {
-      const { userMessage, assistantReply, providerId, modelId, baseUrl, apiKey } = req.body as {
+      const { userMessage, assistantReply, providerId, modelId } = req.body as {
         userMessage?: string;
         assistantReply?: string;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
       };
       const userMsg = typeof userMessage === 'string' ? userMessage.trim() : '';
       const assistantMsg = typeof assistantReply === 'string' ? assistantReply.trim() : '';
       if (!userMsg || !assistantMsg) {
         return res.json({ suggestions: [] });
       }
-      const userId = (req as { userId?: string }).userId;
-      let llmProviderId = providerId;
-      let llmModelId = modelId;
-      let llmBaseUrl = baseUrl;
-      let llmApiKey = apiKey;
-      if (!llmProviderId || !llmModelId) {
-        const cfg = await getLLMConfigForScheduler(userId ?? '', db, subscriptionService);
-        if (cfg) {
-          llmProviderId = cfg.providerId;
-          llmModelId = cfg.modelId;
-          llmBaseUrl = cfg.baseUrl;
-          llmApiKey = cfg.apiKey;
-        }
-      }
-      if (!llmProviderId || !llmModelId) {
+      const userId = (req as { userId?: string }).userId ?? '';
+      const creds = providerId && modelId
+        ? await getLLMConfigForScheduler(userId, db, subscriptionService, { providerId, modelId })
+        : await getLLMConfigForScheduler(userId, db, subscriptionService);
+      if (!creds) {
         return res.json({ suggestions: [] });
       }
       const userContent = `用户问题：\n${userMsg}\n\nAI 回复：\n${assistantMsg.slice(0, 3000)}${assistantMsg.length > 3000 ? '…' : ''}`;
@@ -1061,10 +1027,10 @@ export function createChatRouter(
           { role: 'system', content: FOLLOW_UP_SYSTEM_PROMPT },
           { role: 'user', content: userContent },
         ],
-        providerId: llmProviderId,
-        modelId: llmModelId,
-        baseUrl: llmBaseUrl,
-        apiKey: llmApiKey,
+        providerId: creds.providerId,
+        modelId: creds.modelId,
+        baseUrl: creds.baseUrl,
+        apiKey: creds.apiKey,
       });
       const lines = (raw ?? '')
         .split(/\n/)
@@ -1162,23 +1128,27 @@ export function createChatRouter(
   /** 图片生成：使用配置的 image 模态模型，根据用户描述生成图片（OpenRouter/OpenAI 兼容 modalities: ["image"]） */
   router.post('/chat/generate-image', aiQuota, async (req, res) => {
     try {
-      const { prompt, providerId, modelId, baseUrl, apiKey } = req.body as {
+      const { prompt, providerId, modelId } = req.body as {
         prompt?: string;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
       };
       if (typeof prompt !== 'string' || !prompt.trim() || !providerId || !modelId) {
         res.status(400).json({ error: '缺少 prompt、providerId 或 modelId' });
         return;
       }
+      const userId = (req as { userId?: string }).userId ?? '';
+      const creds = await getLLMConfigForScheduler(userId, db, subscriptionService, { providerId, modelId });
+      if (!creds) {
+        res.status(500).json({ error: '未配置大模型' });
+        return;
+      }
       const result = await callLLMGenerateImage({
         messages: [{ role: 'user', content: prompt.trim() }],
-        providerId,
-        modelId,
-        baseUrl,
-        apiKey,
+        providerId: creds.providerId,
+        modelId: creds.modelId,
+        baseUrl: creds.baseUrl,
+        apiKey: creds.apiKey,
       });
       res.json({ content: result.content, images: result.images });
     } catch (err: any) {

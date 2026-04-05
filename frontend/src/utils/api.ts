@@ -306,19 +306,14 @@ export const api = {
   /** 打开 X 主脑时调用，X 发一条开场消息 */
   postXGreet: () => request<{ content: string }>('/x/greet', { method: 'POST' }),
 
-  /** 用户手动触发 X 立即执行一次（与定时任务同流程）。可选 intent；可选 llm 配置（与系统设置一致时后端优先使用，避免未同步到云端时报未配置） */
-  postXRunNow: (intent?: string, llm?: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string }) =>
+  /** 用户手动触发 X 立即执行一次（与定时任务同流程）。可选 intent；后端根据 providerId/modelId 解析凭证 */
+  postXRunNow: (intent?: string, llm?: { providerId: string; modelId: string }) =>
     request<{ content: string; error?: string }>('/x/run-now', {
       method: 'POST',
       body: JSON.stringify({
         ...(intent != null && intent !== '' ? { intent } : {}),
         ...(llm?.providerId && llm?.modelId
-          ? {
-              providerId: llm.providerId,
-              modelId: llm.modelId,
-              ...(llm.baseUrl != null ? { baseUrl: llm.baseUrl } : {}),
-              ...(llm.apiKey != null ? { apiKey: llm.apiKey } : {}),
-            }
+          ? { providerId: llm.providerId, modelId: llm.modelId }
           : {}),
       }),
       headers: { 'Content-Type': 'application/json' },
@@ -438,13 +433,11 @@ export const api = {
   execCommand: (command: string, cwd?: string) =>
     request<any>('/shell/exec', { method: 'POST', body: JSON.stringify({ command, cwd }) }),
 
-  // Chat (P2: 普通对话走真实 LLM，支持 scene 注入主脑提示)
+  // Chat (凭证由服务器端根据 providerId/modelId 统一解析，前端不再传 apiKey)
   chat: (body: {
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     providerId: string;
     modelId: string;
-    baseUrl?: string;
-    apiKey?: string;
     scene?: string;
     capabilities?: string;
     computerContext?: string;
@@ -643,34 +636,30 @@ export const api = {
     });
   },
 
-  /** 写作意图分类：调用后端主脑 intent_classify 场景 */
+  /** 写作意图分类：凭证由服务器端统一解析 */
   classifyWritingIntent: (body: {
     userMessage: string;
     hasOpenAiDocument: boolean;
     providerId: string;
     modelId: string;
-    baseUrl?: string;
-    apiKey?: string;
   }) =>
     request<{ intent: 'generate_image' | 'generate_and_save_to_editor' | 'save_to_editor' | 'edit_current_document' | 'normal_chat' | 'create_task'; suggestedPath?: string }>('/chat/classify-writing-intent', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  /** 图片生成：使用配置的 image 模态模型，根据描述生成图片（OpenRouter modalities: ["image"]） */
-  generateImage: (body: { prompt: string; providerId: string; modelId: string; baseUrl?: string; apiKey?: string }) =>
+  /** 图片生成：凭证由服务器端统一解析 */
+  generateImage: (body: { prompt: string; providerId: string; modelId: string }) =>
     request<{ content: string; images: string[] }>('/chat/generate-image', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
-  /** 从一条 AI 回复中提取「仅正文」：使用主脑 extract_clean_content 场景 */
+  /** 从一条 AI 回复中提取「仅正文」：凭证由服务器端统一解析 */
   extractCleanContent: async (body: {
     message: string;
     providerId: string;
     modelId: string;
-    baseUrl?: string;
-    apiKey?: string;
   }): Promise<string> => {
     const res = await request<{ content: string }>('/chat', {
       method: 'POST',
@@ -679,22 +668,18 @@ export const api = {
         scene: 'extract_clean_content',
         providerId: body.providerId,
         modelId: body.modelId,
-        baseUrl: body.baseUrl,
-        apiKey: body.apiKey,
       }),
     });
     const out = (res?.content ?? '').trim();
     return out || body.message;
   },
 
-  /** 带 tools 的聊天；支持 scene 注入主脑提示 */
+  /** 带 tools 的聊天；支持 scene 注入主脑提示。凭证由服务器端统一解析 */
   chatWithTools: (body: {
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     tools: Array<{ name: string; description: string; parameters: Record<string, unknown> }>;
     providerId: string;
     modelId: string;
-    baseUrl?: string;
-    apiKey?: string;
     scene?: string;
     capabilities?: string;
     computerContext?: string;
@@ -711,13 +696,11 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  /** 聊天 Agent 循环：带工具执行。loadedToolNames：按需加载模式下本会话已加载的工具，由上次响应返回，跨消息持久化。 */
+  /** 聊天 Agent 循环：带工具执行。凭证由服务器端统一解析 */
   chatAgent: (body: {
     messages: Array<{ role: string; content: string }>;
     providerId: string;
     modelId: string;
-    baseUrl?: string;
-    apiKey?: string;
     scene?: string;
     computerContext?: string;
     taskSummary?: string;
@@ -731,14 +714,12 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  /** 聊天 Agent 流式：SSE 推送工具调用进度及内容片段。loadedToolNames 按需加载模式下本会话已加载的工具。返回 { content, loadedToolNames? }。 */
+  /** 聊天 Agent 流式：SSE 推送工具调用进度及内容片段。凭证由服务器端统一解析。返回 { content, loadedToolNames? }。 */
   chatAgentStream: async (
     body: {
       messages: Array<{ role: string; content: string }>;
       providerId: string;
       modelId: string;
-      baseUrl?: string;
-      apiKey?: string;
       scene?: string;
       computerContext?: string;
       taskSummary?: string;
@@ -818,14 +799,12 @@ export const api = {
     return loadedToolNames?.length ? { content, loadedToolNames } : { content };
   },
 
-  /** 流式聊天：支持 scene 注入主脑提示；onChunk 每收到一段内容调用一次。可选 signal 用于中止请求。 */
+  /** 流式聊天：支持 scene 注入主脑提示；凭证由服务器端统一解析。onChunk 每收到一段内容调用一次。可选 signal 用于中止请求。 */
   chatStream: async (
     body: {
       messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
       providerId: string;
       modelId: string;
-      baseUrl?: string;
-      apiKey?: string;
       scene?: string;
       capabilities?: string;
       computerContext?: string;
@@ -883,14 +862,12 @@ export const api = {
     return full;
   },
 
-  /** 编辑器 Agent 流式写入：主 AI 对话驱动，后端根据 instruction 流式生成并推送到指定编辑器（通过 WebSocket editor_stream），先返回 202 接受请求 */
+  /** 编辑器 Agent 流式写入：凭证由服务器端统一解析。后端流式推送到指定编辑器（通过 WebSocket editor_stream），先返回 202 接受请求 */
   editorAgentStream: (body: {
     windowId: string;
     instruction: string;
     providerId: string;
     modelId: string;
-    baseUrl?: string;
-    apiKey?: string;
   }) =>
     request<{ ok: boolean; windowId: string }>('/chat/editor-agent-stream', {
       method: 'POST',
