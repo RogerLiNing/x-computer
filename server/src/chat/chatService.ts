@@ -20,6 +20,8 @@ export interface ChatRequest {
   modelId: string;
   baseUrl?: string;
   apiKey?: string;
+  /** API 类型：'openai' 使用 OpenAI 兼容接口，'anthropic' 使用 Anthropic 接口 */
+  apiType?: 'openai' | 'anthropic';
 }
 
 /** OpenAI-style tool definition for function calling */
@@ -57,11 +59,11 @@ export interface GenerateImageResult {
 
 /**
  * Call the configured LLM and return the assistant reply text.
- * 仅对 Anthropic 走专用 API，其余一律按 OpenAI 兼容接口调用（不限制提供商）。
+ * 根据 apiType 选择使用 Anthropic 或 OpenAI 兼容接口。
  * @throws Error with message suitable for frontend if request fails
  */
 export async function callLLM(req: ChatRequest): Promise<string> {
-  const { messages, providerId, modelId, baseUrl, apiKey } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType } = req;
 
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -70,7 +72,10 @@ export async function callLLM(req: ChatRequest): Promise<string> {
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
 
-  if (providerId === 'anthropic') {
+  // 优先使用 apiType，否则根据 providerId 判断
+  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+
+  if (useAnthropic) {
     return callAnthropic({ effectiveBase, modelId, apiKey: key, messages });
   }
 
@@ -83,7 +88,7 @@ export async function callLLM(req: ChatRequest): Promise<string> {
  * Only OpenAI-compatible providers support tools; Anthropic returns content only and toolCalls: [].
  */
 export async function callLLMWithTools(req: ChatRequest, tools: LLMToolDef[]): Promise<LLMWithToolsResult> {
-  const { messages, providerId, modelId, baseUrl, apiKey } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType } = req;
 
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -92,7 +97,10 @@ export async function callLLMWithTools(req: ChatRequest, tools: LLMToolDef[]): P
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
 
-  if (providerId === 'anthropic' || tools.length === 0) {
+  // 优先使用 apiType，否则根据 providerId 判断
+  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+
+  if (useAnthropic || tools.length === 0) {
     const content = await callLLM(req);
     return { content, toolCalls: [] };
   }
@@ -115,7 +123,8 @@ export async function callLLMWithToolsStream(
   tools: LLMToolDef[],
   onChunk: (chunk: string) => void,
 ): Promise<LLMWithToolsResult> {
-  if (req.providerId === 'anthropic' || tools.length === 0) {
+  const useAnthropic = req.apiType === 'anthropic' || (req.apiType === undefined && req.providerId === 'anthropic');
+  if (useAnthropic || tools.length === 0) {
     const result = await callLLMWithTools(req, tools);
     if (result.content) onChunk(result.content);
     return result;
@@ -137,7 +146,7 @@ export async function callLLMWithToolsStream(
  * @throws Error with message suitable for frontend if request fails
  */
 export async function* callLLMStream(req: ChatRequest): AsyncGenerator<string> {
-  const { messages, providerId, modelId, baseUrl, apiKey } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType } = req;
 
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -146,7 +155,10 @@ export async function* callLLMStream(req: ChatRequest): AsyncGenerator<string> {
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
 
-  if (providerId === 'anthropic') {
+  // 优先使用 apiType，否则根据 providerId 判断
+  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+
+  if (useAnthropic) {
     yield* streamAnthropic({ effectiveBase, modelId, apiKey: key, messages });
     return;
   }
@@ -165,14 +177,16 @@ export type GenerateImageOptions = { referenceImageUrls?: string[] };
 export async function callLLMGenerateImage(
   req: ChatRequest & GenerateImageOptions,
 ): Promise<GenerateImageResult> {
-  const { messages, providerId, modelId, baseUrl, apiKey, referenceImageUrls } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType, referenceImageUrls } = req;
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   if (!lastUser) throw new Error('需要至少一条用户消息');
 
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
-  if (providerId === 'anthropic') {
+  // 优先使用 apiType，否则根据 providerId 判断
+  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+  if (useAnthropic) {
     throw new Error('图片生成当前仅支持 OpenAI 兼容接口（如 OpenRouter）或阿里 DashScope，请选用支持 image 模态的提供商');
   }
 
@@ -424,6 +438,26 @@ async function callOpenAICompatibleGenerateImage(opts: {
   return { content, images };
 }
 
+/** 去除掉掉 <think>标签及其内容 */
+function stripThinkTags(text: string): string {
+  let result = text;
+  const startTag = '<' + 'think>';
+  const endTag = '</' + 'think>';
+  // 去除闭合的 <think>...</think>
+  while (true) {
+    const start = result.indexOf(startTag);
+    if (start === -1) break;
+    const end = result.indexOf(endTag, start);
+    if (end === -1) {
+      // 未闭合，截断到 start
+      result = result.substring(0, start);
+      break;
+    }
+    result = result.substring(0, start) + result.substring(end + endTag.length);
+  }
+  return result.trim();
+}
+
 async function callOpenAICompatible(opts: {
   effectiveBase: string;
   modelId: string;
@@ -433,12 +467,14 @@ async function callOpenAICompatible(opts: {
   const { effectiveBase, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
-  const body = {
+  const body: Record<string, unknown> = {
     model: effectiveModelForRequest(modelId, effectiveBase),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    max_tokens: 1024,
+    max_tokens: 4096,
   };
-  if (body.model === undefined) delete (body as any).model;
+  if (body.model === undefined) delete body.model;
+  // 对思考模型启用 reasoning_split，将思考内容分离到 reasoning_details 字段
+  body.reasoning_split = true;
 
   let res: Response;
   try {
@@ -464,8 +500,24 @@ async function callOpenAICompatible(opts: {
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
 
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== 'string') throw new Error('模型未返回有效回复');
+  let content = data?.choices?.[0]?.message?.content;
+  if (typeof content !== 'string') {
+    // 尝试从 reasoning_content 获取（某些模型）
+    const reasoningContent = data?.choices?.[0]?.message?.reasoning_content;
+    if (typeof reasoningContent === 'string' && reasoningContent.trim()) {
+      content = reasoningContent;
+    } else {
+      // 记录详细错误信息用于调试
+      serverLogger.error(
+        'chatService/callOpenAICompatible',
+        '模型返回格式异常',
+        `modelId=${modelId} response=${JSON.stringify(data).substring(0, 500)}`
+      );
+      throw new Error('模型未返回有效回复，请检查模型配置和 Base URL');
+    }
+  }
+  // 兼容不支持 reasoning_split 的模型，去除掉掉 <think>标签
+  content = stripThinkTags(content);
   return content;
 }
 
@@ -505,14 +557,16 @@ async function callOpenAICompatibleWithTools(opts: {
     return { role: m.role, content: m.content || '' };
   });
 
-  const body = {
+  const body: Record<string, unknown> = {
     model: effectiveModelForRequest(modelId, effectiveBase),
     messages: apiMessages,
     max_tokens: 4096,
     tools: toolsBody,
-    tool_choice: 'auto' as const,
+    tool_choice: 'auto',
   };
-  if (body.model === undefined) delete (body as any).model;
+  if (body.model === undefined) delete body.model;
+  // 对思考模型启用 reasoning_split，将思考内容分离到 reasoning_details 字段
+  body.reasoning_split = true;
 
   const systemMsg = apiMessages.find((m) => m.role === 'system');
   const systemLen = typeof systemMsg?.content === 'string' ? systemMsg.content.length : 0;
@@ -548,7 +602,8 @@ async function callOpenAICompatibleWithTools(opts: {
   const msg = data?.choices?.[0]?.message;
   if (!msg) throw new Error('模型未返回有效回复');
   const content = msg.content;
-  const text = typeof content === 'string' ? content : '';
+  // 兼容不支持 reasoning_split 的模型，去除掉掉 <think>标签
+  const text = typeof content === 'string' ? stripThinkTags(content) : '';
   const rawToolCalls = msg.tool_calls || [];
   const toolCalls: LLMToolCall[] = [];
   for (const tc of rawToolCalls) {
@@ -761,9 +816,18 @@ async function callAnthropic(opts: {
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
 
-  const content = data?.content?.[0]?.text;
-  if (typeof content !== 'string') throw new Error('模型未返回有效回复');
-  return content;
+  // Anthropic 返回 content 数组，包含 thinking/text/tool_use 等类型块
+  const contentBlocks = data?.content;
+  if (!Array.isArray(contentBlocks)) throw new Error('模型未返回有效回复');
+  // 提取所有 text 类型的内容块，忽略 thinking 块
+  const textParts: string[] = [];
+  for (const block of contentBlocks) {
+    if (block?.type === 'text' && typeof block.text === 'string') {
+      textParts.push(block.text);
+    }
+  }
+  if (textParts.length === 0) throw new Error('模型未返回有效回复');
+  return textParts.join('\n');
 }
 
 // ── Streaming (OpenAI-compatible) ─────────────────────────────
@@ -777,13 +841,15 @@ async function* streamOpenAICompatible(opts: {
   const { effectiveBase, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
-  const body = {
+  const body: Record<string, unknown> = {
     model: effectiveModelForRequest(modelId, effectiveBase),
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    max_tokens: 1024,
+    max_tokens: 4096,
     stream: true,
   };
-  if (body.model === undefined) delete (body as any).model;
+  if (body.model === undefined) delete body.model;
+  // 对思考模型启用 reasoning_split，将思考内容分离到 reasoning_details 字段
+  body.reasoning_split = true;
 
   let res: Response;
   try {
