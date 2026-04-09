@@ -25,3 +25,4 @@ export { createSlackRouter } from './messaging/slack.js';
 export { createQQRouter } from './messaging/qq.js';
 export { createAdminRouter } from './adminUtils.js';
 export { createApiRouter } from './api.js';
+export { createPageIndexRouter } from './pageindex.js';
