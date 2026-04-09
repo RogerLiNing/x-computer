@@ -64,6 +64,7 @@ export class ToolVectorStore {
   private async load(): Promise<PersistedIndex> {
     if (this.cached) return this.cached;
     try {
+      await this.ensureDir();  // 确保目录存在
       const raw = await readFile(this.indexPath, 'utf-8');
       const data = JSON.parse(raw) as PersistedIndex;
       if (data && typeof data.contentHash === 'string' && Array.isArray(data.entries)) {
