@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+
+declare global {
+  interface Window {
+    _voiceRecognition?: { stop: () => void };
+  }
+}
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -57,6 +63,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [snippetFilter, setSnippetFilter] = useState('');
   const [calcOpen, setCalcOpen] = useState(false);
   const [calcExpr, setCalcExpr] = useState('');
+  /** 当前正在录音的语音识别 ID，null 表示未在录音 */
+  const [recordingId, setRecordingId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
@@ -180,6 +188,53 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const stopSpeaking = () => {
     window.speechSynthesis.cancel();
     setSpeakingMsgId(null);
+  };
+
+  /** 启动/停止语音输入（Web Speech API） */
+  const toggleVoiceInput = () => {
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) { addNotification({ type: 'error', title: '不支持语音', message: '当前浏览器不支持语音识别' }); return; }
+
+    if (recordingId) {
+      // 停止录音
+      window._voiceRecognition?.stop();
+      setRecordingId(null);
+      return;
+    }
+
+    const recognition = new SR();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'zh-CN';
+
+    const id = `vr-${Date.now()}`;
+    setRecordingId(id);
+
+    recognition.onresult = (event: any) => {
+      let transcript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        transcript += event.results[i][0].transcript;
+      }
+      if (transcript.trim()) {
+        setInput((prev) => {
+          const joined = prev ? `${prev} ${transcript}` : transcript;
+          return joined;
+        });
+      }
+    };
+
+    recognition.onend = () => {
+      if (recordingId === id) setRecordingId(null);
+    };
+    recognition.onerror = (event: any) => {
+      if (recordingId === id) setRecordingId(null);
+      if (event.error !== 'aborted') {
+        addNotification({ type: 'error', title: '语音识别失败', message: event.error });
+      }
+    };
+
+    (window as any)._voiceRecognition = recognition;
+    recognition.start();
   };
 
   // Calculator: safe math evaluation
@@ -1928,6 +1983,18 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             title={attachedImages.length >= 3 ? '最多 3 张参考图' : '上传参考图（1–3 张），将随消息发送供图像编辑使用'}
           >
             <ImagePlus size={16} className="sm:size-4" />
+          </button>
+          <button
+            type="button"
+            className={`p-2 sm:p-1 rounded-lg sm:rounded transition-colors shrink-0 mb-0.5 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
+              recordingId
+                ? 'text-red-400 bg-red-400/20 animate-pulse'
+                : 'text-desktop-muted hover:text-desktop-text hover:bg-white/10'
+            }`}
+            onClick={toggleVoiceInput}
+            title={recordingId ? '停止录音' : '语音输入'}
+          >
+            {recordingId ? <MicOff size={16} className="sm:size-4" /> : <Mic size={16} className="sm:size-4" />}
           </button>
           <button
             type="button"
