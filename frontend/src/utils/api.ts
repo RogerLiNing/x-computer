@@ -228,6 +228,21 @@ export const api = {
       body: JSON.stringify({ mode }),
     }),
 
+  /** LLM 分析任务意图，评估复杂度 */
+  estimateTask: (intent: string, steps: string[], providerId: string, modelId: string, baseUrl?: string, apiKey?: string) =>
+    request<{
+      difficulty: string;
+      estimatedSteps: number;
+      estimatedMinutes: number;
+      requiredSkills: string[];
+      potentialChallenges: string[];
+      riskLevel: string;
+      summary: string;
+    }>('/tasks/estimate', {
+      method: 'POST',
+      body: JSON.stringify({ intent, steps, providerId, modelId, baseUrl, apiKey }),
+    }),
+
   // Mode
   getMode: () => request<{ mode: string }>('/mode'),
 

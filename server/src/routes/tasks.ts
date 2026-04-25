@@ -129,6 +129,31 @@ export function createTasksRouter(
     }
   });
 
+  /**
+   * POST /api/tasks/estimate — LLM 分析任务意图并评估复杂度
+   * body: { intent: string, steps?: string[], providerId, modelId, baseUrl?, apiKey? }
+   * 返回: TaskEstimate
+   */
+  router.post('/tasks/estimate', async (req, res) => {
+    const { intent, steps, providerId, modelId, baseUrl, apiKey } = req.body ?? {};
+    if (!intent || !providerId || !modelId) {
+      res.status(400).json({ error: 'Missing intent, providerId, or modelId' });
+      return;
+    }
+    try {
+      const { estimateTaskComplexity } = await import('../orchestrator/TaskEstimateService.js');
+      const estimate = await estimateTaskComplexity(
+        intent,
+        Array.isArray(steps) ? steps : [],
+        { providerId, modelId, baseUrl, apiKey },
+      );
+      res.json(estimate);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Estimation failed', detail: msg });
+    }
+  });
+
   /** Get a specific task（运行用户只能查看自己的任务） */
   router.get('/tasks/:id', (req, res) => {
     const userId = (req as { userId?: string }).userId;

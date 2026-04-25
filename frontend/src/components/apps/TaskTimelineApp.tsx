@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useConnectionStore } from '@/store/connectionStore';
+import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { useTaskStore } from '@/store/taskStore';
 import { api, isQuotaError } from '@/utils/api';
 import {
   Clock, CheckCircle2, XCircle, Loader2, AlertTriangle,
   Play, Pause, RotateCcw, Eye, Shield, Zap, RefreshCw,
-  Trash2, Filter, ChevronDown, ArrowRight,
+  Trash2, Filter, ChevronDown, ArrowRight, Brain,
 } from 'lucide-react';
 import type { Task, AuditEntry, TaskStatus, TaskDomain } from '@shared/index';
 
@@ -90,6 +91,16 @@ export function TaskTimelineApp({ windowId }: Props) {
   const [filterDomain, setFilterDomain] = useState<TaskDomain | 'all'>('all');
   const [filterStatus, setFilterStatus] = useState<TaskStatus | 'all'>('all');
   const [loading, setLoading] = useState(false);
+  const [complexity, setComplexity] = useState<{
+    difficulty: string;
+    estimatedSteps: number;
+    estimatedMinutes: number;
+    requiredSkills: string[];
+    potentialChallenges: string[];
+    riskLevel: string;
+    summary: string;
+  } | null>(null);
+  const [complexityLoading, setComplexityLoading] = useState(false);
 
   // Load tasks, audit, and X scheduled jobs from backend on mount
   useEffect(() => {
@@ -446,6 +457,78 @@ export function TaskTimelineApp({ windowId }: Props) {
                       </>
                     )}
                   </div>
+
+                  {/* Complexity estimation */}
+                  {(selected.status === 'running' || selected.status === 'pending' || selected.status === 'planning') && (
+                    <div className="mt-3">
+                      {!complexity ? (
+                        <button
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/15 text-purple-400 text-xs hover:bg-purple-500/25 transition-colors"
+                          onClick={async () => {
+                            const llmConfig = useLLMConfigStore.getState().llmConfig;
+                            const chatSel = llmConfig?.defaultByModality?.chat;
+                            const providerId = chatSel?.providerId ?? llmConfig?.providers?.[0]?.id;
+                            const provider = llmConfig?.providers?.find((p: { id: string }) => p.id === providerId);
+                            const modelId = chatSel?.modelId ?? '__custom__';
+                            const baseUrl = provider?.baseUrl;
+                            if (!providerId || !modelId) {
+                              addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' });
+                              return;
+                            }
+                            setComplexityLoading(true);
+                            try {
+                              const steps = selectedSteps.filter((s) => s.status !== 'completed').map((s) => s.action);
+                              const est = await api.estimateTask(selected.description, steps, providerId, modelId, baseUrl);
+                              setComplexity(est);
+                            } catch {
+                              addNotification({ type: 'error', title: '复杂度分析失败', message: '' });
+                            } finally {
+                              setComplexityLoading(false);
+                            }
+                          }}
+                        >
+                          {complexityLoading ? <Loader2 size={12} className="animate-spin" /> : <Brain size={12} />}
+                          {complexityLoading ? '分析中...' : '复杂度分析'}
+                        </button>
+                      ) : (
+                        <div className="p-3 bg-purple-500/10 rounded-xl border border-purple-500/20 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <Brain size={14} className="text-purple-400" />
+                            <span className="text-xs font-medium text-purple-300">复杂度分析</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                              complexity.difficulty === 'complex' ? 'bg-red-500/20 text-red-400' :
+                              complexity.difficulty === 'hard' ? 'bg-orange-500/20 text-orange-400' :
+                              complexity.difficulty === 'medium' ? 'bg-yellow-500/20 text-yellow-400' :
+                              'bg-green-500/20 text-green-400'
+                            }`}>
+                              {complexity.difficulty === 'complex' ? '极复杂' :
+                               complexity.difficulty === 'hard' ? '困难' :
+                               complexity.difficulty === 'medium' ? '中等' : '简单'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-desktop-muted">
+                            预计 {complexity.estimatedSteps} 步 · 约 {complexity.estimatedMinutes} 分钟
+                          </div>
+                          {complexity.requiredSkills.length > 0 && (
+                            <div className="text-[10px] text-desktop-muted/70">
+                              所需技能：{complexity.requiredSkills.join(', ')}
+                            </div>
+                          )}
+                          {complexity.potentialChallenges.length > 0 && (
+                            <div className="text-[10px] text-amber-400/80">
+                              潜在挑战：{complexity.potentialChallenges.join(' · ')}
+                            </div>
+                          )}
+                          <button
+                            className="text-[10px] text-purple-400/60 hover:text-purple-400 transition-colors"
+                            onClick={() => setComplexity(null)}
+                          >
+                            收起
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Approval banner */}
                   {selected.status === 'awaiting_approval' && (() => {
