@@ -344,7 +344,11 @@
     "requestBody": "请求体",
     "responseBody": "响应体",
     "send": "发送",
-    "testing": "测试中…"
+    "testing": "测试中…",
+    "systemPrompts": "系统提示词",
+    "systemPromptsDesc": "按模式自定义 AI 行为",
+    "enterSystemPrompt": "在此输入系统提示词...",
+    "enabled": "已启用"
   },
 
   "onboarding": {

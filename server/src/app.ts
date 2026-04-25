@@ -32,6 +32,7 @@ import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createLLMRouter } from './routes/llm.js';
 import { createCouncilRouter } from './routes/council.js';
 import { createPromptTemplatesRouter } from './routes/promptTemplates.js';
+import { createSystemPromptsRouter } from './routes/systemPrompts.js';
 import { createContentManagementRoutes } from './routes/contentManagement.js';
 import { createPageIndexRouter } from './routes/pageindex.js';
 import { createFeatureFlagsRouter } from './routes/featureFlags.js';
@@ -326,6 +327,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/llm', createCouncilRouter(db as any, subscriptionService));
   app.use('/api/scheduled-jobs', createScheduledJobsRouter(db));
   app.use('/api/prompt-templates', createPromptTemplatesRouter(db));
+  app.use('/api/admin/system-prompts', createSystemPromptsRouter(db));
   app.use('/api/notification-preferences', createNotificationPreferencesRouter(db));
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));

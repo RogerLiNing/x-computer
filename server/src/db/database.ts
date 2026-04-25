@@ -358,6 +358,19 @@ export class SqliteAppDatabase {
       CREATE INDEX IF NOT EXISTS idx_prompt_templates_user ON prompt_templates(user_id);
       CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates(user_id, category);
     `);
+    // system_prompts 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS system_prompts (
+        id TEXT PRIMARY KEY,
+        mode TEXT NOT NULL,
+        content TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_system_prompts_mode ON system_prompts(mode);
+    `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -1220,6 +1233,32 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM prompt_templates WHERE id = ? AND user_id = ?').run(id, userId);
   }
 
+  // ── System Prompts ────────────────────────────────────────
+
+  upsertSystemPrompt(prompt: {
+    id: string; mode: string; content: string; enabled: boolean; created_by: string | null; created_at: number; updated_at: number;
+  }): void {
+    this.db.prepare(
+      'INSERT INTO system_prompts (id, mode, content, enabled, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET content=excluded.content, enabled=excluded.enabled, updated_at=excluded.updated_at',
+    ).run(prompt.id, prompt.mode, prompt.content, prompt.enabled ? 1 : 0, prompt.created_by, prompt.created_at, prompt.updated_at);
+  }
+
+  listSystemPrompts(): {
+    id: string; mode: string; content: string; enabled: number; created_by: string | null; created_at: number; updated_at: number;
+  }[] {
+    return this.db.prepare('SELECT * FROM system_prompts ORDER BY mode ASC').all() as any;
+  }
+
+  getSystemPromptByMode(mode: string): {
+    id: string; mode: string; content: string; enabled: number; created_by: string | null; created_at: number; updated_at: number;
+  } | undefined {
+    return this.db.prepare('SELECT * FROM system_prompts WHERE mode = ?').get(mode) as any;
+  }
+
+  deleteSystemPrompt(id: string): void {
+    this.db.prepare('DELETE FROM system_prompts WHERE id = ?').run(id);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -1586,6 +1625,26 @@ export class SqliteDatabaseAdapter {
   }
   deletePromptTemplate(id: string, userId: string): Promise<void> {
     this.db.deletePromptTemplate(id, userId);
+    return Promise.resolve();
+  }
+  upsertSystemPrompt(prompt: {
+    id: string; mode: string; content: string; enabled: boolean; created_by: string | null; created_at: number; updated_at: number;
+  }): Promise<void> {
+    this.db.upsertSystemPrompt(prompt);
+    return Promise.resolve();
+  }
+  listSystemPrompts(): Promise<{
+    id: string; mode: string; content: string; enabled: number; created_by: string | null; created_at: number; updated_at: number;
+  }[]> {
+    return Promise.resolve(this.db.listSystemPrompts());
+  }
+  getSystemPromptByMode(mode: string): Promise<{
+    id: string; mode: string; content: string; enabled: number; created_by: string | null; created_at: number; updated_at: number;
+  } | undefined> {
+    return Promise.resolve(this.db.getSystemPromptByMode(mode));
+  }
+  deleteSystemPrompt(id: string): Promise<void> {
+    this.db.deleteSystemPrompt(id);
     return Promise.resolve();
   }
   close(): void {

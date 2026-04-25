@@ -315,6 +315,17 @@ export class MysqlDatabase {
     )`, [], true);
     await this.ensureIndex('prompt_templates', 'idx_prompt_templates_user', 'CREATE INDEX idx_prompt_templates_user ON prompt_templates(user_id)', true);
     await this.ensureIndex('prompt_templates', 'idx_prompt_templates_category', 'CREATE INDEX idx_prompt_templates_category ON prompt_templates(user_id, category)', true);
+
+    await this._run(`CREATE TABLE IF NOT EXISTS system_prompts (
+      id VARCHAR(255) PRIMARY KEY,
+      mode VARCHAR(64) NOT NULL,
+      content TEXT NOT NULL,
+      enabled INT NOT NULL DEFAULT 0,
+      created_by VARCHAR(255),
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )`, [], true);
+    await this.ensureIndex('system_prompts', 'idx_system_prompts_mode', 'CREATE INDEX idx_system_prompts_mode ON system_prompts(mode)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1279,6 +1290,36 @@ export class MysqlDatabase {
 
   async deletePromptTemplate(id: string, userId: string): Promise<void> {
     await this._run('DELETE FROM prompt_templates WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
+  // ── System Prompts ────────────────────────────────────────
+
+  async upsertSystemPrompt(prompt: {
+    id: string; mode: string; content: string; enabled: boolean; created_by: string | null; created_at: number; updated_at: number;
+  }): Promise<void> {
+    await this._run(
+      `INSERT INTO system_prompts (id, mode, content, enabled, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE content=VALUES(content), enabled=VALUES(enabled), updated_at=VALUES(updated_at)`,
+      [prompt.id, prompt.mode, prompt.content, prompt.enabled ? 1 : 0, prompt.created_by, prompt.created_at, prompt.updated_at],
+    );
+  }
+
+  async listSystemPrompts(): Promise<{
+    id: string; mode: string; content: string; enabled: number; created_by: string | null; created_at: number; updated_at: number;
+  }[]> {
+    return await this._query('SELECT * FROM system_prompts ORDER BY mode ASC');
+  }
+
+  async getSystemPromptByMode(mode: string): Promise<{
+    id: string; mode: string; content: string; enabled: number; created_by: string | null; created_at: number; updated_at: number;
+  } | undefined> {
+    const rows = await this._query('SELECT * FROM system_prompts WHERE mode = ?', [mode]);
+    return rows[0] as any;
+  }
+
+  async deleteSystemPrompt(id: string): Promise<void> {
+    await this._run('DELETE FROM system_prompts WHERE id = ?', [id]);
   }
 
   close(): void {

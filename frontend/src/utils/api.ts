@@ -601,6 +601,25 @@ export const api = {
 
   // ── 公告管理 ────────────────────────────────────────────────
 
+  // ── 系统提示词 ────────────────────────────────────────────────
+
+  systemPromptsList: () =>
+    request<{ success: boolean; data: Array<{
+      id: string; mode: string; content: string; enabled: boolean;
+      createdBy: string | null; createdAt: number; updatedAt: number;
+    }> }>('/admin/system-prompts'),
+
+  systemPromptsUpdate: (mode: string, params: { content: string; enabled?: boolean }) =>
+    request<{ success: boolean; data: {
+      id: string; mode: string; content: string; enabled: boolean;
+      createdBy: string | null; createdAt: number; updatedAt: number;
+    } }>(`/admin/system-prompts/${encodeURIComponent(mode)}`, { method: 'PUT', body: JSON.stringify(params) }),
+
+  systemPromptsDelete: (id: string) =>
+    request<{ success: boolean }>(`/admin/system-prompts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ── 公告管理 ────────────────────────────────────────────────
+
   announcementsList: () =>
     request<{ announcements: Array<{
       id: string; title: string; title_en: string | null;

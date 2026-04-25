@@ -338,7 +338,11 @@
     "requestBody": "Request Body",
     "responseBody": "Response Body",
     "send": "Send",
-    "testing": "Testing…"
+    "testing": "Testing…",
+    "systemPrompts": "System Prompts",
+    "systemPromptsDesc": "Customize AI behavior by mode",
+    "enterSystemPrompt": "Enter system prompt here...",
+    "enabled": "Enabled"
   },
 
   "onboarding": {

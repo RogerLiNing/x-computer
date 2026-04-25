@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1705,6 +1705,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'auditlog', labelKey: 'settings.auditLog', icon: ShieldAlert },
     { id: 'templates', labelKey: 'settings.promptTemplates', icon: FileText },
     { id: 'announcements', labelKey: 'settings.announcements', icon: Bell },
+    { id: 'systemprompts', labelKey: 'settings.systemPrompts', icon: Brain },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1927,10 +1928,179 @@ export function SettingsApp({ windowId }: Props) {
         {tab === 'announcements' && (
           <AnnouncementsSettings />
         )}
+
+        {tab === 'systemprompts' && (
+          <SystemPromptsSettings />
+        )}
       </div>
     </div>
   );
 }
+
+// ── System Prompts Editor ───────────────────────────────────
+
+const PROMPT_MODES = [
+  { value: 'x_brain', label: 'X Brain', description: 'The main AI brain agent that can execute tasks autonomously' },
+  { value: 'ai_assistant', label: 'AI Assistant', description: 'Chat assistant mode for interactive conversations' },
+  { value: 'workflow', label: 'Workflow Agent', description: 'Used for executing workflow tasks' },
+];
+
+function SystemPromptsSettings() {
+  const { t } = useTranslation();
+  const [prompts, setPrompts] = useState<Record<string, {
+    id: string; mode: string; content: string; enabled: boolean; createdAt: number; updatedAt: number;
+  }>>({});
+  const [loading, setLoading] = useState(true);
+  const [editingMode, setEditingMode] = useState<string | null>(null);
+  const [formContent, setFormContent] = useState('');
+  const [formEnabled, setFormEnabled] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const fetchPrompts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.systemPromptsList();
+      const byMode: typeof prompts = {};
+      for (const p of data.data) {
+        byMode[p.mode] = p;
+      }
+      setPrompts(byMode);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchPrompts(); }, [fetchPrompts]);
+
+  const startEdit = (mode: string) => {
+    const p = prompts[mode];
+    setEditingMode(mode);
+    setFormContent(p?.content || '');
+    setFormEnabled(p?.enabled ?? false);
+  };
+
+  const handleSave = async () => {
+    if (!editingMode || !formContent.trim()) return;
+    setSaving(true);
+    try {
+      const result = await api.systemPromptsUpdate(editingMode, { content: formContent, enabled: formEnabled });
+      setPrompts((prev) => ({ ...prev, [editingMode]: result.data }));
+      setEditingMode(null);
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (mode: string) => {
+    const p = prompts[mode];
+    if (!p || !confirm('Delete this system prompt?')) return;
+    try {
+      await api.systemPromptsDelete(p.id);
+      const next = { ...prompts };
+      delete next[mode];
+      setPrompts(next);
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.systemPrompts', 'System Prompts')}</h3>
+        <p className="text-[11px] text-desktop-muted mt-0.5">
+          {t('settings.systemPromptsDesc', 'Customize AI behavior by mode. Changes apply immediately.')}
+        </p>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', 'Loading…')}</div>
+      ) : (
+        <div className="space-y-3">
+          {PROMPT_MODES.map((m) => {
+            const p = prompts[m.value];
+            const isEditing = editingMode === m.value;
+            return (
+              <div key={m.value} className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
+                <div className="px-3 py-2.5">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium text-desktop-text">{m.label}</span>
+                      {p?.enabled ? (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">ENABLED</span>
+                      ) : (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-desktop-muted/40">DISABLED</span>
+                      )}
+                    </div>
+                    {!isEditing && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => startEdit(m.value)}
+                          className="px-2 py-1 rounded text-[10px] bg-white/10 hover:bg-white/20 text-desktop-muted transition-colors"
+                        >
+                          {p ? 'Edit' : 'Create'}
+                        </button>
+                        {p && (
+                          <button
+                            onClick={() => handleDelete(m.value)}
+                            className="p-1 rounded hover:bg-red-500/10 text-desktop-muted/40 hover:text-red-400 transition-colors"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[10px] text-desktop-muted">{m.description}</p>
+                  {p?.content && !isEditing && (
+                    <div className="mt-2 text-[10px] text-desktop-muted/60 font-mono bg-white/5 rounded p-2 max-h-16 overflow-hidden">
+                      {p.content.slice(0, 300)}{p.content.length > 300 ? '…' : ''}
+                    </div>
+                  )}
+                </div>
+
+                {isEditing && (
+                  <div className="px-3 pb-3 space-y-2 border-t border-white/5 pt-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <label className="flex items-center gap-1.5 text-xs text-desktop-muted cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formEnabled}
+                          onChange={(e) => setFormEnabled(e.target.checked)}
+                          className="accent-desktop-accent"
+                        />
+                        {t('settings.enabled', 'Enabled')}
+                      </label>
+                    </div>
+                    <textarea
+                      value={formContent}
+                      onChange={(e) => setFormContent(e.target.value)}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text outline-none resize-none h-40 font-mono"
+                      placeholder={t('settings.enterSystemPrompt', 'Enter system prompt here...')}
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={handleSave}
+                        disabled={saving || !formContent.trim()}
+                        className="px-3 py-1.5 rounded-lg bg-desktop-accent/50 hover:bg-desktop-accent/70 disabled:opacity-40 text-xs text-desktop-text transition-colors"
+                      >
+                        {saving ? t('settings.saving', 'Saving…') : t('settings.save', 'Save')}
+                      </button>
+                      <button
+                        onClick={() => setEditingMode(null)}
+                        className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+                      >
+                        {t('settings.cancel', 'Cancel')}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 系统健康仪表板 ────────────────────────────────────────────
 
 // ── 提示词模板 ────────────────────────────────────────────────
 
