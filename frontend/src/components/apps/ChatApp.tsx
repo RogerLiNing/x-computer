@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2 } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -67,6 +67,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [reminderOpen, setReminderOpen] = useState(false);
   const [reminderMsg, setReminderMsg] = useState('');
   const [reminderDate, setReminderDate] = useState('');
+  /** 会话统计浮层 */
+  const [statsOpen, setStatsOpen] = useState(false);
   const [reminderTime, setReminderTime] = useState('');
   /** 当前正在录音的语音识别 ID，null 表示未在录音 */
   const [recordingId, setRecordingId] = useState<string | null>(null);
@@ -1356,6 +1358,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             <MessageSquarePlus size={14} />
             新对话
           </button>
+          <button
+            className="flex items-center gap-2 px-3 py-1.5 mx-2 rounded-lg hover:bg-white/10 text-desktop-muted text-xs transition-colors"
+            onClick={() => setStatsOpen(true)}
+            title="会话统计"
+          >
+            <BarChart2 size={13} />
+          </button>
           <div className="px-2 mb-1">
             <input
               type="text"
@@ -2271,6 +2280,73 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         )}
       </div>
       </div>
+
+      {/* Session Stats Modal */}
+      {statsOpen && (() => {
+        const userMsgs = messages.filter((m) => m.role === 'user');
+        const assistantMsgs = messages.filter((m) => m.role === 'assistant');
+        const allText = messages.filter((m) => typeof m.content === 'string').map((m) => String(m.content)).join(' ');
+        const wordCount = allText.trim() ? allText.trim().split(/\s+/).length : 0;
+        const charCount = allText.length;
+        const totalMsgs = messages.filter((m) => m.id !== 'welcome').length;
+        const firstMsg = messages.find((m) => m.id !== 'welcome');
+        const lastMsg = [...messages].reverse().find((m) => m.id !== 'welcome');
+        const duration = firstMsg && lastMsg ? Math.round((lastMsg.timestamp - firstMsg.timestamp) / 60000) : null;
+        const readingTime = Math.ceil(wordCount / 200);
+
+        const stats = [
+          { label: '总消息数', value: totalMsgs },
+          { label: '用户消息', value: userMsgs.length },
+          { label: '助手回复', value: assistantMsgs.length },
+          { label: '字数', value: charCount.toLocaleString() },
+          { label: '词数', value: wordCount.toLocaleString() },
+          { label: '预计阅读', value: `${readingTime} 分钟` },
+          { label: '会话时长', value: duration != null ? (duration < 60 ? `${duration} 分钟` : `${Math.round(duration / 60)} 小时`) : '—' },
+        ];
+
+        return (
+          <div
+            className="fixed inset-0 z-[9998] bg-black/60 flex items-center justify-center p-4"
+            onClick={() => setStatsOpen(false)}
+          >
+            <div
+              className="bg-desktop-surface border border-white/20 rounded-xl shadow-2xl w-full max-w-sm p-5 flex flex-col gap-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <BarChart2 size={16} className="text-desktop-accent" />
+                  <h3 className="text-sm font-semibold text-desktop-text">会话统计</h3>
+                </div>
+                <button
+                  type="button"
+                  className="text-desktop-muted hover:text-desktop-text transition-colors"
+                  onClick={() => setStatsOpen(false)}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {stats.map((s) => (
+                  <div key={s.label} className="bg-white/5 rounded-lg px-3 py-2.5 flex flex-col gap-0.5">
+                    <span className="text-[10px] text-desktop-muted uppercase tracking-wide">{s.label}</span>
+                    <span className="text-sm font-semibold text-desktop-text">{s.value}</span>
+                  </div>
+                ))}
+              </div>
+              {totalMsgs > 0 && (
+                <div className="text-[11px] text-desktop-muted text-center">
+                  {(() => {
+                    const d = new Date(firstMsg!.timestamp);
+                    const df = new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    return `从 ${df.format(d)} 开始`;
+                  })()}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* 图片点击放大：遮罩层，可保存或关闭 */}
       {imagePreviewUrl && (
