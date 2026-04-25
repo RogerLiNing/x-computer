@@ -1960,4 +1960,31 @@ export const api = {
 
   auditLogStats: () =>
     request<{ data: { total: number; byType: Record<string, number> } }>('/audit-log/stats'),
+
+  // ── Notifications ───────────────────────────────────────────────
+
+  getNotifications: (options?: { limit?: number; includeRead?: boolean }) => {
+    const params = new URLSearchParams();
+    if (options?.limit) params.set('limit', String(options.limit));
+    if (options?.includeRead) params.set('includeRead', 'true');
+    const qs = params.toString();
+    return request<{
+      data: Array<{
+        id: string; userId: string; type: string; title: string; body: string | null;
+        link: string | null; read: boolean; createdAt: number; expiresAt: number | null;
+      }>;
+    }>(`/notifications${qs ? '?' + qs : ''}`);
+  },
+
+  getUnreadNotificationCount: () =>
+    request<{ data: { count: number } }>('/notifications/unread-count'),
+
+  markNotificationRead: (id: string) =>
+    request<{ success: boolean }>(`/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }),
+
+  markAllNotificationsRead: () =>
+    request<{ success: boolean }>('/notifications/mark-all-read', { method: 'POST' }),
+
+  deleteNotification: (id: string) =>
+    request<{ success: boolean }>(`/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

@@ -40,6 +40,8 @@ import { createFeatureFlagsRouter } from './routes/featureFlags.js';
 import { initFeatureFlags } from './config/featureFlags.js';
 import { createUsageAnalyticsRouter } from './routes/usageAnalytics.js';
 import { createNotificationPreferencesRouter } from './routes/notificationPreferences.js';
+import { createNotificationsRouter } from './routes/notifications.js';
+import { initNotificationService } from './services/NotificationService.js';
 import { createHooksRouter } from './routes/hooks.js';
 import { createAuditLogRouter } from './routes/auditLog.js';
 import { createSystemHealthRouter } from './routes/systemHealth.js';
@@ -272,6 +274,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   const heartbeatService = new HeartbeatService(db, subscriptionService, orchestrator);
   await heartbeatService.start();
 
+  // ── NotificationService ──────────────────────────────────────────
+  initNotificationService(db);
+
   // ── 审计持久化（C.4）：根据 taskId 解析 userId 写入 audit_log ──
   audit.setPersist((entry) => {
     const task = orchestrator.getTask(entry.taskId);
@@ -331,6 +336,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/prompt-templates', createPromptTemplatesRouter(db));
   app.use('/api/admin/system-prompts', createSystemPromptsRouter(db));
   app.use('/api/notification-preferences', createNotificationPreferencesRouter(db));
+  app.use('/api/notifications', createNotificationsRouter(db));
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));
   app.use('/api/pageindex', createPageIndexRouter(userSandboxManager, db, subscriptionService));

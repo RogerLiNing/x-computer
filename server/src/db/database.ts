@@ -42,6 +42,18 @@ export interface ChatSessionRow {
   is_archived?: number;
 }
 
+export interface NotificationRow {
+  id: string;
+  user_id: string;
+  type: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  read: number;
+  created_at: number;
+  expires_at: number | null;
+}
+
 export interface ChatMessageRow {
   id: string;
   session_id: string;
@@ -409,6 +421,22 @@ export class SqliteAppDatabase {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_system_prompts_mode ON system_prompts(mode);
+    `);
+    // notifications 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'info',
+        title TEXT NOT NULL,
+        body TEXT,
+        link TEXT,
+        read INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
+      CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
     `);
   }
 
@@ -1399,6 +1427,65 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM system_prompts WHERE id = ?').run(id);
   }
 
+  // ── Notifications ─────────────────────────────────────────────
+
+  createNotification(params: {
+    id?: string;
+    userId: string;
+    type?: string;
+    title: string;
+    body?: string | null;
+    link?: string | null;
+    expiresAt?: number | null;
+  }): NotificationRow {
+    const id = params.id ?? uuid();
+    const now = Date.now();
+    this.db.prepare(
+      'INSERT INTO notifications (id, user_id, type, title, body, link, read, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+    ).run(
+      id,
+      params.userId,
+      params.type ?? 'info',
+      params.title,
+      params.body ?? null,
+      params.link ?? null,
+      now,
+      params.expiresAt ?? null,
+    );
+    return this.db.prepare('SELECT * FROM notifications WHERE id = ?').get(id) as NotificationRow;
+  }
+
+  getNotifications(userId: string, options?: { limit?: number; includeRead?: boolean }): NotificationRow[] {
+    const limit = options?.limit ?? 50;
+    if (options?.includeRead) {
+      return this.db.prepare(
+        'SELECT * FROM notifications WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT ?',
+      ).all(userId, Date.now(), limit) as NotificationRow[];
+    }
+    return this.db.prepare(
+      'SELECT * FROM notifications WHERE user_id = ? AND read = 0 AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT ?',
+    ).all(userId, Date.now(), limit) as NotificationRow[];
+  }
+
+  getUnreadNotificationCount(userId: string): number {
+    const row = this.db.prepare(
+      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND read = 0 AND (expires_at IS NULL OR expires_at > ?)',
+    ).get(userId, Date.now()) as { count: number };
+    return row.count;
+  }
+
+  markNotificationRead(id: string, userId: string): void {
+    this.db.prepare('UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
+  markAllNotificationsRead(userId: string): void {
+    this.db.prepare('UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0').run(userId);
+  }
+
+  deleteNotification(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -1834,6 +1921,35 @@ export class SqliteDatabaseAdapter {
   }
   deleteSystemPrompt(id: string): Promise<void> {
     this.db.deleteSystemPrompt(id);
+    return Promise.resolve();
+  }
+  createNotification(params: {
+    id?: string;
+    userId: string;
+    type?: string;
+    title: string;
+    body?: string | null;
+    link?: string | null;
+    expiresAt?: number | null;
+  }): Promise<NotificationRow> {
+    return Promise.resolve(this.db.createNotification(params));
+  }
+  getNotifications(userId: string, options?: { limit?: number; includeRead?: boolean }): Promise<NotificationRow[]> {
+    return Promise.resolve(this.db.getNotifications(userId, options));
+  }
+  getUnreadNotificationCount(userId: string): Promise<number> {
+    return Promise.resolve(this.db.getUnreadNotificationCount(userId));
+  }
+  markNotificationRead(id: string, userId: string): Promise<void> {
+    this.db.markNotificationRead(id, userId);
+    return Promise.resolve();
+  }
+  markAllNotificationsRead(userId: string): Promise<void> {
+    this.db.markAllNotificationsRead(userId);
+    return Promise.resolve();
+  }
+  deleteNotification(id: string, userId: string): Promise<void> {
+    this.db.deleteNotification(id, userId);
     return Promise.resolve();
   }
   close(): void {

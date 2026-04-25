@@ -24,6 +24,8 @@ import { useChatSessions, WELCOME_FALLBACK } from './ChatApp/useChatSessions';
 import { useFormatChatError } from './ChatApp/useFormatChatError';
 import { getMessagesForChat } from './ChatApp/chatHelpers';
 import { CommandPalette, getDefaultCommands } from './ChatApp/CommandPalette';
+import { NotificationCenter } from './ChatApp/NotificationCenter';
+import { ToastContainer } from '@/components/shared/ToastContainer';
 import type { Message } from './ChatApp/Message';
 import { TASK_KEYWORDS, DEFAULT_MAX_CHAT_ROUNDS, type AgentOption } from './ChatApp/chatConstants';
 import { ToolCallBlock, MarkdownContent, MarkdownWithThink, type ToolCallRecord } from '@/components/shared';
@@ -1904,6 +1906,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           >
             查看任务 →
           </button>
+          <NotificationCenter />
         </div>
       )}
 
@@ -2819,6 +2822,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         onSelect={handleCommandSelect}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <ToastContainer />
     </div>
   );
 }

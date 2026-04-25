@@ -13,6 +13,7 @@ import { v4 as uuid } from 'uuid';
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
 interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; }
 interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; bookmarked: number | null; created_at: string; }
+interface NotificationRow { id: string; user_id: string; type: string; title: string; body: string | null; link: string | null; read: number; created_at: number; expires_at: number | null; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Pool = mysql.Pool;
@@ -338,6 +339,20 @@ export class MysqlDatabase {
       updated_at BIGINT NOT NULL
     )`, [], true);
     await this.ensureIndex('system_prompts', 'idx_system_prompts_mode', 'CREATE INDEX idx_system_prompts_mode ON system_prompts(mode)', true);
+
+    await this._run(`CREATE TABLE IF NOT EXISTS notifications (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      type VARCHAR(32) NOT NULL DEFAULT 'info',
+      title VARCHAR(512) NOT NULL,
+      body TEXT,
+      link VARCHAR(1024),
+      \`read\` TINYINT(1) NOT NULL DEFAULT 0,
+      created_at BIGINT NOT NULL,
+      expires_at BIGINT
+    )`, [], true);
+    await this.ensureIndex('notifications', 'idx_notifications_user', 'CREATE INDEX idx_notifications_user ON notifications(user_id)', true);
+    await this.ensureIndex('notifications', 'idx_notifications_created', 'CREATE INDEX idx_notifications_created ON notifications(created_at DESC)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1427,6 +1442,61 @@ export class MysqlDatabase {
 
   async deleteSystemPrompt(id: string): Promise<void> {
     await this._run('DELETE FROM system_prompts WHERE id = ?', [id]);
+  }
+
+  // ── Notifications ─────────────────────────────────────────────
+
+  async createNotification(params: {
+    id?: string;
+    userId: string;
+    type?: string;
+    title: string;
+    body?: string | null;
+    link?: string | null;
+    expiresAt?: number | null;
+  }): Promise<NotificationRow> {
+    const id = params.id ?? uuid();
+    const now = Date.now();
+    await this._run(
+      'INSERT INTO notifications (id, user_id, type, title, body, link, `read`, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
+      [id, params.userId, params.type ?? 'info', params.title, params.body ?? null, params.link ?? null, now, params.expiresAt ?? null],
+    );
+    const rows = await this._query<NotificationRow>('SELECT * FROM notifications WHERE id = ?', [id]);
+    return rows[0];
+  }
+
+  async getNotifications(userId: string, options?: { limit?: number; includeRead?: boolean }): Promise<NotificationRow[]> {
+    const limit = options?.limit ?? 50;
+    if (options?.includeRead) {
+      return await this._query(
+        'SELECT * FROM notifications WHERE user_id = ? AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT ?',
+        [userId, Date.now(), limit],
+      );
+    }
+    return await this._query(
+      'SELECT * FROM notifications WHERE user_id = ? AND `read` = 0 AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC LIMIT ?',
+      [userId, Date.now(), limit],
+    );
+  }
+
+  async getUnreadNotificationCount(userId: string): Promise<number> {
+    const rows = await this._query<{ count: number }>(
+      'SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND `read` = 0 AND (expires_at IS NULL OR expires_at > ?)',
+      [userId, Date.now()],
+    );
+    return rows[0]?.count ?? 0;
+  }
+
+  async markNotificationRead(id: string, userId: string): Promise<void> {
+    await this._run('UPDATE notifications SET `read` = 1 WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
+  async markAllNotificationsRead(userId: string): Promise<void> {
+    await this._run('UPDATE notifications SET `read` = 1 WHERE user_id = ? AND `read` = 0', [userId]);
+  }
+
+  async deleteNotification(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM notifications WHERE id = ? AND user_id = ?', [id, userId]);
   }
 
   close(): void {
