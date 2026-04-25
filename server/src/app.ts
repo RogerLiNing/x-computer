@@ -30,6 +30,7 @@ import { createOAuthCallbackRouter } from './routes/oauthCallback.js';
 import { HeartbeatService } from './heartbeat/HeartbeatService.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createLLMRouter } from './routes/llm.js';
+import { createCouncilRouter } from './routes/council.js';
 import { createContentManagementRoutes } from './routes/contentManagement.js';
 import { createPageIndexRouter } from './routes/pageindex.js';
 import { createFeatureFlagsRouter } from './routes/featureFlags.js';
@@ -319,6 +320,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/admin/health', createSystemHealthRouter(db));
   app.use('/api/hooks', createHooksRouter(db as any));
   app.use('/api/llm', createLLMRouter());
+  app.use('/api/llm', createCouncilRouter(db as any, subscriptionService));
   app.use('/api/scheduled-jobs', createScheduledJobsRouter(db));
   app.use('/api/notification-preferences', createNotificationPreferencesRouter(db));
   app.use('/api/admin/content', createContentManagementRoutes(db));

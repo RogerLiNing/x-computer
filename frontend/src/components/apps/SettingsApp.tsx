@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1560,6 +1560,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'schedules', labelKey: 'settings.scheduledJobs', icon: Clock },
     { id: 'health', labelKey: 'settings.systemHealth', icon: Activity },
     { id: 'hooks', labelKey: 'settings.lifecycleHooks', icon: Link },
+    { id: 'council', labelKey: 'settings.llmCouncil', icon: Users },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1765,6 +1766,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'hooks' && (
           <HooksSettings />
+        )}
+
+        {tab === 'council' && (
+          <CouncilSettings />
         )}
       </div>
     </div>
@@ -2249,6 +2254,180 @@ function HooksSettings() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── LLM Council ──────────────────────────────────────────────
+
+function CouncilSettings() {
+  const { t } = useTranslation();
+  const [prompt, setPrompt] = useState('');
+  const [context, setContext] = useState('');
+  const [selectedModels, setSelectedModels] = useState<Array<{ providerId: string; modelId: string }>>([]);
+  const [results, setResults] = useState<CouncilResult[]>([]);
+  const [synthesis, setSynthesis] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Available models (from LLM config — show the default)
+  const [availableModels] = useState<Array<{ providerId: string; modelId: string; label: string }>>([
+    { providerId: 'openrouter', modelId: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4 (OpenRouter)' },
+    { providerId: 'openrouter', modelId: 'openai/gpt-4o', label: 'GPT-4o (OpenRouter)' },
+    { providerId: 'openrouter', modelId: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro (OpenRouter)' },
+    { providerId: 'openrouter', modelId: 'anthropic/claude-opus-4-7', label: 'Claude Opus 4 (OpenRouter)' },
+  ]);
+
+  type CouncilResult = {
+    providerId: string; modelId: string; response: string; error?: string; elapsedMs: number;
+  };
+
+  const toggleModel = (m: typeof availableModels[0]) => {
+    setSelectedModels((prev) => {
+      const idx = prev.findIndex((s) => s.providerId === m.providerId && s.modelId === m.modelId);
+      if (idx >= 0) return prev.filter((_, i) => i !== idx);
+      return [...prev, { providerId: m.providerId, modelId: m.modelId }];
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (!prompt.trim()) { setError('Please enter a prompt'); return; }
+    if (selectedModels.length === 0) { setError('Please select at least one model'); return; }
+    setError(null);
+    setResults([]);
+    setSynthesis(null);
+    setLoading(true);
+    try {
+      const data = await api.councilQuery({
+        prompt,
+        context: context || undefined,
+        models: selectedModels,
+      });
+      setResults(data.results);
+      if (data.synthesis) setSynthesis(data.synthesis);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Council query failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fmtTime = (ms: number) => `${ms}ms`;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t('settings.llmCouncil')}</h2>
+      </div>
+
+      <p className="text-xs text-desktop-muted">
+        Query multiple AI models in parallel and compare their responses. Select models below and enter your question.
+      </p>
+
+      {/* Model Selection */}
+      <div className="bg-white/5 rounded-lg p-4">
+        <div className="text-sm font-medium mb-3">选择模型</div>
+        <div className="grid grid-cols-2 gap-2">
+          {availableModels.map((m) => {
+            const selected = selectedModels.some(
+              (s) => s.providerId === m.providerId && s.modelId === m.modelId,
+            );
+            return (
+              <button
+                key={`${m.providerId}/${m.modelId}`}
+                onClick={() => toggleModel(m)}
+                className={`text-left px-3 py-2 rounded-lg text-xs transition-colors border ${
+                  selected
+                    ? 'border-desktop-accent/60 bg-desktop-accent/20 text-desktop-text'
+                    : 'border-white/10 bg-white/5 text-desktop-muted hover:bg-white/10'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <div className={`w-3 h-3 rounded-full ${selected ? 'bg-green-400' : 'bg-white/20'}`} />
+                  <span className="truncate">{m.label}</span>
+                </div>
+                <div className="text-xs text-desktop-muted mt-0.5 font-mono truncate ml-5">{m.modelId}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Prompt */}
+      <div className="bg-white/5 rounded-lg p-4 space-y-3">
+        <div>
+          <label className="block text-sm font-medium mb-1.5">问题 *</label>
+          <textarea
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-desktop-highlight/50 resize-y"
+            rows={4}
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="What are the main risks of relying on a single LLM provider?"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1.5">上下文 (可选)</label>
+          <textarea
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-desktop-highlight/50 resize-y"
+            rows={2}
+            value={context}
+            onChange={(e) => setContext(e.target.value)}
+            placeholder="Additional context or background information..."
+          />
+        </div>
+        {error && <div className="text-xs text-red-400">{error}</div>}
+        <button
+          onClick={handleSubmit}
+          disabled={loading || selectedModels.length === 0 || !prompt.trim()}
+          className="px-4 py-2 rounded-lg text-sm bg-desktop-accent/60 hover:bg-desktop-accent/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? (
+            <span className="flex items-center gap-2">
+              <RefreshCw size={14} className="animate-spin" />
+              Querying {selectedModels.length} model{selectedModels.length > 1 ? 's' : ''}...
+            </span>
+          ) : (
+            <span>查询模型议会</span>
+          )}
+        </button>
+      </div>
+
+      {/* Results */}
+      {results.length > 0 && (
+        <div className="space-y-3">
+          <div className="text-sm font-medium">模型回复</div>
+          {results.map((r) => (
+            <div key={`${r.providerId}/${r.modelId}`} className={`bg-white/5 rounded-lg p-4 ${r.error ? 'border border-red-500/30' : ''}`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">{r.modelId}</span>
+                  {r.error ? (
+                    <span className="text-xs text-red-400">Error</span>
+                  ) : (
+                    <span className="text-xs text-green-400">OK</span>
+                  )}
+                </div>
+                <span className="text-xs text-desktop-muted font-mono">{fmtTime(r.elapsedMs)}</span>
+              </div>
+              {r.error ? (
+                <div className="text-xs text-red-400">{r.error}</div>
+              ) : (
+                <div className="text-sm text-desktop-text whitespace-pre-wrap">{r.response}</div>
+              )}
+            </div>
+          ))}
+
+          {synthesis && (
+            <div className="bg-desktop-accent/10 border border-desktop-accent/30 rounded-lg p-4">
+              <div className="text-sm font-medium mb-2 flex items-center gap-2">
+                <Sparkles size={14} className="text-yellow-400" />
+                综合分析
+              </div>
+              <div className="text-sm text-desktop-text whitespace-pre-wrap">{synthesis}</div>
+            </div>
+          )}
         </div>
       )}
     </div>

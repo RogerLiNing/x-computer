@@ -302,7 +302,8 @@
     "webhooks": "Webhooks",
     "usageAnalytics": "Usage Analytics",
     "featureFlags": "Feature Flags",
-    "lifecycleHooks": "Lifecycle Hooks"
+    "lifecycleHooks": "Lifecycle Hooks",
+    "llmCouncil": "LLM Council"
   },
 
   "onboarding": {

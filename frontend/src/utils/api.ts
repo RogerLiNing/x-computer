@@ -1622,4 +1622,23 @@ export const api = {
       timeoutMs: number; headers: Record<string, string>; priority: number;
       createdAt: number; updatedAt: number;
     }>(`/hooks/${id}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+
+  // ── LLM Council ───────────────────────────────────────────────
+
+  councilQuery: (params: {
+    prompt: string;
+    context?: string;
+    models: Array<{ providerId: string; modelId: string }>;
+    synthesisPrompt?: string;
+  }) =>
+    request<{
+      results: Array<{
+        providerId: string;
+        modelId: string;
+        response: string;
+        error?: string;
+        elapsedMs: number;
+      }>;
+      synthesis?: string;
+    }>('/llm/council', { method: 'POST', body: JSON.stringify(params) }),
 };
