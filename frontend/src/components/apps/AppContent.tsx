@@ -20,6 +20,7 @@ import { XBoardApp } from './XBoardApp';
 import { SubscriptionApp } from './SubscriptionApp';
 import { AdminApp } from './AdminApp';
 import { CanvasApp } from './CanvasApp';
+import { DiffApp } from './DiffApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -64,6 +65,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <AdminApp />;
     case 'canvas':
       return <CanvasApp windowId={windowId} />;
+    case 'diff':
+      return <DiffApp windowId={windowId} />;
     case 'image-viewer':
       return <ImageViewerApp windowId={windowId} metadata={metadata} />;
     case 'office-viewer':

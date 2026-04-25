@@ -47,7 +47,8 @@
     "x-board": "X Task Board",
     "subscription": "Subscription",
     "admin": "Admin",
-    "canvas": "Canvas"
+    "canvas": "Canvas",
+    "diff": "Diff"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -70,7 +71,8 @@
     "subscription": "Manage your subscription and billing",
     "admin": "User management, ban/unban, system overview (admin only)",
     "canvas": "Free drawing and whiteboard tool",
-    "miniapp": "App created by X"
+    "miniapp": "App created by X",
+    "diff": "Compare two text or code files, highlighting additions, deletions, and changes"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

@@ -42,6 +42,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'subscription', name: getAppName('subscription'), description: getAppDescription('subscription'), source: 'builtin', icon: 'CreditCard' },
   { id: 'admin', name: getAppName('admin'), description: getAppDescription('admin'), source: 'builtin', icon: 'Shield' },
   { id: 'canvas', name: getAppName('canvas'), description: getAppDescription('canvas'), source: 'builtin', icon: 'Image' },
+  { id: 'diff', name: getAppName('diff'), description: getAppDescription('diff'), source: 'builtin', icon: 'GitCompare' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -67,6 +68,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   subscription: { width: 1000, height: 680 },
   admin: { width: 1000, height: 680 },
   canvas: { width: 900, height: 640 },
+  diff: { width: 900, height: 640 },
 };
 
 function loadInstalled(): AppManifest[] {

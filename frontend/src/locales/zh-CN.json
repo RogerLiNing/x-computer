@@ -50,7 +50,8 @@
     "canvas": "画布",
     "skills": "技能管理",
     "mcp": "MCP 扩展",
-    "channels": "渠道管理"
+    "channels": "渠道管理",
+    "diff": "文件对比"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -73,6 +74,7 @@
     "subscription": "管理订阅与付费",
     "admin": "用户管理、封禁/解封、系统概览（仅管理员）",
     "canvas": "自由绘画与白板工具",
+    "diff": "比较两个文本或代码文件的差异，高亮显示新增、删除和修改的行",
     "skills": "管理 AI 技能与插件",
     "mcp": "管理 MCP 服务器扩展",
     "channels": "管理邮件、WhatsApp、QQ 等通信渠道",
