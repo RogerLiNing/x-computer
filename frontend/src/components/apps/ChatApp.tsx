@@ -1642,6 +1642,17 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       >
                         <FileText size={12} /> PDF
                       </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          api.exportChatSessionDocx(s.id).catch(console.error);
+                          setExportDropdownSessionId(null);
+                        }}
+                      >
+                        <FileText size={12} /> Word (DOCX)
+                      </button>
                       <div className="border-t border-white/10 my-1" />
                       <button
                         type="button"

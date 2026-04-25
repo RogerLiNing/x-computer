@@ -183,5 +183,137 @@ sys.stdout.write(base64.b64encode(data).decode('ascii'))
     });
   }
 
+  /** POST /api/code/chat-export-docx — Generate a DOCX from a chat session */
+  if (db) {
+    router.post('/chat-export-docx', async (req, res) => {
+      try {
+        const { sessionId } = req.body ?? {};
+        if (!sessionId || typeof sessionId !== 'string') {
+          res.status(400).json({ error: 'Missing sessionId' });
+          return;
+        }
+
+        const session = await db.getSession(sessionId);
+        if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+        if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+        const messages = await db.getMessages(sessionId, 2000);
+        const sh = await getUserShell(req, shell, userSandboxManager);
+
+        const safeTitle = (session.title || 'Conversation').replace(/'/g, "\\'").replace(/\n/g, ' ');
+        const exportDate = new Date().toLocaleString();
+        const msgsJson = JSON.stringify(messages.map((m: ChatMessageRow) => ({
+          role: m.role,
+          content: m.content || '',
+          toolCalls: m.tool_calls_json ? JSON.parse(m.tool_calls_json) : [],
+          created_at: m.created_at,
+        })));
+
+        const docxScript = `
+import sys
+try:
+    from docx import Document
+    from docx.shared import Pt, RGBColor, Inches
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml.ns import qn
+except ImportError:
+    print("ERROR:python-docx_not_installed")
+    sys.exit(1)
+
+import io, base64, json
+from datetime import datetime
+
+msgs = json.loads('''${msgsJson}''')
+
+doc = Document()
+# Document title
+title = doc.add_heading('${safeTitle}', level=1)
+title.alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+# Meta info
+meta = doc.add_paragraph()
+meta.add_run(f'Export date: ${exportDate} | X-Computer').font.size = Pt(9)
+meta.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+meta.paragraph_format.space_after = Pt(12)
+
+# Separator
+doc.add_paragraph('─' * 60)
+
+for m in msgs:
+    role = m['role']
+    content = m['content'] or ''
+    tool_calls = m.get('toolCalls', []) or []
+    created = m.get('created_at', '')
+    try:
+        time_str = datetime.fromisoformat(created.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M')
+    except:
+        time_str = str(created)[:16]
+
+    # Role + timestamp
+    role_label = 'User' if role == 'user' else 'Assistant'
+    role_para = doc.add_paragraph()
+    role_run = role_para.add_run(f'{role_label}  · {time_str}')
+    role_run.font.bold = True
+    if role == 'user':
+        role_run.font.color.rgb = RGBColor(0x3b, 0x82, 0xf6)
+    else:
+        role_run.font.color.rgb = RGBColor(0x10, 0xb9, 0x81)
+    role_para.paragraph_format.space_after = Pt(2)
+
+    # Content
+    if content:
+        content_para = doc.add_paragraph(content)
+        content_para.paragraph_format.space_after = Pt(8)
+        for run in content_para.runs:
+            run.font.size = Pt(10)
+            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+
+    # Tool calls
+    if tool_calls:
+        tool_names = ', '.join(str(t.get('name', '')) for t in tool_calls if t.get('name'))
+        tool_para = doc.add_paragraph()
+        tool_run = tool_para.add_run(f'[Tools: {tool_names}]')
+        tool_run.font.size = Pt(8)
+        tool_run.font.italic = True
+        tool_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+        tool_para.paragraph_format.space_after = Pt(8)
+
+    # Spacing between messages
+    doc.add_paragraph('')
+
+# Footer
+doc.add_paragraph('─' * 60)
+footer = doc.add_paragraph()
+footer.add_run('Exported from X-Computer').font.size = Pt(9)
+footer.runs[0].font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+
+buf = io.BytesIO()
+doc.save(buf)
+data = buf.getvalue()
+sys.stdout.write(base64.b64encode(data).decode('ascii'))
+`.trim();
+
+        const result = await sh.execute(`python3 << 'XEOF'\n${docxScript}\nXEOF`);
+        if (result.exitCode !== 0) {
+          if (result.stdout?.includes('ERROR:python-docx_not_installed')) {
+            res.status(500).json({ error: 'DOCX library not installed. Install with: pip install python-docx' });
+            return;
+          }
+          res.status(500).json({ error: 'DOCX generation failed', detail: result.stderr || result.stdout });
+          return;
+        }
+
+        const docxBuffer = Buffer.from(result.stdout.trim(), 'base64');
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename="conversation-${sessionId}.docx"`);
+        res.setHeader('Content-Length', String(docxBuffer.length));
+        res.end(docxBuffer);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        res.status(500).json({ error: msg });
+      }
+    });
+  }
+
   return router;
 }

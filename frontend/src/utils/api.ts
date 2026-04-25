@@ -1617,6 +1617,25 @@ export const api = {
     URL.revokeObjectURL(link.href);
   },
 
+  /** 导出会话（DOCX）- 生成并下载 Word 文档 */
+  exportChatSessionDocx: async (sessionId: string) => {
+    const res = await fetch('/api/code/chat-export-docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': getUserId() },
+      body: JSON.stringify({ sessionId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Download failed' }));
+      throw new Error(err.error || 'DOCX download failed');
+    }
+    const blob = await res.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `conversation-${sessionId}.docx`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
+
   /** 更新会话标签 */
   updateSessionTags: (sessionId: string, tags: string[]) =>
     request<{ success: boolean; tags: string[] }>(`/chat/sessions/${sessionId}/tags`, {
