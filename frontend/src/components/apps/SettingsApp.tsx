@@ -3942,8 +3942,8 @@ function CouncilSettings() {
         context: context || undefined,
         models: selectedModels,
       });
-      setResults(data.results);
-      if (data.synthesis) setSynthesis(data.synthesis);
+      setResults(data.data?.results ?? []);
+      if (data.data?.synthesis) setSynthesis(data.data.synthesis);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Council query failed');
     } finally {

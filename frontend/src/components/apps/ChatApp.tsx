@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link, Wand2 } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link, Wand2, GitCompare, Columns } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -98,6 +98,15 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
   const [contextStats, setContextStats] = useState<{ messageCount: number; estimatedTokens: number; usagePercent: number } | null>(null);
+  /** 模型对比浮层 */
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [comparePrompt, setComparePrompt] = useState('');
+  const [compareSelectedModels, setCompareSelectedModels] = useState<Array<{ providerId: string; modelId: string }>>([]);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareResults, setCompareResults] = useState<{
+    results: Array<{ providerId: string; modelId: string; response: string; error?: string; elapsedMs: number }>;
+    synthesis?: string;
+  } | null>(null);
   /** 按需加载模式下本会话已加载的工具名，跨消息持久化 */
   const loadedToolNamesRef = useRef<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1508,6 +1517,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     }
   }, [messages, isLoading, addNotification, ensureSessionId, refreshSessions, selectedAgentId, formatChatError]);
 
+  // Available models for comparison
+  const availableModelsForCompare = (() => {
+    const llmState = useLLMConfigStore.getState();
+    const allModels: Array<{ providerId: string; modelId: string; label: string }> = [];
+    for (const provider of llmState.llmConfig.providers ?? []) {
+      const imported = llmState.importedModelsByProvider[provider.id] ?? [];
+      for (const model of imported) {
+        allModels.push({ providerId: provider.id, modelId: model.id, label: `${provider.name ?? provider.id}/${model.id}` });
+      }
+    }
+    return allModels.slice(0, 20);
+  })();
+
   // Quick action suggestions (i18n)
   const quickActions = [
     { labelKey: 'chat.exampleOrganizeEmail', textKey: 'chat.exampleOrganizeEmail' },
@@ -2016,6 +2038,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             </button>
           )}
           <button
+            className="flex items-center gap-1 text-[10px] text-desktop-muted hover:text-desktop-accent px-2 py-1 rounded hover:bg-white/5 transition-colors"
+            onClick={() => setCompareOpen(true)}
+            title="多模型对比"
+          >
+            <GitCompare size={11} />
+            对比
+          </button>
+          <button
             className="text-[10px] text-desktop-muted hover:text-desktop-text px-2 py-1 rounded hover:bg-white/5 transition-colors"
             onClick={() => openApp('task-timeline')}
           >
@@ -2457,7 +2487,149 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         </div>
       )}
         <div ref={messagesEndRef} />
+
+      {/* Close h-full flex container before fixed overlay */}
       </div>
+
+      {/* Model Comparison Panel */}
+      {compareOpen && (
+        <div className="fixed inset-0 z-[99997] flex items-start justify-center pt-[6vh] px-3 sm:px-0" onClick={(e) => { if (e.target === e.currentTarget) setCompareOpen(false); }}>
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setCompareOpen(false)} />
+          <div className="relative w-full max-w-[680px] bg-desktop-surface/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-fade-in max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 shrink-0">
+              <div className="flex items-center gap-2">
+                <GitCompare size={16} className="text-desktop-accent" />
+                <span className="text-sm font-medium text-desktop-text">多模型对比</span>
+              </div>
+              <button className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text" onClick={() => setCompareOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-auto px-4 py-3 space-y-3">
+              {/* Prompt input */}
+              <div>
+                <label className="text-[10px] text-desktop-muted/70 uppercase tracking-wide mb-1 block">问题</label>
+                <textarea
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text placeholder:text-desktop-muted/40 outline-none focus:border-desktop-accent/50 resize-none"
+                  rows={3}
+                  value={comparePrompt}
+                  onChange={(e) => setComparePrompt(e.target.value)}
+                  placeholder="输入你想问的问题..."
+                />
+              </div>
+
+              {/* Model selector */}
+              <div>
+                <label className="text-[10px] text-desktop-muted/70 uppercase tracking-wide mb-1.5 block">选择模型（最多 4 个）</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {availableModelsForCompare.map((m) => {
+                    const isSelected = compareSelectedModels.some((sm) => sm.providerId === m.providerId && sm.modelId === m.modelId);
+                    return (
+                      <button
+                        key={`${m.providerId}-${m.modelId}`}
+                        className={`text-[10px] px-2 py-1 rounded border transition-colors ${
+                          isSelected
+                            ? 'bg-desktop-accent/20 border-desktop-accent/50 text-desktop-accent'
+                            : 'bg-white/5 border-white/10 text-desktop-muted hover:border-white/20'
+                        }`}
+                        onClick={() => {
+                          if (isSelected) {
+                            setCompareSelectedModels((prev) => prev.filter((sm) => !(sm.providerId === m.providerId && sm.modelId === m.modelId)));
+                          } else if (compareSelectedModels.length < 4) {
+                            setCompareSelectedModels((prev) => [...prev, { providerId: m.providerId, modelId: m.modelId }]);
+                          }
+                        }}
+                      >
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {compareSelectedModels.length === 0 && (
+                  <p className="text-[10px] text-desktop-muted/50 mt-1">请从上方选择至少一个模型</p>
+                )}
+              </div>
+
+              {/* Run button */}
+              <div className="flex gap-2">
+                <button
+                  className="flex items-center gap-1.5 px-4 py-2 bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 text-desktop-accent rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  disabled={compareLoading || !comparePrompt.trim() || compareSelectedModels.length === 0}
+                  onClick={async () => {
+                    if (!comparePrompt.trim() || compareSelectedModels.length === 0) return;
+                    setCompareLoading(true);
+                    setCompareResults(null);
+                    try {
+                      const res = await api.councilQuery({ prompt: comparePrompt, models: compareSelectedModels });
+                      setCompareResults(res.data ?? null);
+                    } catch (err) {
+                      addNotification({ type: 'error', title: '对比失败', message: String(err) });
+                    } finally {
+                      setCompareLoading(false);
+                    }
+                  }}
+                >
+                  {compareLoading ? <Loader2 size={13} className="animate-spin" /> : <GitCompare size={13} />}
+                  {compareLoading ? '对比中...' : '运行对比'}
+                </button>
+                {compareResults && (
+                  <button
+                    className="px-3 py-2 text-desktop-muted hover:text-desktop-text text-xs rounded-lg hover:bg-white/5 transition-colors"
+                    onClick={() => { setCompareResults(null); setComparePrompt(''); setCompareSelectedModels([]); }}
+                  >
+                    清除结果
+                  </button>
+                )}
+              </div>
+
+              {/* Results */}
+              {compareResults && (
+                <div className="space-y-2 pt-1">
+                  <div className="text-[10px] text-desktop-muted/70 uppercase tracking-wide">结果对比</div>
+                  {compareResults.results.map((r, i) => (
+                    <div key={i} className="rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
+                      <div className="flex items-center justify-between px-3 py-2 bg-white/[0.02] border-b border-white/5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-desktop-text">{r.modelId}</span>
+                          <span className="text-[10px] text-desktop-muted/50">{r.providerId}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {r.error ? (
+                            <span className="text-[10px] text-red-400">{r.error}</span>
+                          ) : (
+                            <span className="text-[10px] text-green-400/70">{(r.elapsedMs / 1000).toFixed(1)}s</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="px-3 py-2 text-xs text-desktop-text/80 whitespace-pre-wrap max-h-[200px] overflow-auto">
+                        {r.error ? (
+                          <span className="text-red-400/80">{r.error}</span>
+                        ) : (
+                          r.response
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {compareResults.synthesis && (
+                    <div className="rounded-lg border border-desktop-accent/20 bg-desktop-accent/5 overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2 border-b border-desktop-accent/10">
+                        <Sparkles size={12} className="text-desktop-accent" />
+                        <span className="text-xs font-medium text-desktop-accent">综合分析</span>
+                      </div>
+                      <div className="px-3 py-2 text-xs text-desktop-text/80 whitespace-pre-wrap max-h-[200px] overflow-auto">
+                        {compareResults.synthesis}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Input - shrink-0 保证不被预置场景挤压，始终可见 */}
       <div className="shrink-0 px-3 py-2 border-t border-white/5 bg-white/[0.02]">

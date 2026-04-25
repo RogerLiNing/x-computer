@@ -1997,14 +1997,18 @@ export const api = {
     synthesisPrompt?: string;
   }) =>
     request<{
-      results: Array<{
-        providerId: string;
-        modelId: string;
-        response: string;
-        error?: string;
-        elapsedMs: number;
-      }>;
-      synthesis?: string;
+      success: boolean;
+      data?: {
+        results: Array<{
+          providerId: string;
+          modelId: string;
+          response: string;
+          error?: string;
+          elapsedMs: number;
+        }>;
+        synthesis?: string;
+      };
+      error?: string;
     }>('/llm/council', { method: 'POST', body: JSON.stringify(params) }),
 
   // ── Audit Log ────────────────────────────────────────────────
