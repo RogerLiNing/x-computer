@@ -796,6 +796,37 @@ export class MysqlDatabase {
     ]);
   }
 
+  async queryAudit(params: {
+    userId?: string;
+    taskId?: string;
+    type?: string;
+    riskLevel?: string;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ rows: unknown[]; total: number }> {
+    const conditions: string[] = [];
+    const args: (string | number)[] = [];
+
+    if (params.userId) { conditions.push('user_id = ?'); args.push(params.userId); }
+    if (params.taskId) { conditions.push('task_id = ?'); args.push(params.taskId); }
+    if (params.type) { conditions.push('type = ?'); args.push(params.type); }
+    if (params.riskLevel) { conditions.push('risk_level = ?'); args.push(params.riskLevel); }
+    if (params.startTime) { conditions.push('created_at >= ?'); args.push(params.startTime); }
+    if (params.endTime) { conditions.push('created_at <= ?'); args.push(params.endTime); }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = params.limit ?? 100;
+    const offset = params.offset ?? 0;
+
+    const [countRows, rows] = await Promise.all([
+      this._query<Array<{ cnt: number }>>(`SELECT COUNT(*) as cnt FROM audit_log ${where}`, args),
+      this._query(`SELECT * FROM audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`, [...args, limit, offset]),
+    ]);
+    return { rows, total: (countRows[0] as unknown as { cnt: number } | undefined)?.cnt ?? 0 };
+  }
+
   insertScheduledJob(job: {
     id: string;
     user_id: string;

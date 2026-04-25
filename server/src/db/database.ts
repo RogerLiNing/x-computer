@@ -745,6 +745,60 @@ export class SqliteAppDatabase {
       .all(userId, limit);
   }
 
+  queryAudit(params: {
+    userId?: string;
+    taskId?: string;
+    type?: string;
+    riskLevel?: string;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+    offset?: number;
+  }): { rows: unknown[]; total: number } {
+    const conditions: string[] = [];
+    const args: (string | number)[] = [];
+
+    if (params.userId) {
+      conditions.push('user_id = ?');
+      args.push(params.userId);
+    }
+    if (params.taskId) {
+      conditions.push('task_id = ?');
+      args.push(params.taskId);
+    }
+    if (params.type) {
+      conditions.push('type = ?');
+      args.push(params.type);
+    }
+    if (params.riskLevel) {
+      conditions.push('risk_level = ?');
+      args.push(params.riskLevel);
+    }
+    if (params.startTime) {
+      conditions.push('created_at >= ?');
+      args.push(params.startTime);
+    }
+    if (params.endTime) {
+      conditions.push('created_at <= ?');
+      args.push(params.endTime);
+    }
+
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = params.limit ?? 100;
+    const offset = params.offset ?? 0;
+
+    const countRow = this.db
+      .prepare(`SELECT COUNT(*) as cnt FROM audit_log ${where}`)
+      .get(...args) as { cnt: number } | undefined;
+    const total = countRow?.cnt ?? 0;
+
+    const rows = this.db
+      .prepare(`SELECT * FROM audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...args, limit, offset);
+
+    return { rows, total };
+  }
+
   // ── Scheduled Jobs (X 主脑定时任务持久化) ─────────────────────
 
   insertScheduledJob(job: {
@@ -1133,6 +1187,28 @@ export class SqliteDatabaseAdapter {
   }
   queryOne<T = unknown>(sql: string, params?: unknown[]): Promise<T | undefined> {
     return this.db.queryOne<T>(sql, params ?? []);
+  }
+  queryAudit(params: {
+    userId?: string; taskId?: string; type?: string; riskLevel?: string;
+    startTime?: number; endTime?: number; limit?: number; offset?: number;
+  }): Promise<{ rows: unknown[]; total: number }> {
+    const conditions: string[] = [];
+    const args: (string | number)[] = [];
+    if (params.userId) { conditions.push('user_id = ?'); args.push(params.userId); }
+    if (params.taskId) { conditions.push('task_id = ?'); args.push(params.taskId); }
+    if (params.type) { conditions.push('type = ?'); args.push(params.type); }
+    if (params.riskLevel) { conditions.push('risk_level = ?'); args.push(params.riskLevel); }
+    if (params.startTime) { conditions.push('created_at >= ?'); args.push(params.startTime); }
+    if (params.endTime) { conditions.push('created_at <= ?'); args.push(params.endTime); }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+    const limit = params.limit ?? 100;
+    const offset = params.offset ?? 0;
+    const stmt = this.db.prepare(`SELECT COUNT(*) as cnt FROM audit_log ${where}`);
+    const countRow = stmt.get(...args) as { cnt: number } | undefined;
+    const rows = this.db
+      .prepare(`SELECT * FROM audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...args, limit, offset);
+    return Promise.resolve({ rows, total: countRow?.cnt ?? 0 });
   }
 
   ensureUser(userId: string, displayName?: string): Promise<UserRow> {

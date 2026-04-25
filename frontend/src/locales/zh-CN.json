@@ -309,7 +309,8 @@
     "usageAnalytics": "用量分析",
     "featureFlags": "功能开关",
     "lifecycleHooks": "生命周期 Hook",
-    "llmCouncil": "LLM 议会"
+    "llmCouncil": "LLM 议会",
+    "auditLog": "审计日志"
   },
 
   "onboarding": {

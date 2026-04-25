@@ -1641,4 +1641,29 @@ export const api = {
       }>;
       synthesis?: string;
     }>('/llm/council', { method: 'POST', body: JSON.stringify(params) }),
+
+  // ── Audit Log ────────────────────────────────────────────────
+
+  auditLogQuery: (params?: {
+    taskId?: string; type?: string; riskLevel?: string;
+    startTime?: number; endTime?: number; limit?: number; offset?: number;
+  }) => {
+    const qs = params
+      ? '?' + Object.entries(params)
+          .filter(([, v]) => v !== undefined && v !== null && v !== '')
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
+          .join('&')
+      : '';
+    return request<{
+      data: Array<{
+        id: string; userId: string | null; taskId: string; stepId: string | null;
+        type: string; intent: string | null; action: string | null; result: string | null;
+        riskLevel: string | null; metadata: Record<string, unknown> | null; createdAt: number;
+      }>;
+      meta: { total: number; limit: number; offset: number };
+    }>(`/audit-log${qs}`);
+  },
+
+  auditLogStats: () =>
+    request<{ data: { total: number; byType: Record<string, number> } }>('/audit-log/stats'),
 };

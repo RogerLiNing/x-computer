@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1561,6 +1561,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'health', labelKey: 'settings.systemHealth', icon: Activity },
     { id: 'hooks', labelKey: 'settings.lifecycleHooks', icon: Link },
     { id: 'council', labelKey: 'settings.llmCouncil', icon: Users },
+    { id: 'auditlog', labelKey: 'settings.auditLog', icon: ShieldAlert },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1770,6 +1771,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'council' && (
           <CouncilSettings />
+        )}
+
+        {tab === 'auditlog' && (
+          <AuditLogSettings />
         )}
       </div>
     </div>
@@ -2429,6 +2434,218 @@ function CouncilSettings() {
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Audit Log ─────────────────────────────────────────────────
+
+const RISK_COLORS: Record<string, string> = {
+  low: 'text-green-400',
+  medium: 'text-yellow-400',
+  high: 'text-orange-400',
+  critical: 'text-red-400',
+};
+
+const TYPE_COLORS: Record<string, string> = {
+  intent: 'text-blue-400',
+  action: 'text-purple-400',
+  result: 'text-green-400',
+  approval: 'text-yellow-400',
+  error: 'text-red-400',
+  system: 'text-gray-400',
+};
+
+function AuditLogSettings() {
+  const { t } = useTranslation();
+  const [entries, setEntries] = useState<Array<{
+    id: string; userId: string | null; taskId: string; stepId: string | null;
+    type: string; intent: string | null; action: string | null; result: string | null;
+    riskLevel: string | null; metadata: Record<string, unknown> | null; createdAt: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [filterType, setFilterType] = useState('');
+  const [filterRisk, setFilterRisk] = useState('');
+  const [filterTaskId, setFilterTaskId] = useState('');
+  const [stats, setStats] = useState<{ total: number; byType: Record<string, number> } | null>(null);
+  const LIMIT = 50;
+
+  const fetchEntries = useCallback(async (p: number) => {
+    setLoading(true);
+    try {
+      const data = await api.auditLogQuery({
+        type: filterType || undefined,
+        riskLevel: filterRisk || undefined,
+        taskId: filterTaskId || undefined,
+        limit: LIMIT,
+        offset: p * LIMIT,
+      });
+      setEntries(data.data);
+      setTotal(data.meta.total);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [filterType, filterRisk, filterTaskId]);
+
+  useEffect(() => { fetchEntries(0); setPage(0); }, [fetchEntries]);
+
+  useEffect(() => {
+    api.auditLogStats().then((d) => setStats(d.data)).catch(() => {});
+  }, []);
+
+  const totalPages = Math.ceil(total / LIMIT);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t('settings.auditLog')}</h2>
+        <div className="flex items-center gap-4 text-xs text-desktop-muted">
+          <span>{total.toLocaleString()} 条记录</span>
+          <button
+            onClick={() => fetchEntries(page)}
+            disabled={loading}
+            className="flex items-center gap-1 hover:text-desktop-text transition-colors disabled:opacity-50"
+          >
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            刷新
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      {stats && (
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+          {Object.entries(stats.byType).map(([type, count]) => (
+            <div key={type} className="bg-white/5 rounded-lg p-3 text-center">
+              <div className={`text-lg font-mono ${TYPE_COLORS[type] ?? 'text-desktop-text'}`}>{count}</div>
+              <div className="text-xs text-desktop-muted capitalize">{type}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex gap-3 items-center flex-wrap">
+        <select
+          className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+          value={filterType}
+          onChange={(e) => { setFilterType(e.target.value); }}
+        >
+          <option value="">所有类型</option>
+          {['intent', 'action', 'result', 'approval', 'error', 'system'].map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        <select
+          className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+          value={filterRisk}
+          onChange={(e) => { setFilterRisk(e.target.value); }}
+        >
+          <option value="">所有风险</option>
+          {['low', 'medium', 'high', 'critical'].map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </select>
+        <input
+          className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50 flex-1 min-w-32"
+          placeholder="Task ID 过滤..."
+          value={filterTaskId}
+          onChange={(e) => setFilterTaskId(e.target.value)}
+        />
+        {(filterType || filterRisk || filterTaskId) && (
+          <button
+            onClick={() => { setFilterType(''); setFilterRisk(''); setFilterTaskId(''); }}
+            className="text-xs text-desktop-muted hover:text-desktop-text"
+          >
+            清除筛选
+          </button>
+        )}
+      </div>
+
+      {/* Table */}
+      {loading && entries.length === 0 ? (
+        <div className="text-center text-desktop-muted py-8">{t('common.loading')}</div>
+      ) : entries.length === 0 ? (
+        <div className="text-center text-desktop-muted py-8">暂无审计日志</div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-white/10 text-desktop-muted">
+                  <th className="text-left py-2 px-3 font-medium">时间</th>
+                  <th className="text-left py-2 px-3 font-medium">类型</th>
+                  <th className="text-left py-2 px-3 font-medium">意图</th>
+                  <th className="text-left py-2 px-3 font-medium">动作</th>
+                  <th className="text-left py-2 px-3 font-medium">结果</th>
+                  <th className="text-left py-2 px-3 font-medium">风险</th>
+                  <th className="text-left py-2 px-3 font-medium">Task ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry) => (
+                  <tr key={entry.id} className="border-b border-white/5 hover:bg-white/5">
+                    <td className="py-2 px-3 text-desktop-muted font-mono whitespace-nowrap">
+                      {new Date(entry.createdAt).toLocaleString()}
+                    </td>
+                    <td className="py-2 px-3">
+                      <span className={`${TYPE_COLORS[entry.type] ?? 'text-desktop-text'} capitalize font-medium`}>
+                        {entry.type}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-desktop-text max-w-xs truncate" title={entry.intent ?? ''}>
+                      {entry.intent ?? '—'}
+                    </td>
+                    <td className="py-2 px-3 text-desktop-text max-w-xs truncate" title={entry.action ?? ''}>
+                      {entry.action ?? '—'}
+                    </td>
+                    <td className="py-2 px-3 text-desktop-muted max-w-xs truncate" title={entry.result ?? ''}>
+                      {entry.result ?? '—'}
+                    </td>
+                    <td className="py-2 px-3">
+                      {entry.riskLevel ? (
+                        <span className={`${RISK_COLORS[entry.riskLevel] ?? 'text-desktop-text'} capitalize font-mono`}>
+                          {entry.riskLevel}
+                        </span>
+                      ) : '—'}
+                    </td>
+                    <td className="py-2 px-3 text-desktop-muted font-mono max-w-[100px] truncate" title={entry.taskId}>
+                      {entry.taskId}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => { const p = page - 1; if (p >= 0) { setPage(p); fetchEntries(p); } }}
+                disabled={page === 0}
+                className="px-3 py-1 rounded text-xs bg-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors"
+              >
+                上一页
+              </button>
+              <span className="text-xs text-desktop-muted">
+                第 {page + 1} / {totalPages} 页
+              </span>
+              <button
+                onClick={() => { const p = page + 1; if (p < totalPages) { setPage(p); fetchEntries(p); } }}
+                disabled={page >= totalPages - 1}
+                className="px-3 py-1 rounded text-xs bg-white/5 hover:bg-white/10 disabled:opacity-30 transition-colors"
+              >
+                下一页
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
