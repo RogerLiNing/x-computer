@@ -14,6 +14,16 @@
 import { Router } from 'express';
 import type { AppDatabase } from '../db/database.js';
 
+/** 提取搜索关键词周围的文本片段 */
+function extractSnippet(content: string, q: string, context = 60): string {
+  const idx = content.toLowerCase().indexOf(q);
+  if (idx === -1) return content.slice(0, 120);
+  const start = Math.max(0, idx - context);
+  const end = Math.min(content.length, idx + q.length + context);
+  const snippet = content.slice(start, end);
+  return (start > 0 ? '…' : '') + snippet + (end < content.length ? '…' : '');
+}
+
 export interface ChatSessionRouterOptions {
   /** R014：用户追加消息后可选触发 X 事件驱动执行（由调用方节流） */
   onMessageAdded?: (userId: string) => void;
@@ -169,6 +179,35 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         createdAt: m.created_at,
       })),
     );
+  });
+
+  /** GET /api/chat/sessions/:id/messages/search?q= - 搜索会话内的消息 */
+  router.get('/:id/messages/search', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (session.user_id !== req.userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const q = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+    if (!q) {
+      res.json([]);
+      return;
+    }
+    const messages = await db.getMessages(session.id, 500);
+    const results = messages
+      .filter((m) => m.content && m.content.toLowerCase().includes(q))
+      .map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        createdAt: m.created_at,
+        snippet: extractSnippet(m.content, q),
+      }));
+    res.json(results);
   });
 
   /** POST /api/chat/sessions/:id/messages - 追加消息 */

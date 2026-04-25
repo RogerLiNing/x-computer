@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -48,6 +48,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; file: File }[]>([]);
   const [snippetPickerOpen, setSnippetPickerOpen] = useState(false);
   const [exportDropdownSessionId, setExportDropdownSessionId] = useState<string | null>(null);
+  const [messageSearch, setMessageSearch] = useState('');
+  const [messageSearchResults, setMessageSearchResults] = useState<string[]>([]);
+  const [messageSearchIndex, setMessageSearchIndex] = useState(0);
   const [snippets, setSnippets] = useState<Array<{ id: string; title: string; code: string; language: string; description?: string }>>([]);
   const [snippetFilter, setSnippetFilter] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -121,6 +124,29 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       if (Array.isArray(raw)) setSnippets(raw as typeof snippets);
     }).catch(() => {});
   }, []);
+
+  // Message search: filter messages by search query
+  useEffect(() => {
+    if (!messageSearch.trim() || !currentSessionId) {
+      setMessageSearchResults([]);
+      return;
+    }
+    const q = messageSearch.toLowerCase();
+    const ids = messages
+      .filter((m) => m.content && m.content.toLowerCase().includes(q) && m.id !== 'welcome')
+      .map((m) => m.id);
+    setMessageSearchResults(ids);
+    setMessageSearchIndex(0);
+  }, [messageSearch, messages, currentSessionId]);
+
+  // Navigate search results
+  const navigateSearch = (dir: 1 | -1) => {
+    if (messageSearchResults.length === 0) return;
+    const next = (messageSearchIndex + dir + messageSearchResults.length) % messageSearchResults.length;
+    setMessageSearchIndex(next);
+    const el = document.getElementById(`msg-${messageSearchResults[next]}`);
+    el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
 
   // 会话列表：挂载时加载；上次会话由 useChatSessions 内从云端/本地恢复
   useEffect(() => {
@@ -1379,14 +1405,74 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto px-2 sm:px-4 py-3 space-y-3 sm:space-y-4">
+      <div className="flex-1 overflow-auto px-2 sm:px-4 py-3 space-y-3 sm:space-y-4 relative">
+        {currentSessionId && (
+          <div className="sticky top-0 z-10 pb-2 -mx-1 sm:-mx-2">
+            <div className="flex items-center gap-2 bg-desktop-surface/95 backdrop-blur-sm border border-white/10 rounded-xl px-3 py-2 shadow-sm">
+              <Search size={13} className="text-desktop-muted shrink-0" />
+              <input
+                type="text"
+                id="chat-message-search"
+                placeholder="搜索消息内容..."
+                className="flex-1 bg-transparent outline-none text-xs text-desktop-text placeholder:text-desktop-muted"
+                value={messageSearch}
+                onChange={(e) => setMessageSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') setMessageSearch('');
+                }}
+              />
+              {messageSearch && (
+                <button
+                  type="button"
+                  onClick={() => setMessageSearch('')}
+                  className="text-desktop-muted hover:text-desktop-text p-0.5"
+                >
+                  <X size={12} />
+                </button>
+              )}
+              {messageSearchResults.length > 0 && (
+                <span className="text-[10px] text-desktop-accent shrink-0">
+                  {messageSearchIndex + 1}/{messageSearchResults.length}
+                </span>
+              )}
+              {messageSearchResults.length > 0 && (
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => navigateSearch(-1)}
+                    className="p-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
+                    title="上一个"
+                  >
+                    <ChevronUp size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigateSearch(1)}
+                    className="p-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
+                    title="下一个"
+                  >
+                    <ChevronDown size={12} />
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         {chatSyncFailed && (
           <div className="rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs px-3 py-2">
             部分消息未同步到云端，请检查网络。恢复后可继续发送，新消息将正常同步。
           </div>
         )}
         {messages.map((msg) => (
-          <div key={msg.id} className={`flex gap-2 sm:gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+          <div
+            key={msg.id}
+            id={`msg-${msg.id}`}
+            className={`flex gap-2 sm:gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''} ${
+              messageSearchResults.length > 0 && messageSearchResults[messageSearchIndex] === msg.id
+                ? 'ring-2 ring-desktop-accent rounded-xl'
+                : ''
+            }`}
+          >
             {msg.role !== 'user' && (
               <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0 mt-0.5">
                 <Bot size={14} className="text-desktop-highlight" />

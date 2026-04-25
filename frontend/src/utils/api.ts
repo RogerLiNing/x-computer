@@ -1450,6 +1450,12 @@ export const api = {
       `/chat/sessions/${sessionId}`,
     ),
 
+  /** 搜索会话内的消息 */
+  searchChatMessages: (sessionId: string, q: string) =>
+    request<Array<{ id: string; role: string; content: string; createdAt: string; snippet: string }>>(
+      `/chat/sessions/${sessionId}/messages/search?q=${encodeURIComponent(q)}`,
+    ),
+
   /** 更新会话标题 */
   updateChatSessionTitle: (sessionId: string, title: string) =>
     request<{ success: boolean }>(`/chat/sessions/${sessionId}`, {
