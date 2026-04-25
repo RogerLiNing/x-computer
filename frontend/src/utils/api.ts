@@ -405,6 +405,100 @@ export const api = {
       avgTasksPerDay: number;
     }>(`/admin/usage/tasks${days ? `?days=${days}` : ''}`),
 
+  // ── Webhooks ────────────────────────────────────────────────────
+
+  /** 列出当前用户所有 Webhook */
+  webhooksList: () =>
+    request<Array<{
+      id: string;
+      userId: string;
+      name: string;
+      description: string | null;
+      urlPath: string;
+      events: string[];
+      enabled: boolean;
+      headers: Record<string, string> | null;
+      createdAt: number;
+      updatedAt: number;
+    }>>('/admin/webhooks'),
+
+  /** 创建 Webhook */
+  webhooksCreate: (params: {
+    name: string;
+    description?: string;
+    events: string[];
+    headers?: Record<string, string>;
+  }) =>
+    request<{
+      id: string;
+      userId: string;
+      name: string;
+      urlPath: string;
+      secret: string;
+      events: string[];
+      enabled: boolean;
+      createdAt: number;
+    }>('/admin/webhooks', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  /** 获取单个 Webhook */
+  webhooksGet: (id: string) =>
+    request<{
+      id: string;
+      userId: string;
+      name: string;
+      description: string | null;
+      urlPath: string;
+      secret: string;
+      events: string[];
+      enabled: boolean;
+      headers: Record<string, string> | null;
+      createdAt: number;
+      updatedAt: number;
+    }>(`/admin/webhooks/${encodeURIComponent(id)}`),
+
+  /** 更新 Webhook */
+  webhooksUpdate: (id: string, fields: {
+    name?: string;
+    description?: string;
+    events?: string[];
+    enabled?: boolean;
+    headers?: Record<string, string> | null;
+  }) =>
+    request<{ id: string; name: string; enabled: boolean }>(`/admin/webhooks/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(fields),
+    }),
+
+  /** 删除 Webhook */
+  webhooksDelete: (id: string) =>
+    request<{ success: boolean }>(`/admin/webhooks/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  /** 重新生成 Webhook 密钥 */
+  webhooksRegenerateSecret: (id: string) =>
+    request<{ secret: string }>(`/admin/webhooks/${encodeURIComponent(id)}/regenerate-secret`, {
+      method: 'POST',
+    }),
+
+  /** 获取 Webhook 调用日志 */
+  webhooksGetLogs: (id: string, limit?: number) =>
+    request<Array<{
+      id: string;
+      webhookId: string;
+      event: string;
+      payload: string | null;
+      headers: Record<string, string> | null;
+      ipAddress: string | null;
+      signatureValid: boolean;
+      responseStatus: number | null;
+      triggeredTaskId: string | null;
+      createdAt: number;
+    }>>(`/admin/webhooks/${encodeURIComponent(id)}/logs${limit ? `?limit=${limit}` : ''}`),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{

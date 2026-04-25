@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2 } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -252,6 +252,294 @@ function HeartbeatSettings() {
       >
         {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
       </button>
+    </div>
+  );
+}
+
+function WebhooksSettings() {
+  const { t } = useTranslation();
+  const [webhooks, setWebhooks] = useState<Array<{
+    id: string; userId: string; name: string; description: string | null;
+    urlPath: string; events: string[]; enabled: boolean; createdAt: number; updatedAt: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', description: '', events: [] as string[] });
+  const [creating, setCreating] = useState(false);
+  const [newSecret, setNewSecret] = useState<string | null>(null);
+  const [selectedWebhook, setSelectedWebhook] = useState<string | null>(null);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [loadingLogs, setLoadingLogs] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const fetchWebhooks = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.webhooksList();
+      setWebhooks(data);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchWebhooks(); }, [fetchWebhooks]);
+
+  const handleCreate = async () => {
+    if (!createForm.name || createForm.events.length === 0) return;
+    setCreating(true);
+    try {
+      const result = await api.webhooksCreate({
+        name: createForm.name,
+        description: createForm.description || undefined,
+        events: createForm.events,
+      });
+      setNewSecret(result.secret);
+      setShowCreate(false);
+      setCreateForm({ name: '', description: '', events: [] });
+      await fetchWebhooks();
+    } catch { /* ignore */ }
+    finally { setCreating(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('确定删除此 Webhook？')) return;
+    try {
+      await api.webhooksDelete(id);
+      setWebhooks((prev) => prev.filter((w) => w.id !== id));
+      if (selectedWebhook === id) setSelectedWebhook(null);
+    } catch { /* ignore */ }
+  };
+
+  const handleToggle = async (id: string, currentEnabled: boolean) => {
+    try {
+      await api.webhooksUpdate(id, { enabled: !currentEnabled });
+      setWebhooks((prev) => prev.map((w) => w.id === id ? { ...w, enabled: !currentEnabled } : w));
+    } catch { /* ignore */ }
+  };
+
+  const handleRegenerate = async (id: string) => {
+    try {
+      const result = await api.webhooksRegenerateSecret(id);
+      setNewSecret(result.secret);
+    } catch { /* ignore */ }
+  };
+
+  const handleViewLogs = async (id: string) => {
+    if (selectedWebhook === id) { setSelectedWebhook(null); return; }
+    setSelectedWebhook(id);
+    setLoadingLogs(true);
+    try {
+      const data = await api.webhooksGetLogs(id, 30);
+      setLogs(data);
+    } catch { setLogs([]); }
+    finally { setLoadingLogs(false); }
+  };
+
+  const handleCopy = (text: string, id: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 1500);
+    });
+  };
+
+  const EVENT_OPTIONS = [
+    { value: 'task.trigger', label: '任务触发 (task.trigger)' },
+    { value: 'github.push', label: 'GitHub Push (github.push)' },
+    { value: 'github.pull_request', label: 'GitHub PR (github.pull_request)' },
+    { value: 'github.issue_comment', label: 'GitHub Issue Comment' },
+    { value: 'schedule', label: '定时触发 (schedule)' },
+    { value: 'manual', label: '手动触发 (manual)' },
+  ];
+
+  const eventLabel = (ev: string) => EVENT_OPTIONS.find((o) => o.value === ev)?.label ?? ev;
+
+  const webhookBaseUrl = window.location.origin;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.webhooks', 'Webhook 管理')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-0.5">
+            {t('settings.webhooksDesc', '配置 Webhook 让外部服务触发 X 主脑任务')}
+          </p>
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-xs text-desktop-text transition-colors flex items-center gap-1"
+        >
+          <Plus size={12} /> {t('settings.addWebhook', '添加')}
+        </button>
+      </div>
+
+      {/* 创建表单 */}
+      {showCreate && (
+        <div className="bg-white/[0.03] rounded-xl p-4 border border-desktop-accent/30 space-y-3">
+          <h4 className="text-xs font-medium text-desktop-text">{t('settings.createWebhook', '创建 Webhook')}</h4>
+          <input
+            type="text"
+            placeholder={t('settings.webhookName', 'Webhook 名称')}
+            value={createForm.name}
+            onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+          />
+          <input
+            type="text"
+            placeholder={t('settings.webhookDescOptional', '描述（可选）')}
+            value={createForm.description}
+            onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+          />
+          <div className="space-y-1">
+            <div className="text-[10px] text-desktop-muted">{t('settings.triggerEvents', '触发事件')}（{t('settings.selectAtLeastOne', '至少选一个')}）</div>
+            {EVENT_OPTIONS.map((opt) => (
+              <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={createForm.events.includes(opt.value)}
+                  onChange={(e) => {
+                    setCreateForm((f) => ({
+                      ...f,
+                      events: e.target.checked
+                        ? [...f.events, opt.value]
+                        : f.events.filter((ev) => ev !== opt.value),
+                    }));
+                  }}
+                  className="accent-desktop-accent"
+                />
+                <span className="text-[11px] text-desktop-muted">{opt.label}</span>
+              </label>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCreate}
+              disabled={creating || !createForm.name || createForm.events.length === 0}
+              className="px-3 py-1.5 rounded-lg bg-desktop-accent/50 hover:bg-desktop-accent/70 disabled:opacity-40 text-xs text-desktop-text transition-colors"
+            >
+              {creating ? t('settings.creating', '创建中…') : t('settings.create', '创建')}
+            </button>
+            <button
+              onClick={() => { setShowCreate(false); setCreateForm({ name: '', description: '', events: [] }); }}
+              className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+            >
+              {t('settings.cancel', '取消')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 新密钥提示 */}
+      {newSecret && (
+        <div className="bg-yellow-500/10 rounded-xl p-3 border border-yellow-500/30 space-y-2">
+          <div className="text-xs text-yellow-400 font-medium">{t('settings.webhookSecretCreated', 'Webhook 已创建！请保存密钥（仅显示一次）：')}</div>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-[10px] text-yellow-200 bg-black/30 rounded px-2 py-1 font-mono break-all">{newSecret}</code>
+            <button
+              onClick={() => handleCopy(newSecret, 'secret')}
+              className="px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-[10px] text-desktop-muted shrink-0"
+            >
+              {copiedId === 'secret' ? '✓' : <Copy size={10} />}
+            </button>
+          </div>
+          <button onClick={() => setNewSecret(null)} className="text-[10px] text-desktop-muted/60 hover:text-desktop-muted">
+            {t('settings.dismiss', '知道了')}
+          </button>
+        </div>
+      )}
+
+      {/* Webhook 列表 */}
+      {loading ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', '加载中…')}</div>
+      ) : webhooks.length === 0 ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">
+          {t('settings.noWebhooks', '暂无 Webhook，点击上方添加创建一个')}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {webhooks.map((wh) => (
+            <div key={wh.id} className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
+              <div className="px-3 py-2.5 flex items-center gap-2">
+                <button
+                  onClick={() => handleToggle(wh.id, wh.enabled)}
+                  className={`shrink-0 transition-colors ${wh.enabled ? 'text-green-400' : 'text-desktop-muted/30'}`}
+                >
+                  <ToggleRight size={18} fill={wh.enabled ? 'currentColor' : 'none'} />
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-desktop-text font-medium truncate">{wh.name}</div>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <code className="text-[9px] text-desktop-muted/60 font-mono">
+                      {webhookBaseUrl}{wh.urlPath}
+                    </code>
+                    <button
+                      onClick={() => handleCopy(`${webhookBaseUrl}${wh.urlPath}`, wh.id)}
+                      className="text-desktop-muted/40 hover:text-desktop-muted"
+                    >
+                      {copiedId === wh.id ? <CheckCircle size={9} className="text-green-400" /> : <Copy size={9} />}
+                    </button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => handleViewLogs(wh.id)}
+                    className="p-1 rounded hover:bg-white/10 text-desktop-muted/50 hover:text-desktop-muted"
+                    title="查看日志"
+                  >
+                    <FileText size={13} />
+                  </button>
+                  <button
+                    onClick={() => handleRegenerate(wh.id)}
+                    className="p-1 rounded hover:bg-white/10 text-desktop-muted/50 hover:text-desktop-muted"
+                    title="重新生成密钥"
+                  >
+                    <RefreshCw size={13} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(wh.id)}
+                    className="p-1 rounded hover:bg-red-500/10 text-desktop-muted/50 hover:text-red-400"
+                    title="删除"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+              {/* 事件标签 */}
+              <div className="px-3 pb-2 flex flex-wrap gap-1">
+                {wh.events.map((ev) => (
+                  <span key={ev} className="text-[9px] px-1.5 py-0.5 rounded bg-desktop-accent/15 text-desktop-muted font-mono">
+                    {ev}
+                  </span>
+                ))}
+              </div>
+              {/* 日志展开 */}
+              {selectedWebhook === wh.id && (
+                <div className="border-t border-white/5 px-3 py-2 max-h-48 overflow-y-auto space-y-1.5">
+                  <div className="text-[10px] text-desktop-muted/60 mb-1">{t('settings.webhookLogs', '调用日志')}</div>
+                  {loadingLogs ? (
+                    <div className="text-[10px] text-desktop-muted">{t('settings.loading', '加载中…')}</div>
+                  ) : logs.length === 0 ? (
+                    <div className="text-[10px] text-desktop-muted">{t('settings.noLogs', '暂无调用记录')}</div>
+                  ) : logs.map((log) => (
+                    <div key={log.id} className="text-[10px] bg-white/[0.02] rounded px-2 py-1.5 space-y-0.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${log.signatureValid ? 'bg-green-400' : 'bg-red-400'}`} />
+                        <span className="text-desktop-text/80 font-mono">{log.event}</span>
+                        <span className="text-desktop-muted/50 ml-auto">{new Date(log.createdAt).toLocaleString()}</span>
+                      </div>
+                      {log.triggeredTaskId && (
+                        <div className="text-desktop-muted/40">→ 任务: {log.triggeredTaskId}</div>
+                      )}
+                      {log.ipAddress && (
+                        <div className="text-desktop-muted/40">IP: {log.ipAddress}</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -940,6 +1228,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'logs', labelKey: 'settings.logs', icon: FileText },
     { id: 'flags', labelKey: 'settings.featureFlags', icon: ToggleRight },
     { id: 'usage', labelKey: 'settings.usageAnalytics', icon: BarChart2 },
+    { id: 'webhooks', labelKey: 'settings.webhooks', icon: WebhookIcon },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1128,6 +1417,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'usage' && (
           <UsageAnalyticsSettings />
+        )}
+
+        {tab === 'webhooks' && (
+          <WebhooksSettings />
         )}
       </div>
     </div>

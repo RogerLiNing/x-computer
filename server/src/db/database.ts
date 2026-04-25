@@ -1111,6 +1111,9 @@ export class SqliteDatabaseAdapter {
   query<T = unknown>(sql: string, params?: unknown[]): Promise<T[]> {
     return this.db.query<T>(sql, params ?? []);
   }
+  queryAll<T = unknown>(sql: string, params?: unknown[]): Promise<T[]> {
+    return this.db.query<T>(sql, params ?? []);
+  }
   queryOne<T = unknown>(sql: string, params?: unknown[]): Promise<T | undefined> {
     return this.db.queryOne<T>(sql, params ?? []);
   }
@@ -1407,6 +1410,8 @@ export type AppDatabase = AsyncDatabase;
 export interface CreateDatabaseOptions {
   /** 数据库类型：不传时从环境变量 DATABASE_TYPE 读取，默认 sqlite */
   type?: 'sqlite' | 'mysql';
+  /** MySQL 专用：跳过 initSchema，由迁移负责建表（避免重复建表冲突） */
+  skipInit?: boolean;
 }
 
 /**
@@ -1420,7 +1425,7 @@ export async function createDatabase(
   const type = (options?.type ?? process.env.DATABASE_TYPE ?? 'sqlite').toLowerCase().trim();
   if (type === 'mysql') {
     const { MysqlDatabase } = await import('./database-mysql.js');
-    const db = new MysqlDatabase(basePath);
+    const db = new MysqlDatabase(basePath, { skipInit: options?.skipInit ?? false });
     await db.init();
     return db;
   }

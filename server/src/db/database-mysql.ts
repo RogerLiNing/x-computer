@@ -40,10 +40,12 @@ function getPool(): Pool {
 export class MysqlDatabase {
   private pool: Pool;
   private readonly initPromise: Promise<void>;
+  private readonly skipInit: boolean;
 
-  constructor(_basePath: string) {
+  constructor(_basePath: string, options?: { skipInit?: boolean }) {
     this.pool = getPool();
-    this.initPromise = this.initSchema();
+    this.skipInit = options?.skipInit ?? false;
+    this.initPromise = this.skipInit ? Promise.resolve() : this.initSchema();
   }
 
   /** 初始化 schema，createDatabase 会 await 此方法 */
@@ -384,6 +386,10 @@ export class MysqlDatabase {
 
   /** 查询多行（公开 API，与 SQLite 适配器一致） */
   async query<T = unknown>(sql: string, params: (string | number | null)[] = []): Promise<T[]> {
+    return this._query<T>(sql, params);
+  }
+  /** 查询多行（alias for query） */
+  async queryAll<T = unknown>(sql: string, params: (string | number | null)[] = []): Promise<T[]> {
     return this._query<T>(sql, params);
   }
 

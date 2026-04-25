@@ -35,6 +35,8 @@ import { createPageIndexRouter } from './routes/pageindex.js';
 import { createFeatureFlagsRouter } from './routes/featureFlags.js';
 import { initFeatureFlags } from './config/featureFlags.js';
 import { createUsageAnalyticsRouter } from './routes/usageAnalytics.js';
+import { createWebhooksRouter } from './routes/webhooks.js';
+import { createWebhookTriggerRouter } from './routes/webhookTrigger.js';
 import { userContextMiddleware } from './middleware/userContext.js';
 import { SubscriptionService } from './subscription/SubscriptionService.js';
 import { StripePaymentService } from './subscription/stripeService.js';
@@ -282,11 +284,16 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
 
   const app = express();
   app.use(cors());
+  // Webhook 验签需要原始 body，在 express.json 之前捕获
+  app.use('/webhook', express.text({ type: '*/*', limit: '5mb', verify: (req: any, _res, buf) => { req.rawBody = buf.toString(); } }));
   app.use(express.json({ limit: '5mb' }));
 
   // ── OAuth 回调（无需用户上下文，在 userContextMiddleware 之前挂载） ──
   const oauthConfig = config.oauth;
   app.use('/oauth/callback', createOAuthCallbackRouter(db, oauthConfig));
+
+  // ── Webhook 触发端点（无需认证，外部服务调用） ──
+  app.use('/webhook', createWebhookTriggerRouter(db, orchestrator));
 
   // ── 用户上下文中间件（所有 /api 路由前注入 userId） ──
   app.use('/api', userContextMiddleware(allowAnonymous));
@@ -304,6 +311,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/admin', createAdminRouter(db, subscriptionService));
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter());
   app.use('/api/admin/usage', createUsageAnalyticsRouter(db));
+  app.use('/api/admin/webhooks', createWebhooksRouter(db));
   app.use('/api/llm', createLLMRouter());
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));
