@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2 } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -1696,6 +1696,32 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       >
                         {speakingMsgId === msg.id ? <VolumeX size={13} /> : <Speaker size={13} />}
                       </button>
+                      <div className="absolute -top-1 right-6 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button
+                          type="button"
+                          title="赞"
+                          onClick={async () => {
+                            const next = { ...(msg.reactions ?? {}), thumbsUp: !(msg.reactions?.thumbsUp ?? false), thumbsDown: false };
+                            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: next } : m)));
+                            try { await api.setMessageReaction(msg.id, next); } catch { /* revert on error */ }
+                          }}
+                          className={`p-1 rounded transition-colors ${msg.reactions?.thumbsUp ? 'text-desktop-accent' : 'text-desktop-muted hover:text-desktop-text'}`}
+                        >
+                          <ThumbsUp size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          title="踩"
+                          onClick={async () => {
+                            const next = { ...(msg.reactions ?? {}), thumbsDown: !(msg.reactions?.thumbsDown ?? false), thumbsUp: false };
+                            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: next } : m)));
+                            try { await api.setMessageReaction(msg.id, next); } catch { /* revert on error */ }
+                          }}
+                          className={`p-1 rounded transition-colors ${msg.reactions?.thumbsDown ? 'text-red-400' : 'text-desktop-muted hover:text-desktop-text'}`}
+                        >
+                          <ThumbsDown size={13} />
+                        </button>
+                      </div>
                       <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
                         <MarkdownWithThink content={msg.content} />
                       </div>

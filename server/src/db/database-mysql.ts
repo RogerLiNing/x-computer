@@ -12,7 +12,7 @@ import { v4 as uuid } from 'uuid';
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
 interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; }
-interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; created_at: string; }
+interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; created_at: string; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Pool = mysql.Pool;
@@ -87,6 +87,7 @@ export class MysqlDatabase {
       tool_calls_json LONGTEXT,
       images_json LONGTEXT,
       attached_files_json LONGTEXT,
+      reactions TEXT,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`, [], true);
     await this.ensureIndex(
@@ -257,6 +258,7 @@ export class MysqlDatabase {
       'ALTER TABLE chat_messages ADD COLUMN attached_files_json LONGTEXT',
       true,
     );
+    await this.ensureColumn('chat_messages', 'reactions', 'ALTER TABLE chat_messages ADD COLUMN reactions TEXT', true);
 
     await this._run(`CREATE TABLE IF NOT EXISTS servers (
       id VARCHAR(64) PRIMARY KEY,
@@ -686,8 +688,13 @@ export class MysqlDatabase {
       tool_calls_json: toolCallsJson ?? null,
       images_json: imagesJson ?? null,
       attached_files_json: attachedFilesJson ?? null,
+      reactions: null,
       created_at: now,
     };
+  }
+
+  updateMessageReactions(messageId: string, reactions: string): Promise<void> {
+    return this._run('UPDATE chat_messages SET reactions = ? WHERE id = ?', [reactions, messageId]);
   }
 
   getMessages(sessionId: string, limit = 200): Promise<ChatMessageRow[]> {

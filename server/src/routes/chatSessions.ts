@@ -234,6 +234,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         attachedFiles: (m as { attached_files_json?: string | null }).attached_files_json
           ? JSON.parse((m as { attached_files_json: string }).attached_files_json)
           : undefined,
+        reactions: m.reactions ? JSON.parse(m.reactions) : undefined,
         createdAt: m.created_at,
       })),
     );
@@ -313,6 +314,22 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     }
     await db.deleteMessage(req.params.msgId);
     res.json({ success: true });
+  });
+
+  /** PATCH /api/chat/messages/:msgId/reactions - 更新消息表情反应 */
+  router.patch('/messages/:msgId/reactions', async (req, res) => {
+    const { reactions } = req.body ?? {};
+    if (reactions === undefined || reactions === null) {
+      res.status(400).json({ error: 'Missing reactions' });
+      return;
+    }
+    try {
+      const reactionsJson = typeof reactions === 'object' ? JSON.stringify(reactions) : String(reactions);
+      await db.updateMessageReactions(req.params.msgId, reactionsJson);
+      res.json({ success: true, reactions: JSON.parse(reactionsJson) });
+    } catch {
+      res.status(500).json({ error: 'Failed to update reactions' });
+    }
   });
 
   /** GET /api/chat/sessions/:id/export - 导出会话为 Markdown 或 JSON */

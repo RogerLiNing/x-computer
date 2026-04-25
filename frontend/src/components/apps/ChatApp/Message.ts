@@ -17,4 +17,6 @@ export interface Message {
   suggestedFollowUps?: string[];
   /** 是否为配额超限错误，若是则展示升级入口 */
   quotaError?: boolean;
+  /** 消息表情反应（thumbsUp/thumbsDown 等，值为 true 表示当前用户已点赞/点踩） */
+  reactions?: Record<string, boolean>;
 }

@@ -48,6 +48,7 @@ export interface ChatMessageRow {
   tool_calls_json: string | null;
   images_json: string | null;
   attached_files_json: string | null;
+  reactions: string | null;
   created_at: string;
 }
 
@@ -146,6 +147,7 @@ export class SqliteAppDatabase {
         tool_calls_json TEXT,
         images_json TEXT,
         attached_files_json TEXT,
+        reactions TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
@@ -360,6 +362,9 @@ export class SqliteAppDatabase {
       }
       if (!cols.some((c) => c.name === 'attached_files_json')) {
         this.db.exec('ALTER TABLE chat_messages ADD COLUMN attached_files_json TEXT');
+      }
+      if (!cols.some((c) => c.name === 'reactions')) {
+        this.db.exec('ALTER TABLE chat_messages ADD COLUMN reactions TEXT');
       }
     } catch {
       /* 忽略 */
@@ -641,8 +646,13 @@ export class SqliteAppDatabase {
       tool_calls_json: toolCallsJson ?? null,
       images_json: imagesJson ?? null,
       attached_files_json: attachedFilesJson ?? null,
+      reactions: null,
       created_at: now,
     };
+  }
+
+  updateMessageReactions(messageId: string, reactions: string): void {
+    this.db.prepare('UPDATE chat_messages SET reactions = ? WHERE id = ?').run(reactions, messageId);
   }
 
   getMessages(sessionId: string, limit = 200): ChatMessageRow[] {
@@ -1438,6 +1448,10 @@ export class SqliteDatabaseAdapter {
   }
   deleteMessage(messageId: string): Promise<void> {
     this.db.deleteMessage(messageId);
+    return Promise.resolve();
+  }
+  updateMessageReactions(messageId: string, reactions: string): Promise<void> {
+    this.db.updateMessageReactions(messageId, reactions);
     return Promise.resolve();
   }
   getRecentMessages(sessionId: string, limit?: number): Promise<ChatMessageRow[]> {

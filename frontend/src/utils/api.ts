@@ -42,6 +42,12 @@ export interface McpTestResponse {
   error?: string;
 }
 
+/** 消息反应 API 返回 */
+export interface ReactionResponse {
+  success: boolean;
+  reactions: Record<string, boolean>;
+}
+
 /** 将 mcpServers 对象或 servers 数组规范化为 McpServerConfig[] */
 export function normalizeMcpConfig(config: unknown): McpServerConfig[] {
   if (Array.isArray(config)) {
@@ -1492,6 +1498,13 @@ export const api = {
   deleteReminder: (id: string) =>
     request<{ success: boolean }>(`/reminders/${id}`, { method: 'DELETE' }),
 
+  /** 更新消息表情反应 */
+  setMessageReaction: (msgId: string, reactions: Record<string, boolean>) =>
+    request<ReactionResponse>(`/chat/messages/${msgId}/reactions`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reactions }),
+    }),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),
@@ -1506,6 +1519,7 @@ export const api = {
         toolCalls?: unknown;
         images?: string[];
         attachedFiles?: Array<{ name: string; path: string }>;
+        reactions?: Record<string, boolean>;
         createdAt: string;
       }>
     >(`/chat/sessions/${sessionId}/messages?limit=${limit}`),
