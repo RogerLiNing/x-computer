@@ -92,6 +92,9 @@ interface ConfigStore {
   searchOpen: boolean;
   toggleSearch: () => void;
   setSearchOpen: (open: boolean) => void;
+  /** 会话列表（供 SearchLauncher 使用） */
+  searchSessions: Array<{ id: string; title: string | null; summary?: string | null; tags: string[] }>;
+  setSearchSessions: (sessions: Array<{ id: string; title: string | null; summary?: string | null; tags: string[] }>) => void;
 }
 
 // ── Store ──────────────────────────────────────────────────
@@ -166,4 +169,6 @@ export const useConfigStore = create<ConfigStore>((set, _get) => ({
   searchOpen: false,
   toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
   setSearchOpen: (open) => set({ searchOpen: open }),
+  searchSessions: [],
+  setSearchSessions: (sessions) => set({ searchSessions: sessions }),
 }));

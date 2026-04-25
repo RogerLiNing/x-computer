@@ -7,7 +7,7 @@ import { getAllApps } from '@/appRegistry';
 import {
   Search, FolderOpen, Terminal, Globe, MessageSquare, Brain, Code,
   FileText, Mail, Calendar, Settings, Clock, Table, Zap,
-  Command, ArrowRight, Layout, FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield,
+  Command, ArrowRight, Layout, FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield, Hash,
 } from 'lucide-react';
 import type { AppIdentifier } from '@shared/index';
 
@@ -33,6 +33,8 @@ export function SearchLauncher() {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const setQueryRef = useRef(setQuery);
+  setQueryRef.current = setQuery;
 
   useEffect(() => {
     if (searchOpen) {
@@ -56,6 +58,16 @@ export function SearchLauncher() {
 
   const miniApps = useMiniAppsStore((s) => s.list);
   const isAdmin = useAdminStore((s) => s.isAdmin);
+  const searchSessions = useConfigStore((s) => s.searchSessions);
+
+  // Session navigation: close search and switch to chat, then select session
+  const navigateToSession = (sessionId: string) => {
+    useDesktopStore.getState().openApp('chat');
+    // Dispatch a custom event that ChatApp listens for
+    window.dispatchEvent(new CustomEvent('x:select-session', { detail: { sessionId } }));
+    useConfigStore.getState().setSearchOpen(false);
+  };
+
   const allItems: SearchItem[] = useMemo(() => {
     const appItems: SearchItem[] = getAllApps().map((app) => ({
       id: app.id,
@@ -66,8 +78,31 @@ export function SearchLauncher() {
       action: () => openApp(app.id),
       category: '应用',
     }));
-    return [...appItems];
-  }, [openApp, miniApps, isAdmin]);
+
+    // Sessions
+    const sessionItems: SearchItem[] = searchSessions.map((s) => ({
+      id: `session-${s.id}`,
+      label: s.title ?? '无标题会话',
+      sublabel: s.summary ? `摘要: ${s.summary}` : s.tags.length > 0 ? `#${s.tags.join(' #')}` : '',
+      icon: MessageSquare,
+      action: () => navigateToSession(s.id),
+      category: '会话',
+    }));
+
+    // Tags
+    const tagSet = new Set<string>();
+    searchSessions.forEach((s) => s.tags.forEach((t) => tagSet.add(t)));
+    const tagItems: SearchItem[] = Array.from(tagSet).map((tag) => ({
+      id: `tag-${tag}`,
+      label: `#${tag}`,
+      sublabel: `${searchSessions.filter((s) => s.tags.includes(tag)).length} 个会话`,
+      icon: Hash,
+      action: () => setQueryRef.current(`#${tag}`),
+      category: '标签',
+    }));
+
+    return [...appItems, ...sessionItems, ...tagItems];
+  }, [openApp, miniApps, isAdmin, searchSessions]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return allItems;

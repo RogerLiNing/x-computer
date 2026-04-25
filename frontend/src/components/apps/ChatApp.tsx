@@ -135,6 +135,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     forkSession,
   } = useChatSessions(setMessages);
 
+  // Sync sessions to shared store for SearchLauncher
+  useEffect(() => {
+    useConfigStore.getState().setSearchSessions(
+      sessions.map((s) => ({ id: s.id, title: s.title, summary: s.summary, tags: s.tags })),
+    );
+  }, [sessions]);
+
   const llmConfig = useLLMConfigStore.getState().llmConfig;
   const chatSel = llmConfig?.defaultByModality?.chat;
   const chatProviderId = chatSel?.providerId ?? llmConfig?.providers?.[0]?.id;
@@ -226,6 +233,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       .then((stats) => setContextStats({ messageCount: stats.messageCount, estimatedTokens: stats.estimatedTokens, usagePercent: stats.usagePercent }))
       .catch(() => setContextStats(null));
   }, [currentSessionId]);
+
+  // Listen for x:select-session events from SearchLauncher
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId: string }>).detail;
+      if (detail?.sessionId) selectSession(detail.sessionId);
+    };
+    window.addEventListener('x:select-session', handler);
+    return () => window.removeEventListener('x:select-session', handler);
+  }, [selectSession]);
 
   useEffect(() => {
     api.getWelcomeMessage().then((r) => {
