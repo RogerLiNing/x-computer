@@ -1523,6 +1523,13 @@ export const api = {
       body: JSON.stringify({ providerId, modelId, baseUrl, apiKey }),
     }),
 
+  /** LLM 自动分析会话内容并打标签 */
+  autoTagSession: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, apiKey?: string, merge = true) =>
+    request<{ tags: string[] }>(`/chat/sessions/${sessionId}/auto-tag`, {
+      method: 'PATCH',
+      body: JSON.stringify({ providerId, modelId, baseUrl, apiKey, merge }),
+    }),
+
   /** 置顶/取消置顶会话 */
   pinChatSession: (sessionId: string, pinned: boolean) =>
     request<{ success: boolean; pinned: boolean }>(`/chat/sessions/${sessionId}/pin`, {

@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link, Wand2 } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -130,6 +130,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     toggleArchive,
     refreshSessions,
     generateSummary,
+    autoTag,
   } = useChatSessions(setMessages);
 
   const llmConfig = useLLMConfigStore.getState().llmConfig;
@@ -1748,6 +1749,23 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   }}
                 >
                   <span className="text-[10px] font-bold">#</span>
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="AI 自动标签"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (!chatProviderId) { addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' }); return; }
+                    try {
+                      await autoTag(s.id, chatProviderId, chatModelId, chatBaseUrl);
+                      addNotification({ type: 'info', title: '标签已更新', message: '' });
+                    } catch {
+                      addNotification({ type: 'error', title: '自动标签失败', message: '' });
+                    }
+                  }}
+                >
+                  <Wand2 size={12} />
                 </button>
                 <button
                   type="button"

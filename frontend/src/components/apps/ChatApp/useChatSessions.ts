@@ -63,6 +63,7 @@ export interface UseChatSessionsReturn {
   setCurrentSessionId: (id: string | null) => void;
   refreshSessions: () => void;
   generateSummary: (sessionId: string, providerId: string, modelId: string, baseUrl?: string) => Promise<string>;
+  autoTag: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, merge?: boolean) => Promise<string[]>;
 }
 
 /** 会话管理：列表、当前会话、切换、新对话、ensure（发送时创建） */
@@ -189,6 +190,15 @@ export function useChatSessions(
     return res.summary ?? '';
   }, []);
 
+  const autoTag = useCallback(async (sessionId: string, providerId: string, modelId: string, baseUrl?: string, merge = true): Promise<string[]> => {
+    const res = await api.autoTagSession(sessionId, providerId, modelId, baseUrl, undefined, merge);
+    // Optimistically update session tags in state
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, tags: res.tags } : s)),
+    );
+    return res.tags;
+  }, []);
+
   return {
     sessions,
     currentSessionId,
@@ -206,5 +216,6 @@ export function useChatSessions(
     setCurrentSessionId,
     refreshSessions: loadSessions,
     generateSummary,
+    autoTag,
   };
 }

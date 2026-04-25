@@ -376,6 +376,90 @@ ${transcript}
     }
   });
 
+  /**
+   * PATCH /api/chat/sessions/:id/auto-tag — 使用 LLM 分析会话内容并自动打标签
+   * body: { providerId, modelId, baseUrl?, apiKey?, merge?: boolean }
+   *   merge=true: 合并新标签到现有标签（默认 true）
+   *   merge=false: 替换现有标签
+   * 返回: { tags: string[] }
+   */
+  router.patch('/:id/auto-tag', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+    const { providerId, modelId, baseUrl, apiKey, merge = true } = req.body ?? {};
+    if (!providerId || !modelId) { res.status(400).json({ error: 'Missing providerId or modelId' }); return; }
+
+    const messages = await db.getMessages(req.params.id, 100);
+    if (messages.length === 0) { res.json({ tags: [] }); return; }
+
+    const { callLLM } = await import('../chat/chatService.js');
+
+    const lines: string[] = [];
+    for (const msg of messages) {
+      const role = msg.role === 'user' ? '用户' : '助手';
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      lines.push(`[${role}] ${content}`);
+      lines.push('');
+    }
+    const transcript = lines.join('\n').slice(0, 6000);
+
+    const { TAG_POOL } = await import('../chat/SessionTagService.js');
+    const tagList = TAG_POOL.map((t) => {
+      const names: Record<string, string> = {
+        'coding': '代码', 'debugging': '调试', 'research': '研究', 'writing': '写作',
+        'planning': '规划', 'data-analysis': '数据分析', 'devops': '运维', 'question': '问答',
+        'creative': '创意', 'file-operations': '文件', 'system': '系统', 'web': '网页',
+        'api': 'API', 'database': '数据库', 'security': '安全', 'learning': '学习',
+        'translation': '翻译', 'image': '图像', 'voice': '语音', 'collaboration': '协作',
+      };
+      return `${t} (${names[t] ?? t})`;
+    }).join(', ');
+
+    const prompt = `分析以下对话内容，从以下标签池中选择最相关的标签（最多5个）。
+只输出标签键（用逗号分隔），不要有解释，不要有多余文字。
+
+标签池：${tagList}
+
+---
+对话记录：
+
+${transcript}
+
+---
+标签：`;
+
+    try {
+      const result = await callLLM({
+        messages: [{ role: 'user', content: prompt }],
+        providerId,
+        modelId,
+        baseUrl,
+        apiKey,
+      });
+      const raw = (result ?? '').replace(/\x00/g, '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').trim();
+      const suggested = raw
+        .split(/[,，、]/)
+        .map((t: string) => t.trim().toLowerCase())
+        .filter((t: string) => TAG_POOL.includes(t))
+        .slice(0, 5);
+
+      // Merge or replace existing tags
+      const existingTags = session.tags ? JSON.parse(session.tags) as string[] : [];
+      const merged = merge
+        ? Array.from(new Set([...existingTags, ...suggested]))
+        : suggested;
+
+      const tagsJson = merged.length > 0 ? JSON.stringify(merged) : null;
+      await db.updateSessionTags(session.id, tagsJson);
+      res.json({ tags: merged });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Auto-tagging failed', detail: msg });
+    }
+  });
+
   /** DELETE /api/chat/sessions/:id - 删除会话 */
   router.delete('/:id', async (req, res) => {
     const session = await db.getSession(req.params.id);
