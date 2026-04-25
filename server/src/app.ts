@@ -315,7 +315,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/users', createUserRouter(db, subscriptionService));
   app.use('/api/fs', createFSRouter(sandboxFS, userSandboxManager));
   app.use('/api/shell', createShellRouter(sandboxShell, userSandboxManager));
-  app.use('/api/code', createCodeExecRouter(sandboxShell, userSandboxManager));
+  app.use('/api/code', createCodeExecRouter(sandboxShell, userSandboxManager, db));
   app.use('/api/servers', createServerRouter());
   app.use('/api/subscriptions', createSubscriptionRoutes(subscriptionService, stripeService));
   app.use('/api/admin', createAdminRouter(db, subscriptionService));

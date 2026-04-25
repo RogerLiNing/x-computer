@@ -1636,13 +1636,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                         className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
                         onClick={(e) => {
                           e.stopPropagation();
-                          const url = api.exportChatSessionHtml(s.id);
-                          const w = window.open(url, '_blank');
-                          if (w) w.onload = () => w.print();
+                          api.exportChatSessionPdf(s.id).catch(console.error);
                           setExportDropdownSessionId(null);
                         }}
                       >
-                        <FileText size={12} /> PDF (打印)
+                        <FileText size={12} /> PDF
                       </button>
                       <div className="border-t border-white/10 my-1" />
                       <button

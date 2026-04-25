@@ -1598,6 +1598,25 @@ export const api = {
     return `${window.location.origin}/api/chat/sessions/${sessionId}/export?format=html`;
   },
 
+  /** 导出会话（PDF）- 生成并下载 PDF 文件 */
+  exportChatSessionPdf: async (sessionId: string) => {
+    const res = await fetch('/api/code/chat-export-pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': getUserId() },
+      body: JSON.stringify({ sessionId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Download failed' }));
+      throw new Error(err.error || 'PDF download failed');
+    }
+    const blob = await res.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `conversation-${sessionId}.pdf`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  },
+
   /** 更新会话标签 */
   updateSessionTags: (sessionId: string, tags: string[]) =>
     request<{ success: boolean; tags: string[] }>(`/chat/sessions/${sessionId}/tags`, {
