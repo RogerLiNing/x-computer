@@ -65,12 +65,32 @@ const markdownComponents: Components = {
     <a href={href} target="_blank" rel="noopener noreferrer" className="text-desktop-highlight hover:underline" {...p}>{children}</a>
   ),
   p: (p) => <p {...p} className="my-2" />,
-  ul: (p) => <ul {...p} className="list-disc list-inside space-y-1 my-2" />,
-  ol: (p) => <ol {...p} className="list-decimal list-inside space-y-1 my-2" />,
+  ul: (p) => <ul {...p} className="list-disc list-inside space-y-1 my-2 [&_input[type=checkbox]]:mr-2" />,
+  ol: (p) => <ol {...p} className="list-decimal list-inside space-y-1 my-2 [&_input[type=checkbox]]:mr-2" />,
   blockquote: (p) => <blockquote {...p} className="border-l-2 border-desktop-accent/50 pl-3 my-2 text-desktop-muted italic" />,
-  table: (p) => <div className="overflow-x-auto my-2"><table {...p} className="min-w-full border-collapse text-xs" /></div>,
-  th: (p) => <th {...p} className="border border-white/10 px-2 py-1 bg-white/5 text-left" />,
-  td: (p) => <td {...p} className="border border-white/10 px-2 py-1" />,
+  pre: (p) => <pre {...p} className="bg-[#1e1e1e] rounded-lg overflow-x-auto my-2 p-3 text-[13px] leading-relaxed" />,
+  table: (p) => <div className="overflow-x-auto my-2"><table {...p} className="min-w-full border-collapse text-xs rounded-lg overflow-hidden" /></div>,
+  thead: (p) => <thead {...p} className="bg-white/[0.06]" />,
+  th: (p) => <th {...p} className="border border-white/10 px-3 py-1.5 text-left text-desktop-text/90 font-semibold" />,
+  tr: (p) => <tr {...p} className="border-b border-white/[0.06] hover:bg-white/[0.03] transition-colors" />,
+  td: (p) => <td {...p} className="border border-white/10 px-3 py-1.5 text-desktop-text/80" />,
+  // Task list checkboxes (GFM strikethrough for completed items)
+  input: ({ type, checked, ...p }: any) => {
+    if (type === 'checkbox') {
+      return (
+        <input
+          type="checkbox"
+          checked={checked}
+          readOnly
+          className="accent-desktop-accent mr-2"
+          {...p}
+        />
+      );
+    }
+    return <input {...p} />;
+  },
+  // Support <br> in markdown
+  br: () => <br />,
   h1: (p) => <h1 {...p} className="text-lg font-bold my-3" />,
   h2: (p) => <h2 {...p} className="text-base font-bold my-2" />,
   h3: (p) => <h3 {...p} className="text-sm font-bold my-2" />,
