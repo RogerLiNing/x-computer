@@ -19,6 +19,7 @@ import { AgentManagerApp } from './AgentManagerApp';
 import { XBoardApp } from './XBoardApp';
 import { SubscriptionApp } from './SubscriptionApp';
 import { AdminApp } from './AdminApp';
+import { CanvasApp } from './CanvasApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -61,6 +62,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <SubscriptionApp />;
     case 'admin':
       return <AdminApp />;
+    case 'canvas':
+      return <CanvasApp windowId={windowId} />;
     case 'image-viewer':
       return <ImageViewerApp windowId={windowId} metadata={metadata} />;
     case 'office-viewer':

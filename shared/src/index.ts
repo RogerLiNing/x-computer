@@ -212,6 +212,7 @@ export type BuiltinAppId =
   | 'x-board'
   | 'subscription'
   | 'admin'
+  | 'canvas'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

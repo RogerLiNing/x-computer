@@ -46,7 +46,8 @@
     "agent-manager": "Agent Manager",
     "x-board": "X Task Board",
     "subscription": "Subscription",
-    "admin": "Admin"
+    "admin": "Admin",
+    "canvas": "Canvas"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -68,6 +69,7 @@
     "x-board": "X's task board: view X's todo, in-progress, and completed tasks",
     "subscription": "Manage your subscription and billing",
     "admin": "User management, ban/unban, system overview (admin only)",
+    "canvas": "Free drawing and whiteboard tool",
     "miniapp": "App created by X"
   },
   "desktop": {
