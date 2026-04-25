@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -77,6 +77,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   /** 当前正在录音的语音识别 ID，null 表示未在录音 */
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [showStarred, setShowStarred] = useState(false);
+  /** 是否显示已归档会话 */
+  const [showArchived, setShowArchived] = useState(false);
+  /** 已归档会话列表 */
+  const [archivedSessions, setArchivedSessions] = useState<Array<{ id: string; title: string; createdAt: string; updatedAt: string; tags: string[]; isPinned: boolean; isArchived: boolean }>>([]);
   /** 跨会话收藏消息列表 */
   const [allBookmarks, setAllBookmarks] = useState<Array<{ id: string; sessionId: string; role: string; content: string; createdAt: string }>>([]);
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
@@ -114,6 +118,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     updateSessionTitle,
     updateSessionTags,
     togglePin,
+    toggleArchive,
     refreshSessions,
   } = useChatSessions(setMessages);
 
@@ -134,10 +139,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     api.getBookmarkedMessages(100).then((b) => setAllBookmarks(b)).catch(() => {});
   }, []);
 
-  /** 打开收藏面板时加载跨会话收藏 */
+  /** 加载已归档会话 */
+  const loadArchivedSessions = useCallback(() => {
+    api.getArchivedSessions(100).then((s) => setArchivedSessions(s)).catch(() => {});
+  }, []);
+
+  /** 打开/关闭归档面板时加载/清空已归档会话 */
   useEffect(() => {
-    if (showStarred) loadBookmarks();
-  }, [showStarred, loadBookmarks]);
+    if (showArchived) loadArchivedSessions();
+    else setArchivedSessions([]);
+  }, [showArchived, loadArchivedSessions]);
 
   /** 全局消息搜索（防抖 400ms） */
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1431,6 +1442,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               <span className="text-[10px] bg-desktop-accent/30 px-1 rounded-full">{allBookmarks.length}</span>
             )}
           </button>
+          <button
+            className={`flex items-center gap-2 px-3 py-1.5 mx-2 rounded-lg text-xs transition-colors ${showArchived ? 'bg-yellow-500/20 text-yellow-400' : 'hover:bg-white/10 text-desktop-muted'}`}
+            onClick={() => setShowArchived((v) => !v)}
+            title="已归档会话"
+          >
+            <Archive size={13} />
+            {archivedSessions.length > 0 && (
+              <span className="text-[10px] bg-yellow-500/30 px-1 rounded-full">{archivedSessions.length}</span>
+            )}
+          </button>
           <div className="px-2 mb-1">
             <input
               type="text"
@@ -1541,6 +1562,51 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
             </div>
           )}
+          {showArchived && (
+            <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
+              <div className="text-[10px] text-yellow-400/70 px-3 py-1 flex items-center gap-1">
+                <Archive size={10} /> 已归档会话 ({archivedSessions.length})
+              </div>
+              {archivedSessions.length === 0 ? (
+                <div className="text-[10px] text-desktop-muted/60 px-3 py-2">暂无归档会话</div>
+              ) : (
+                archivedSessions.map((s) => (
+                  <div
+                    key={s.id}
+                    className={`group flex items-center gap-0.5 rounded-lg ${currentSessionId === s.id ? 'bg-yellow-500/20' : 'hover:bg-white/5'}`}
+                  >
+                    <button
+                      type="button"
+                      className={`flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg text-xs transition-colors truncate flex flex-col gap-0.5 ${
+                        currentSessionId === s.id ? 'text-yellow-400' : 'text-desktop-muted hover:text-desktop-text'
+                      }`}
+                      onClick={() => selectSession(s.id)}
+                    >
+                      <span className="truncate">{s.title?.trim() || '新对话'}</span>
+                      {s.tags.length > 0 && (
+                        <span className="flex gap-0.5 flex-wrap">
+                          {s.tags.slice(0, 3).map((tag) => (
+                            <span key={tag} className="text-[9px] px-1 py-0 rounded-full bg-yellow-500/20 text-yellow-400">#{tag}</span>
+                          ))}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-green-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="取消归档"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        api.unarchiveSession(s.id).then(() => loadArchivedSessions()).catch(() => {});
+                      }}
+                    >
+                      <ArchiveRestore size={12} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
           <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
             {filteredSessions.map((s) => (
               <div
@@ -1602,6 +1668,17 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   }}
                 >
                   <span className="text-[10px] font-bold">#</span>
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="归档会话"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleArchive(s.id);
+                  }}
+                >
+                  <Archive size={12} />
                 </button>
                 <div className="relative">
                   <button

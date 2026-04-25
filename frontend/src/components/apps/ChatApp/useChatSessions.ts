@@ -9,6 +9,7 @@ export interface ChatSessionItem {
   updatedAt: string;
   tags: string[];
   isPinned?: boolean;
+  isArchived?: boolean;
 }
 
 export const WELCOME_FALLBACK = `我是 X-Computer 主脑，掌控本机所有应用与任务。
@@ -57,6 +58,7 @@ export interface UseChatSessionsReturn {
   updateSessionTitle: (sessionId: string, title: string) => void;
   updateSessionTags: (sessionId: string, tags: string[]) => void;
   togglePin: (sessionId: string) => void;
+  toggleArchive: (sessionId: string) => void;
   setCurrentSessionId: (id: string | null) => void;
   refreshSessions: () => void;
 }
@@ -168,6 +170,14 @@ export function useChatSessions(
     api.pinChatSession(sessionId, !session.isPinned).then(() => loadSessions()).catch(() => {});
   }, [sessions, loadSessions]);
 
+  const toggleArchive = useCallback((sessionId: string) => {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    const doArchive = !session.isArchived;
+    const action = doArchive ? api.archiveSession(sessionId) : api.unarchiveSession(sessionId);
+    action.then(() => loadSessions()).catch(() => {});
+  }, [sessions, loadSessions]);
+
   return {
     sessions,
     currentSessionId,
@@ -181,6 +191,7 @@ export function useChatSessions(
     updateSessionTitle,
     updateSessionTags,
     togglePin,
+    toggleArchive,
     setCurrentSessionId,
     refreshSessions: loadSessions,
   };

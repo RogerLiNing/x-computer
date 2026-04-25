@@ -1439,13 +1439,13 @@ export const api = {
 
   /** 获取会话列表；scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手） */
   listChatSessions: (limit = 50, scene?: string) =>
-    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; isPinned?: boolean }>>(
+    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; isPinned?: boolean; isArchived?: boolean }>>(
       scene ? `/chat/sessions?limit=${limit}&scene=${encodeURIComponent(scene)}` : `/chat/sessions?limit=${limit}`,
     ),
 
   /** 创建新会话；scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */
   createChatSession: (title?: string, scene?: string) =>
-    request<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[] }>(
+    request<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; isArchived?: boolean }>(
       '/chat/sessions',
       { method: 'POST', body: JSON.stringify({ title, scene }) },
     ),
@@ -1635,6 +1635,26 @@ export const api = {
     link.click();
     URL.revokeObjectURL(link.href);
   },
+
+  /** 归档会话 */
+  archiveSession: (sessionId: string) =>
+    request<{ success: boolean; is_archived: boolean }>(`/chat/sessions/${sessionId}/archive`, {
+      method: 'PATCH',
+      body: JSON.stringify({}),
+    }),
+
+  /** 取消归档会话 */
+  unarchiveSession: (sessionId: string) =>
+    request<{ success: boolean; is_archived: boolean }>(`/chat/sessions/${sessionId}/unarchive`, {
+      method: 'PATCH',
+      body: JSON.stringify({}),
+    }),
+
+  /** 获取已归档会话列表 */
+  getArchivedSessions: (limit = 50) =>
+    request<Array<{ id: string; title: string; createdAt: string; updatedAt: string; tags: string[]; isPinned: boolean; isArchived: boolean }>>(
+      `/chat/sessions/archived?limit=${limit}`,
+    ),
 
   /** 更新会话标签 */
   updateSessionTags: (sessionId: string, tags: string[]) =>

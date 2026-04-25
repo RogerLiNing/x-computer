@@ -42,8 +42,9 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     const scene = typeof req.query.scene === 'string' ? req.query.scene : undefined;
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : undefined;
     const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : undefined;
-    const sessions = await db.listSessions(userId, limit, scene);
-    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number }) => {
+    const includeArchived = req.query.archived === 'true';
+    const sessions = await db.listSessions(userId, limit, scene, includeArchived);
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number }) => {
       const tags = s.tags ? JSON.parse(s.tags) as string[] : [];
       return {
         id: s.id,
@@ -52,6 +53,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         updatedAt: s.updated_at,
         tags,
         isPinned: !!s.is_pinned,
+        isArchived: !!s.is_archived,
       };
     });
     let result = mapped;
@@ -88,6 +90,28 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: 'Failed to get bookmarks', detail: msg });
+    }
+  });
+
+  /** GET /api/chat/sessions/archived - 列出已归档的会话 */
+  router.get('/archived', async (req, res) => {
+    const userId = req.userId;
+    await db.ensureUser(userId);
+    const limit = parseInt(req.query.limit as string) || 50;
+    try {
+      const sessions = await db.listArchivedSessions(userId, limit);
+      res.json(sessions.map((s) => ({
+        id: s.id,
+        title: s.title,
+        createdAt: s.created_at,
+        updatedAt: s.updated_at,
+        tags: s.tags ? JSON.parse(s.tags) : [],
+        isPinned: !!s.is_pinned,
+        isArchived: true,
+      })));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Failed to list archived sessions', detail: msg });
     }
   });
 
@@ -202,6 +226,24 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     if (typeof pinned !== 'boolean') { res.status(400).json({ error: 'Missing pinned (boolean)' }); return; }
     await db.updateSessionPin(session.id, pinned);
     res.json({ success: true, pinned });
+  });
+
+  /** PATCH /api/chat/sessions/:id/archive - 归档会话 */
+  router.patch('/:id/archive', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+    await db.archiveSession(session.id);
+    res.json({ success: true, is_archived: true });
+  });
+
+  /** PATCH /api/chat/sessions/:id/unarchive - 取消归档会话 */
+  router.patch('/:id/unarchive', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+    await db.unarchiveSession(session.id);
+    res.json({ success: true, is_archived: false });
   });
 
   /** PATCH /api/chat/sessions/:id/tags - 更新会话标签 */

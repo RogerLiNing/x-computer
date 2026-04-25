@@ -11,7 +11,7 @@ import { v4 as uuid } from 'uuid';
 
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
-interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; }
+interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; }
 interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; bookmarked: number | null; created_at: string; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -75,7 +75,8 @@ export class MysqlDatabase {
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       scene VARCHAR(64),
       tags TEXT,
-      is_pinned TINYINT(1) NOT NULL DEFAULT 0
+      is_pinned TINYINT(1) NOT NULL DEFAULT 0,
+      is_archived TINYINT(1) NOT NULL DEFAULT 0
     )`, [], true);
     await this.ensureIndex('chat_sessions', 'idx_chat_sessions_user', 'CREATE INDEX idx_chat_sessions_user ON chat_sessions(user_id)', true);
 
@@ -251,6 +252,7 @@ export class MysqlDatabase {
     await this.ensureColumn('chat_sessions', 'scene', 'ALTER TABLE chat_sessions ADD COLUMN scene VARCHAR(64)', true);
     await this.ensureColumn('chat_sessions', 'tags', 'ALTER TABLE chat_sessions ADD COLUMN tags TEXT', true);
     await this.ensureColumn('chat_sessions', 'is_pinned', 'ALTER TABLE chat_sessions ADD COLUMN is_pinned TINYINT(1) NOT NULL DEFAULT 0', true);
+    await this.ensureColumn('chat_sessions', 'is_archived', 'ALTER TABLE chat_sessions ADD COLUMN is_archived TINYINT(1) NOT NULL DEFAULT 0', true);
     await this.ensureColumn('scheduled_jobs', 'session_id', 'ALTER TABLE scheduled_jobs ADD COLUMN session_id VARCHAR(36)', true);
     await this.ensureColumn('chat_messages', 'images_json', 'ALTER TABLE chat_messages ADD COLUMN images_json LONGTEXT', true);
     await this.ensureColumn(
@@ -621,22 +623,23 @@ export class MysqlDatabase {
     return { id, user_id: userId, title: title ?? null, created_at: now, updated_at: now, scene: sceneVal };
   }
 
-  listSessions(userId: string, limit = 50, scene?: string | null): Promise<ChatSessionRow[]> {
+  listSessions(userId: string, limit = 50, scene?: string | null, includeArchived = false): Promise<ChatSessionRow[]> {
     const orderBy = 'ORDER BY is_pinned DESC, updated_at DESC';
+    const archivedFilter = includeArchived ? '' : 'AND is_archived = 0';
     if (scene === 'x_direct') {
       return this.query<ChatSessionRow>(
-        `SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${orderBy} LIMIT ?`,
+        `SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${archivedFilter} ${orderBy} LIMIT ?`,
         [userId, 'x_direct', limit],
       );
     }
     if (scene === 'normal_chat' || scene == null || scene === '') {
       return this.query<ChatSessionRow>(
-        `SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${orderBy} LIMIT ?`,
+        `SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${archivedFilter} ${orderBy} LIMIT ?`,
         [userId, 'normal_chat', limit],
       );
     }
     return this.query<ChatSessionRow>(
-      `SELECT * FROM chat_sessions WHERE user_id = ? ${orderBy} LIMIT ?`,
+      `SELECT * FROM chat_sessions WHERE user_id = ? ${archivedFilter} ${orderBy} LIMIT ?`,
       [userId, limit],
     );
   }
@@ -655,6 +658,21 @@ export class MysqlDatabase {
 
   updateSessionPin(sessionId: string, pinned: boolean): Promise<void> {
     return this._run('UPDATE chat_sessions SET is_pinned = ?, updated_at = NOW() WHERE id = ?', [pinned ? 1 : 0, sessionId]);
+  }
+
+  archiveSession(sessionId: string): Promise<void> {
+    return this._run('UPDATE chat_sessions SET is_archived = 1, updated_at = NOW() WHERE id = ?', [sessionId]);
+  }
+
+  unarchiveSession(sessionId: string): Promise<void> {
+    return this._run('UPDATE chat_sessions SET is_archived = 0, updated_at = NOW() WHERE id = ?', [sessionId]);
+  }
+
+  listArchivedSessions(userId: string, limit = 50): Promise<ChatSessionRow[]> {
+    return this.query<ChatSessionRow>(
+      'SELECT * FROM chat_sessions WHERE user_id = ? AND is_archived = 1 ORDER BY updated_at DESC LIMIT ?',
+      [userId, limit],
+    );
   }
 
   deleteSession(sessionId: string): Promise<void> {

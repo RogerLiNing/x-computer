@@ -38,6 +38,8 @@ export interface ChatSessionRow {
   tags?: string | null;
   /** 是否置顶会话 */
   is_pinned?: number;
+  /** 是否归档会话 */
+  is_archived?: number;
 }
 
 export interface ChatMessageRow {
@@ -136,9 +138,11 @@ export class SqliteAppDatabase {
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         tags TEXT,
-        is_pinned INTEGER NOT NULL DEFAULT 0
+        is_pinned INTEGER NOT NULL DEFAULT 0,
+        is_archived INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
+      CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(user_id, is_archived);
 
       CREATE TABLE IF NOT EXISTS chat_messages (
         id TEXT PRIMARY KEY,
@@ -334,6 +338,9 @@ export class SqliteAppDatabase {
       }
       if (!sessionCols.some((c) => c.name === 'is_pinned')) {
         this.db.exec('ALTER TABLE chat_sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!sessionCols.some((c) => c.name === 'is_archived')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0');
       }
     } catch {
       /* 忽略 */
@@ -579,20 +586,21 @@ export class SqliteAppDatabase {
     return { id, user_id: userId, title: title ?? null, created_at: now, updated_at: now, scene: sceneVal };
   }
 
-  listSessions(userId: string, limit = 50, scene?: string | null): ChatSessionRow[] {
+  listSessions(userId: string, limit = 50, scene?: string | null, includeArchived = false): ChatSessionRow[] {
     const orderBy = 'ORDER BY is_pinned DESC, updated_at DESC';
+    const archivedFilter = includeArchived ? '' : 'AND is_archived = 0';
     if (scene === 'x_direct') {
       return this.db
-        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${orderBy} LIMIT ?`)
+        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${archivedFilter} ${orderBy} LIMIT ?`)
         .all(userId, 'x_direct', limit) as ChatSessionRow[];
     }
     if (scene === 'normal_chat' || scene == null || scene === '') {
       return this.db
-        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${orderBy} LIMIT ?`)
+        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${archivedFilter} ${orderBy} LIMIT ?`)
         .all(userId, 'normal_chat', limit) as ChatSessionRow[];
     }
     return this.db
-      .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? ${orderBy} LIMIT ?`)
+      .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? ${archivedFilter} ${orderBy} LIMIT ?`)
       .all(userId, limit) as ChatSessionRow[];
   }
 
@@ -613,6 +621,22 @@ export class SqliteAppDatabase {
   updateSessionPin(sessionId: string, pinned: boolean): void {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE chat_sessions SET is_pinned = ?, updated_at = ? WHERE id = ?').run(pinned ? 1 : 0, now, sessionId);
+  }
+
+  archiveSession(sessionId: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE chat_sessions SET is_archived = 1, updated_at = ? WHERE id = ?').run(now, sessionId);
+  }
+
+  unarchiveSession(sessionId: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE chat_sessions SET is_archived = 0, updated_at = ? WHERE id = ?').run(now, sessionId);
+  }
+
+  listArchivedSessions(userId: string, limit = 50): ChatSessionRow[] {
+    return this.db
+      .prepare('SELECT * FROM chat_sessions WHERE user_id = ? AND is_archived = 1 ORDER BY updated_at DESC LIMIT ?')
+      .all(userId, limit) as ChatSessionRow[];
   }
 
   deleteSession(sessionId: string): void {
@@ -1470,8 +1494,8 @@ export class SqliteDatabaseAdapter {
   createSession(userId: string, title?: string, scene?: string | null): Promise<ChatSessionRow> {
     return Promise.resolve(this.db.createSession(userId, title, scene));
   }
-  listSessions(userId: string, limit?: number, scene?: string | null): Promise<ChatSessionRow[]> {
-    return Promise.resolve(this.db.listSessions(userId, limit, scene));
+  listSessions(userId: string, limit?: number, scene?: string | null, includeArchived?: boolean): Promise<ChatSessionRow[]> {
+    return Promise.resolve(this.db.listSessions(userId, limit, scene, includeArchived));
   }
   getSession(sessionId: string): Promise<ChatSessionRow | undefined> {
     return Promise.resolve(this.db.getSession(sessionId));
@@ -1488,6 +1512,20 @@ export class SqliteDatabaseAdapter {
   updateSessionPin(sessionId: string, pinned: boolean): Promise<void> {
     this.db.updateSessionPin(sessionId, pinned);
     return Promise.resolve();
+  }
+
+  archiveSession(sessionId: string): Promise<void> {
+    this.db.archiveSession(sessionId);
+    return Promise.resolve();
+  }
+
+  unarchiveSession(sessionId: string): Promise<void> {
+    this.db.unarchiveSession(sessionId);
+    return Promise.resolve();
+  }
+
+  listArchivedSessions(userId: string, limit = 50): Promise<ChatSessionRow[]> {
+    return Promise.resolve(this.db.listArchivedSessions(userId, limit));
   }
 
   deleteSession(sessionId: string): Promise<void> {
