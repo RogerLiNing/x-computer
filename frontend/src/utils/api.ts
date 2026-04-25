@@ -1539,6 +1539,12 @@ export const api = {
       { method: 'POST' },
     ),
 
+  /** 获取会话上下文统计（消息数、估算token数、占用百分比） */
+  getSessionContextStats: (sessionId: string) =>
+    request<{ messageCount: number; estimatedTokens: number; estimatedChars: number; modelContextLimit: number; usagePercent: number }>(
+      `/chat/sessions/${sessionId}/context-stats`,
+    ),
+
   generateSessionSummary: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, apiKey?: string) =>
     request<{ summary: string }>(`/chat/sessions/${sessionId}/summary`, {
       method: 'PATCH',

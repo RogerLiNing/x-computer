@@ -97,6 +97,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
+  const [contextStats, setContextStats] = useState<{ messageCount: number; estimatedTokens: number; usagePercent: number } | null>(null);
   /** 按需加载模式下本会话已加载的工具名，跨消息持久化 */
   const loadedToolNamesRef = useRef<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -216,6 +217,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
   useEffect(() => {
     loadedToolNamesRef.current = [];
+  }, [currentSessionId]);
+
+  // Load context stats when session changes
+  useEffect(() => {
+    if (!currentSessionId) { setContextStats(null); return; }
+    api.getSessionContextStats(currentSessionId)
+      .then((stats) => setContextStats({ messageCount: stats.messageCount, estimatedTokens: stats.estimatedTokens, usagePercent: stats.usagePercent }))
+      .catch(() => setContextStats(null));
   }, [currentSessionId]);
 
   useEffect(() => {
@@ -1948,6 +1957,17 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   {sessionElapsed < 60
                     ? `${sessionElapsed} 分钟`
                     : `${Math.floor(sessionElapsed / 60)} 小时 ${sessionElapsed % 60 > 0 ? (sessionElapsed % 60) + ' 分钟' : ''}`}
+                </span>
+              )}
+              {contextStats && (
+                <span className={`text-[9px] ml-1 ${
+                  contextStats.usagePercent > 80 ? 'text-red-400' :
+                  contextStats.usagePercent > 60 ? 'text-yellow-400' :
+                  'text-green-400/70'
+                }`} title={`约 ${contextStats.estimatedTokens.toLocaleString()} tokens（基于字符数估算）`}>
+                  · {contextStats.estimatedTokens >= 1000
+                    ? `~${Math.round(contextStats.estimatedTokens / 1000)}K / 128K`
+                    : `~${contextStats.estimatedTokens} / 128K`}
                 </span>
               )}
               {selectedAgentId && agents.find((a) => a.id === selectedAgentId) && (

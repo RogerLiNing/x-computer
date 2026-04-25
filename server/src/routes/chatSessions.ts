@@ -499,6 +499,30 @@ ${transcript}
     });
   });
 
+  /**
+   * GET /api/chat/sessions/:id/context-stats — 获取会话上下文统计
+   * 返回: { messageCount, estimatedTokens, estimatedChars, modelContextLimit }
+   *   estimatedTokens 按 4字符≈1 token 估算
+   */
+  router.get('/:id/context-stats', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+    const messages = await db.getMessages(req.params.id, 5000);
+    const totalChars = messages.reduce((sum, m) => sum + ((m.content?.length) ?? 0), 0);
+    const estimatedTokens = Math.ceil(totalChars / 4);
+    const modelContextLimit = 128_000; // 默认 128K 上下文窗口
+
+    res.json({
+      messageCount: messages.length,
+      estimatedTokens,
+      estimatedChars: totalChars,
+      modelContextLimit,
+      usagePercent: Math.min(100, Math.round((estimatedTokens / modelContextLimit) * 100)),
+    });
+  });
+
   /** DELETE /api/chat/sessions/:id - 删除会话 */
   router.delete('/:id', async (req, res) => {
     const session = await db.getSession(req.params.id);
