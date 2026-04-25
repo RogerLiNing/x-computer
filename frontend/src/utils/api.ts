@@ -1542,4 +1542,39 @@ export const api = {
     request<{ totalUsers: number; totalTasks: number }>('/admin/stats'),
   adminConfig: () =>
     request<{ allowRegister: boolean }>('/admin/config'),
+
+  // ── 系统健康 ────────────────────────────────────────────────
+
+  /** 获取完整系统健康状态（管理员） */
+  systemHealthGet: () =>
+    request<{
+      uptime: number;
+      memory: {
+        heapUsed: number;
+        heapTotal: number;
+        rss: number;
+        systemTotal: number;
+        systemFree: number;
+        systemUsedPercent: number;
+        heapUsedPercent: number;
+      };
+      cpu: { loadavg: number[]; cores: number };
+      tasks: { total: number; pending: number; running: number; completed: number; failed: number };
+      database: { dialect: string; status: string; error?: string };
+      version: string;
+      pid: number;
+      timestamp: number;
+    }>('/admin/health'),
+
+  /** 获取快速系统统计（低开销） */
+  systemHealthStats: () =>
+    request<{
+      uptime: number;
+      memoryUsedPercent: number;
+      systemUsedPercent: number;
+      loadavg1m: number;
+      cores: number;
+      tasks: { total: number; pending: number; running: number };
+      dbStatus: string;
+    }>('/admin/health/stats'),
 };

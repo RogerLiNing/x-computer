@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1558,6 +1558,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'usage', labelKey: 'settings.usageAnalytics', icon: BarChart2 },
     { id: 'webhooks', labelKey: 'settings.webhooks', icon: WebhookIcon },
     { id: 'schedules', labelKey: 'settings.scheduledJobs', icon: Clock },
+    { id: 'health', labelKey: 'settings.systemHealth', icon: Activity },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1756,7 +1757,230 @@ export function SettingsApp({ windowId }: Props) {
         {tab === 'schedules' && (
           <ScheduledJobsSettings />
         )}
+
+        {tab === 'health' && (
+          <SystemHealthSettings />
+        )}
       </div>
+    </div>
+  );
+}
+
+// ── 系统健康仪表板 ────────────────────────────────────────────
+
+function SystemHealthSettings() {
+  const { t } = useTranslation();
+  const [data, setData] = useState<{
+    uptime: number;
+    memory: {
+      heapUsed: number;
+      heapTotal: number;
+      rss: number;
+      systemTotal: number;
+      systemFree: number;
+      systemUsedPercent: number;
+      heapUsedPercent: number;
+    };
+    cpu: { loadavg: number[]; cores: number };
+    tasks: { total: number; pending: number; running: number; completed: number; failed: number };
+    database: { dialect: string; status: string; error?: string };
+    version: string;
+    pid: number;
+    timestamp: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const result = await api.systemHealthGet();
+      setData(result);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 30000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  const fmtBytes = (n: number) => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+    return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  };
+
+  const fmtUptime = (s: number) => {
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    return d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+
+  const dbOk = data?.database.status === 'ok';
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t('settings.systemHealth')}</h2>
+        <button
+          onClick={fetchData}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-sm text-desktop-muted hover:text-desktop-text transition-colors disabled:opacity-50"
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          {t('common.refresh')}
+        </button>
+      </div>
+
+      {loading && !data && (
+        <div className="text-center text-desktop-muted py-8">{t('common.loading')}</div>
+      )}
+
+      {data && (
+        <div>
+          {/* 概览卡片 */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-desktop-muted mb-1">运行时间</div>
+              <div className="text-xl font-mono">{fmtUptime(data.uptime)}</div>
+            </div>
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-desktop-muted mb-1">内存使用</div>
+              <div className="text-xl font-mono">{data.memory.systemUsedPercent}%</div>
+            </div>
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-desktop-muted mb-1">CPU 负载</div>
+              <div className="text-xl font-mono">{data.cpu.loadavg[0].toFixed(2)}</div>
+            </div>
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-desktop-muted mb-1">数据库</div>
+              <div className={`text-xl font-mono ${dbOk ? 'text-green-400' : 'text-red-400'}`}>
+                {dbOk ? 'OK' : 'ERROR'}
+              </div>
+            </div>
+          </div>
+
+          {/* 详细指标 */}
+          <div className="space-y-3">
+            {/* 内存详情 */}
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-sm font-medium mb-3">内存</div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">堆内存</span>
+                  <span>{fmtBytes(data.memory.heapUsed)} / {fmtBytes(data.memory.heapTotal)} ({data.memory.heapUsedPercent}%)</span>
+                </div>
+                <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-400 rounded-full" style={{ width: `${data.memory.heapUsedPercent}%` }} />
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">RSS</span>
+                  <span>{fmtBytes(data.memory.rss)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">系统内存</span>
+                  <span>{fmtBytes(data.memory.systemTotal - data.memory.systemFree)} / {fmtBytes(data.memory.systemTotal)} ({data.memory.systemUsedPercent}%)</span>
+                </div>
+                <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-full bg-purple-400 rounded-full" style={{ width: `${data.memory.systemUsedPercent}%` }} />
+                </div>
+              </div>
+            </div>
+
+            {/* CPU 详情 */}
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-sm font-medium mb-3">CPU</div>
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">核心数</span>
+                  <span>{data.cpu.cores}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">1 分钟负载</span>
+                  <span>{data.cpu.loadavg[0].toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">5 分钟负载</span>
+                  <span>{data.cpu.loadavg[1].toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-desktop-muted">15 分钟负载</span>
+                  <span>{data.cpu.loadavg[2].toFixed(2)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 任务统计 */}
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-sm font-medium mb-3">任务统计</div>
+              <div className="grid grid-cols-5 gap-2 text-center">
+                <div>
+                  <div className="text-lg font-mono">{data.tasks.total}</div>
+                  <div className="text-xs text-desktop-muted">总计</div>
+                </div>
+                <div>
+                  <div className="text-lg font-mono text-yellow-400">{data.tasks.pending}</div>
+                  <div className="text-xs text-desktop-muted">等待中</div>
+                </div>
+                <div>
+                  <div className="text-lg font-mono text-blue-400">{data.tasks.running}</div>
+                  <div className="text-xs text-desktop-muted">运行中</div>
+                </div>
+                <div>
+                  <div className="text-lg font-mono text-green-400">{data.tasks.completed}</div>
+                  <div className="text-xs text-desktop-muted">已完成</div>
+                </div>
+                <div>
+                  <div className="text-lg font-mono text-red-400">{data.tasks.failed}</div>
+                  <div className="text-xs text-desktop-muted">失败</div>
+                </div>
+              </div>
+            </div>
+
+            {/* 数据库 */}
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-sm font-medium mb-3">数据库</div>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-desktop-muted">类型</span>
+                  <span>{data.database.dialect.toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-desktop-muted">状态</span>
+                  <span className={dbOk ? 'text-green-400' : 'text-red-400'}>
+                    {dbOk ? 'Connected' : data.database.error ?? 'Error'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 系统信息 */}
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-sm font-medium mb-3">系统信息</div>
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-desktop-muted">Node.js 版本</span>
+                  <span>{data.version}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-desktop-muted">进程 PID</span>
+                  <span>{data.pid}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-desktop-muted">最后更新</span>
+                  <span>{new Date(data.timestamp).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        )}
     </div>
   );
 }
