@@ -23,26 +23,34 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
   const { onMessageAdded } = options;
   const router = Router();
 
-  /** GET /api/chat/sessions - 会话列表；query.scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手）；query.search 搜索标题 */
+  /** GET /api/chat/sessions - 会话列表；query.scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手）；query.search 搜索标题；query.tag 标签过滤 */
   router.get('/', async (req, res) => {
     const userId = req.userId;
     await db.ensureUser(userId);
     const limit = parseInt(req.query.limit as string) || 50;
     const scene = typeof req.query.scene === 'string' ? req.query.scene : undefined;
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : undefined;
+    const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : undefined;
     const sessions = await db.listSessions(userId, limit, scene);
-    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string }) => ({
-      id: s.id,
-      title: s.title,
-      createdAt: s.created_at,
-      updatedAt: s.updated_at,
-    }));
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null }) => {
+      const tags = s.tags ? JSON.parse(s.tags) as string[] : [];
+      return {
+        id: s.id,
+        title: s.title,
+        createdAt: s.created_at,
+        updatedAt: s.updated_at,
+        tags,
+      };
+    });
+    let result = mapped;
+    if (tag) {
+      result = result.filter((s) => s.tags.includes(tag));
+    }
     if (search) {
       const q = search.toLowerCase();
-      res.json(mapped.filter((s) => (s.title ?? '').toLowerCase().includes(q)));
-    } else {
-      res.json(mapped);
+      result = result.filter((s) => (s.title ?? '').toLowerCase().includes(q));
     }
+    res.json(result);
   });
 
   /** POST /api/chat/sessions - 创建会话；body.scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */
@@ -97,6 +105,27 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     }
     await db.updateSessionTitle(session.id, title);
     res.json({ success: true });
+  });
+
+  /** PATCH /api/chat/sessions/:id/tags - 更新会话标签 */
+  router.patch('/:id/tags', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (session.user_id !== req.userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const { tags } = req.body ?? {};
+    if (!Array.isArray(tags) || !tags.every((t) => typeof t === 'string')) {
+      res.status(400).json({ error: 'tags must be an array of strings' });
+      return;
+    }
+    const tagsJson = tags.length > 0 ? JSON.stringify(tags) : null;
+    await db.updateSessionTags(session.id, tagsJson);
+    res.json({ success: true, tags: tagsJson ? JSON.parse(tagsJson) : [] });
   });
 
   /** DELETE /api/chat/sessions/:id - 删除会话 */

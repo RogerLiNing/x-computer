@@ -73,7 +73,8 @@ export class MysqlDatabase {
       title VARCHAR(512),
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      scene VARCHAR(64)
+      scene VARCHAR(64),
+      tags TEXT
     )`, [], true);
     await this.ensureIndex('chat_sessions', 'idx_chat_sessions_user', 'CREATE INDEX idx_chat_sessions_user ON chat_sessions(user_id)', true);
 
@@ -244,6 +245,7 @@ export class MysqlDatabase {
     await this.ensureColumn('x_board_items', 'source_id', 'ALTER TABLE x_board_items ADD COLUMN source_id VARCHAR(64)', true);
 
     await this.ensureColumn('chat_sessions', 'scene', 'ALTER TABLE chat_sessions ADD COLUMN scene VARCHAR(64)', true);
+    await this.ensureColumn('chat_sessions', 'tags', 'ALTER TABLE chat_sessions ADD COLUMN tags TEXT', true);
     await this.ensureColumn('chat_messages', 'images_json', 'ALTER TABLE chat_messages ADD COLUMN images_json LONGTEXT', true);
     await this.ensureColumn(
       'chat_messages',
@@ -636,6 +638,10 @@ export class MysqlDatabase {
 
   updateSessionTitle(sessionId: string, title: string): Promise<void> {
     return this._run('UPDATE chat_sessions SET title = ?, updated_at = NOW() WHERE id = ?', [title, sessionId]);
+  }
+
+  updateSessionTags(sessionId: string, tags: string | null): Promise<void> {
+    return this._run('UPDATE chat_sessions SET tags = ?, updated_at = NOW() WHERE id = ?', [tags, sessionId]);
   }
 
   deleteSession(sessionId: string): Promise<void> {

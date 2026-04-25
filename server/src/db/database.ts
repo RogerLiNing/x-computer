@@ -34,6 +34,8 @@ export interface ChatSessionRow {
   updated_at: string;
   /** 会话场景：x_direct = X 主脑对话，null/normal_chat = AI 助手 */
   scene?: string | null;
+  /** 会话标签，JSON array string */
+  tags?: string | null;
 }
 
 export interface ChatMessageRow {
@@ -128,7 +130,8 @@ export class SqliteAppDatabase {
         user_id TEXT NOT NULL,
         title TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        tags TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
 
@@ -317,6 +320,9 @@ export class SqliteAppDatabase {
       const sessionCols = this.db.prepare('PRAGMA table_info(chat_sessions)').all() as { name: string }[];
       if (!sessionCols.some((c) => c.name === 'scene')) {
         this.db.exec('ALTER TABLE chat_sessions ADD COLUMN scene TEXT');
+      }
+      if (!sessionCols.some((c) => c.name === 'tags')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN tags TEXT');
       }
     } catch {
       /* 忽略 */
@@ -570,6 +576,11 @@ export class SqliteAppDatabase {
   updateSessionTitle(sessionId: string, title: string): void {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE chat_sessions SET title = ?, updated_at = ? WHERE id = ?').run(title, now, sessionId);
+  }
+
+  updateSessionTags(sessionId: string, tags: string | null): void {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE chat_sessions SET tags = ?, updated_at = ? WHERE id = ?').run(tags, now, sessionId);
   }
 
   deleteSession(sessionId: string): void {
@@ -1367,6 +1378,10 @@ export class SqliteDatabaseAdapter {
   }
   updateSessionTitle(sessionId: string, title: string): Promise<void> {
     this.db.updateSessionTitle(sessionId, title);
+    return Promise.resolve();
+  }
+  updateSessionTags(sessionId: string, tags: string | null): Promise<void> {
+    this.db.updateSessionTags(sessionId, tags);
     return Promise.resolve();
   }
   deleteSession(sessionId: string): Promise<void> {

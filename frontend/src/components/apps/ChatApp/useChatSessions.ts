@@ -7,6 +7,7 @@ export interface ChatSessionItem {
   title: string | null;
   createdAt: string;
   updatedAt: string;
+  tags: string[];
 }
 
 export const WELCOME_FALLBACK = `我是 X-Computer 主脑，掌控本机所有应用与任务。
@@ -52,6 +53,7 @@ export interface UseChatSessionsReturn {
   ensureSessionId: () => Promise<{ id: string; isNew: boolean }>;
   deleteSession: (sessionId: string) => void;
   updateSessionTitle: (sessionId: string, title: string) => void;
+  updateSessionTags: (sessionId: string, tags: string[]) => void;
   setCurrentSessionId: (id: string | null) => void;
   refreshSessions: () => void;
 }
@@ -127,7 +129,7 @@ export function useChatSessions(
     if (currentSessionId) return { id: currentSessionId, isNew: false };
     const s = await api.createChatSession(undefined, 'normal_chat');
     setCurrentSessionId(s.id);
-    setSessions((prev) => [{ id: s.id, title: s.title, createdAt: s.createdAt, updatedAt: s.updatedAt }, ...prev]);
+    setSessions((prev) => [{ id: s.id, title: s.title, createdAt: s.createdAt, updatedAt: s.updatedAt, tags: s.tags ?? [] }, ...prev]);
     syncLastSessionToCloud(s.id);
     return { id: s.id, isNew: true };
   }, [currentSessionId]);
@@ -153,6 +155,10 @@ export function useChatSessions(
     api.updateChatSessionTitle(sessionId, title).then(() => loadSessions()).catch(() => {});
   }, [loadSessions]);
 
+  const updateSessionTags = useCallback((sessionId: string, tags: string[]) => {
+    api.updateSessionTags(sessionId, tags).then(() => loadSessions()).catch(() => {});
+  }, [loadSessions]);
+
   return {
     sessions,
     currentSessionId,
@@ -164,6 +170,7 @@ export function useChatSessions(
     ensureSessionId,
     deleteSession,
     updateSessionTitle,
+    updateSessionTags,
     setCurrentSessionId,
     refreshSessions: loadSessions,
   };

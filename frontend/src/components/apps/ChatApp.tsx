@@ -81,11 +81,18 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     ensureSessionId,
     deleteSession,
     updateSessionTitle,
+    updateSessionTags,
     refreshSessions,
   } = useChatSessions(setMessages);
 
   const filteredSessions = sessionSearch.trim()
-    ? sessions.filter((s) => (s.title ?? '').toLowerCase().includes(sessionSearch.toLowerCase()))
+    ? sessions.filter((s) => {
+        const q = sessionSearch.toLowerCase();
+        if (q.startsWith('#')) {
+          return s.tags.map((t) => t.toLowerCase()).includes(q.slice(1));
+        }
+        return (s.title ?? '').toLowerCase().includes(q);
+      })
     : sessions;
   const tasks = useTaskStore((s) => s.tasks);
   const { openApp, setWindowTitle } = useDesktopStore();
@@ -1164,6 +1171,29 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               onChange={(e) => setSessionSearch(e.target.value)}
             />
           </div>
+          {/* Tag filter chips */}
+          {(() => {
+            const allTags = [...new Set(sessions.flatMap((s) => s.tags))].sort();
+            if (allTags.length === 0) return null;
+            return (
+              <div className="px-2 mb-1 flex flex-wrap gap-1">
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => setSessionSearch((prev) => prev === `#${tag}` ? '' : `#${tag}`)}
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full border transition-colors ${
+                      sessionSearch === `#${tag}`
+                        ? 'bg-desktop-accent/30 border-desktop-accent text-desktop-accent'
+                        : 'bg-white/5 border-white/10 text-desktop-muted hover:border-white/20'
+                    }`}
+                  >
+                    #{tag}
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
           <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
             {filteredSessions.map((s) => (
               <div
@@ -1174,12 +1204,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               >
                 <button
                   type="button"
-                  className={`flex-1 min-w-0 text-left px-3 py-2 rounded-lg text-xs transition-colors truncate ${
+                  className={`flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg text-xs transition-colors truncate flex flex-col gap-0.5 ${
                     currentSessionId === s.id ? 'text-desktop-text' : 'text-desktop-muted hover:text-desktop-text'
                   }`}
                   onClick={() => selectSession(s.id)}
                 >
-                  {s.title?.trim() || '新对话'}
+                  <span className="truncate">{s.title?.trim() || '新对话'}</span>
+                  {s.tags.length > 0 && (
+                    <span className="flex gap-0.5 flex-wrap">
+                      {s.tags.slice(0, 3).map((tag) => (
+                        <span key={tag} className="text-[9px] px-1 py-0 rounded-full bg-desktop-accent/20 text-desktop-accent">#{tag}</span>
+                      ))}
+                      {s.tags.length > 3 && <span className="text-[9px] text-desktop-muted">+{s.tags.length - 3}</span>}
+                    </span>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -1192,6 +1230,21 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   }}
                 >
                   <Pencil size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="标签"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const tagInput = window.prompt('添加标签（多个用逗号分隔）', s.tags.join(', '));
+                    if (tagInput !== null) {
+                      const tags = tagInput.split(',').map((t) => t.trim()).filter(Boolean);
+                      updateSessionTags(s.id, tags);
+                    }
+                  }}
+                >
+                  <span className="text-[10px] font-bold">#</span>
                 </button>
                 <div className="relative">
                   <button

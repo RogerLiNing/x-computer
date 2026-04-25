@@ -1433,13 +1433,13 @@ export const api = {
 
   /** 获取会话列表；scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手） */
   listChatSessions: (limit = 50, scene?: string) =>
-    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string }>>(
+    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[] }>>(
       scene ? `/chat/sessions?limit=${limit}&scene=${encodeURIComponent(scene)}` : `/chat/sessions?limit=${limit}`,
     ),
 
   /** 创建新会话；scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */
   createChatSession: (title?: string, scene?: string) =>
-    request<{ id: string; title: string | null; createdAt: string; updatedAt: string }>(
+    request<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[] }>(
       '/chat/sessions',
       { method: 'POST', body: JSON.stringify({ title, scene }) },
     ),
@@ -1489,6 +1489,13 @@ export const api = {
   exportChatSessionHtml: (sessionId: string) => {
     return `${window.location.origin}/api/chat/sessions/${sessionId}/export?format=html`;
   },
+
+  /** 更新会话标签 */
+  updateSessionTags: (sessionId: string, tags: string[]) =>
+    request<{ success: boolean; tags: string[] }>(`/chat/sessions/${sessionId}/tags`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tags }),
+    }),
 
   /** 追加消息到会话。images: 图片路径或 URL；attachedFiles: 用户附带文档 [{ name, path }] */
   addChatMessage: (
