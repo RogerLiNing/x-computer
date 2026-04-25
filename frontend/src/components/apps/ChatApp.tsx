@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -51,8 +51,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [messageSearch, setMessageSearch] = useState('');
   const [messageSearchResults, setMessageSearchResults] = useState<string[]>([]);
   const [messageSearchIndex, setMessageSearchIndex] = useState(0);
+  /** 当前正在朗读的消息ID，null 表示未在朗读 */
+  const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [snippets, setSnippets] = useState<Array<{ id: string; title: string; code: string; language: string; description?: string }>>([]);
   const [snippetFilter, setSnippetFilter] = useState('');
+  const [calcOpen, setCalcOpen] = useState(false);
+  const [calcExpr, setCalcExpr] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
@@ -106,6 +110,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Stop TTS on component unmount
+  useEffect(() => {
+    return () => { stopSpeaking(); };
+  }, []);
+
   useEffect(() => {
     loadedToolNamesRef.current = [];
   }, [currentSessionId]);
@@ -146,6 +155,78 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     setMessageSearchIndex(next);
     const el = document.getElementById(`msg-${messageSearchResults[next]}`);
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  // Text-to-speech for AI messages
+  const speakText = (msgId: string, text: string) => {
+    if (speakingMsgId) {
+      window.speechSynthesis.cancel();
+      if (speakingMsgId === msgId) {
+        setSpeakingMsgId(null);
+        return;
+      }
+    }
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = /[一-鿿]/.test(text) ? 'zh-CN' : 'en-US';
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
+    utter.onend = () => setSpeakingMsgId(null);
+    utter.onerror = () => setSpeakingMsgId(null);
+    window.speechSynthesis.speak(utter);
+    setSpeakingMsgId(msgId);
+  };
+
+  const stopSpeaking = () => {
+    window.speechSynthesis.cancel();
+    setSpeakingMsgId(null);
+  };
+
+  // Calculator: safe math evaluation
+  const evalCalc = (expr: string): string => {
+    try {
+      // Replace common math functions with Math equivalents
+      const sanitized = expr
+        .replace(/\^/g, '**')
+        .replace(/sqrt\(/gi, 'Math.sqrt(')
+        .replace(/sin\(/gi, 'Math.sin(')
+        .replace(/cos\(/gi, 'Math.cos(')
+        .replace(/tan\(/gi, 'Math.tan(')
+        .replace(/log\(/gi, 'Math.log10(')
+        .replace(/ln\(/gi, 'Math.log(')
+        .replace(/pi/gi, 'Math.PI')
+        .replace(/e(?![x])/g, 'Math.E')
+        .replace(/%/g, '/100*');
+      // eslint-disable-next-line no-new-func
+      const result = new Function(`"use strict"; return (${sanitized})`)();
+      if (typeof result !== 'number' || !isFinite(result)) return '';
+      return Number.isInteger(result) ? String(result) : result.toFixed(6).replace(/\.?0+$/, '');
+    } catch {
+      return '';
+    }
+  };
+
+  const handleCalcInput = (val: string) => {
+    setCalcExpr(val);
+  };
+
+  const handleCalcKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      const result = evalCalc(calcExpr);
+      if (result !== '') {
+        setInput((prev) => prev + (prev ? '\n' : '') + `${calcExpr} = ${result}`);
+        setCalcExpr('');
+        setCalcOpen(false);
+      }
+    }
+  };
+
+  const insertCalcResult = () => {
+    const result = evalCalc(calcExpr);
+    if (result !== '') {
+      setInput((prev) => prev + (prev ? '\n' : '') + `${calcExpr} = ${result}`);
+      setCalcExpr('');
+      setCalcOpen(false);
+    }
   };
 
   // 会话列表：挂载时加载；上次会话由 useChatSessions 内从云端/本地恢复
@@ -1498,8 +1579,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               {(msg.content || (msg.role === 'assistant' && isLoading && messages[messages.length - 1]?.id === msg.id)) && (
                 <div className={msg.toolCalls?.length ? 'mt-2' : ''}>
                   {msg.role === 'assistant' ? (
-                    <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
-                      <MarkdownWithThink content={msg.content} />
+                    <div className="relative group">
+                      <button
+                        type="button"
+                        onClick={() => speakText(msg.id, msg.content)}
+                        title={speakingMsgId === msg.id ? '停止朗读' : '朗读'}
+                        className={`absolute -top-1 right-0 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity ${
+                          speakingMsgId === msg.id ? 'text-desktop-accent opacity-100' : 'text-desktop-muted hover:text-desktop-text'
+                        }`}
+                      >
+                        {speakingMsgId === msg.id ? <VolumeX size={13} /> : <Speaker size={13} />}
+                      </button>
+                      <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
+                        <MarkdownWithThink content={msg.content} />
+                      </div>
                     </div>
                   ) : msg.role === 'system' ? (
                     <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
@@ -1828,6 +1921,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           >
             <Code size={16} className="sm:size-4" />
           </button>
+          <button
+            type="button"
+            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center relative"
+            onClick={() => { setCalcOpen((o) => !o); setSnippetPickerOpen(false); }}
+            title="计算器"
+          >
+            <Calculator size={16} className="sm:size-4" />
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -1917,6 +2018,91 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {/* Inline Calculator */}
+        {calcOpen && (
+          <div className="border-t border-white/10 bg-desktop-bg/95 backdrop-blur-sm p-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Calculator size={14} className="text-desktop-accent shrink-0" />
+              <span className="text-xs font-medium text-desktop-text">计算器</span>
+              <button
+                type="button"
+                className="ml-auto text-desktop-muted hover:text-desktop-text transition-colors"
+                onClick={() => { setCalcOpen(false); setCalcExpr(''); }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <input
+              type="text"
+              value={calcExpr}
+              onChange={(e) => handleCalcInput(e.target.value)}
+              onKeyDown={handleCalcKey}
+              placeholder="输入表达式，如 2^10、sqrt(2)、sin(pi/2)"
+              className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-desktop-text placeholder:text-desktop-muted/50 outline-none focus:border-desktop-accent/50 font-mono"
+              autoFocus
+            />
+            {calcExpr && (
+              <div className="text-xs text-desktop-muted font-mono min-h-[20px]">
+                = <span className="text-desktop-accent font-semibold">{evalCalc(calcExpr) || '无效表达式'}</span>
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1">
+              {['+', '-', '*', '/', '^', '(', ')', '.'].map((op) => (
+                <button
+                  key={op}
+                  type="button"
+                  className="px-2 py-1 text-xs bg-white/5 hover:bg-white/10 border border-white/10 rounded text-desktop-text transition-colors font-mono"
+                  onClick={() => handleCalcInput(calcExpr + op)}
+                >
+                  {op}
+                </button>
+              ))}
+              {[
+                { label: 'sqrt', val: 'sqrt(' },
+                { label: 'sin', val: 'sin(' },
+                { label: 'cos', val: 'cos(' },
+                { label: 'tan', val: 'tan(' },
+                { label: 'log', val: 'log(' },
+                { label: 'ln', val: 'ln(' },
+                { label: 'pi', val: 'pi' },
+                { label: 'e', val: 'e' },
+                { label: '%', val: '%' },
+              ].map(({ label, val }) => (
+                <button
+                  key={label}
+                  type="button"
+                  className="px-1.5 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-desktop-muted hover:text-desktop-text transition-colors"
+                  onClick={() => handleCalcInput(calcExpr + val)}
+                >
+                  {label}
+                </button>
+              ))}
+              <button
+                type="button"
+                className="px-2 py-1 text-xs bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-desktop-accent transition-colors"
+                onClick={() => setCalcExpr(calcExpr.slice(0, -1))}
+              >
+                DEL
+              </button>
+              <button
+                type="button"
+                className="px-2 py-1 text-xs bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-desktop-accent transition-colors"
+                onClick={() => setCalcExpr('')}
+              >
+                C
+              </button>
+            </div>
+            <button
+              type="button"
+              className="w-full py-1.5 bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-xs text-desktop-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={insertCalcResult}
+              disabled={!calcExpr || !evalCalc(calcExpr)}
+            >
+              插入结果
+            </button>
           </div>
         )}
       </div>

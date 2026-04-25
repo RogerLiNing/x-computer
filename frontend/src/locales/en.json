@@ -142,7 +142,11 @@
     "exampleWeeklyReport": "Generate my weekly work report",
     "exampleSummarizeDoc": "Summarize this document",
     "exampleExplainCode": "Explain this code",
-    "exampleSearchWeb": "Search the web for latest news about AI"
+    "exampleSearchWeb": "Search the web for latest news about AI",
+    "stopSpeaking": "Stop",
+    "readAloud": "Read aloud",
+    "calculator": "Calculator",
+    "calcResult": "Result"
   },
   "templates": {
     "quickTasks": "Quick Tasks",
@@ -374,7 +378,9 @@
     "exportHtml": "HTML (.html)",
     "exportPdf": "PDF (via Print)",
     "exportJson": "JSON (.json)",
-    "exportFormat": "Export Format"
+    "exportFormat": "Export Format",
+    "tts": "Text to Speech",
+    "ttsDesc": "Read AI messages aloud"
   },
   "onboarding": {
     "welcome": "Welcome to X-Computer",

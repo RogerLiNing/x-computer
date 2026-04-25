@@ -148,7 +148,11 @@
     "exampleWeeklyReport": "帮我生成本周工作周报",
     "exampleSummarizeDoc": "总结这份文档",
     "exampleExplainCode": "解释这段代码",
-    "exampleSearchWeb": "搜索一下关于 AI 的最新资讯"
+    "exampleSearchWeb": "搜索一下关于 AI 的最新资讯",
+    "stopSpeaking": "停止",
+    "readAloud": "朗读",
+    "calculator": "计算器",
+    "calcResult": "结果"
   },
   "templates": {
     "quickTasks": "快捷任务",
@@ -380,7 +384,9 @@
     "exportHtml": "HTML (.html)",
     "exportPdf": "PDF（通过打印）",
     "exportJson": "JSON (.json)",
-    "exportFormat": "导出格式"
+    "exportFormat": "导出格式",
+    "tts": "文字转语音",
+    "ttsDesc": "朗读 AI 回复"
   },
   "onboarding": {
     "welcome": "欢迎使用 X-Computer",
