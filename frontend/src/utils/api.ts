@@ -319,6 +319,46 @@ export const api = {
   oauthGetGithubUrl: () =>
     request<{ authUrl: string; state: string }>('/auth/oauth/github/url'),
 
+  // ── Feature Flags ────────────────────────────────────────────────────
+
+  /** 获取所有功能开关（含元信息） */
+  featureFlagsGetAll: () =>
+    request<{
+      flags: Array<{
+        key: string;
+        name: string;
+        description: string;
+        defaultValue: boolean;
+        category: string;
+        envVar: string;
+        enabled: boolean;
+      }>;
+      stats: { total: number; enabled: number; disabled: number; byCategory: Record<string, { total: number; enabled: number }> };
+    }>('/admin/feature-flags'),
+
+  /** 获取单个功能开关 */
+  featureFlagsGet: (key: string) =>
+    request<{
+      key: string;
+      name: string;
+      description: string;
+      defaultValue: boolean;
+      category: string;
+      envVar: string;
+      enabled: boolean;
+    }>(`/admin/feature-flags/${encodeURIComponent(key)}`),
+
+  /** 运行时覆盖功能开关（不持久化，重启后失效） */
+  featureFlagsOverride: (key: string, enabled: boolean) =>
+    request<{ success: boolean; key: string; enabled: boolean; note: string }>(`/admin/feature-flags/${encodeURIComponent(key)}/override`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  /** 重置所有运行时覆盖 */
+  featureFlagsReset: () =>
+    request<{ success: boolean }>('/admin/feature-flags/reset', { method: 'POST' }),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{

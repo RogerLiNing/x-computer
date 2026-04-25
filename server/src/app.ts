@@ -32,6 +32,8 @@ import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createLLMRouter } from './routes/llm.js';
 import { createContentManagementRoutes } from './routes/contentManagement.js';
 import { createPageIndexRouter } from './routes/pageindex.js';
+import { createFeatureFlagsRouter } from './routes/featureFlags.js';
+import { initFeatureFlags } from './config/featureFlags.js';
 import { userContextMiddleware } from './middleware/userContext.js';
 import { SubscriptionService } from './subscription/SubscriptionService.js';
 import { StripePaymentService } from './subscription/stripeService.js';
@@ -113,6 +115,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
 
   const containerIdleTimeout = config.container?.idleTimeout ?? 300000;
   const containerMaxIdleTime = config.container?.maxIdleTime ?? 86400000;
+
+  // ── Feature Flags（必须在所有功能使用之前初始化） ──
+  initFeatureFlags();
 
   const policy = new PolicyEngine();
   const audit = new AuditLogger();
@@ -296,6 +301,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/servers', createServerRouter());
   app.use('/api/subscriptions', createSubscriptionRoutes(subscriptionService, stripeService));
   app.use('/api/admin', createAdminRouter(db, subscriptionService));
+  app.use('/api/admin/feature-flags', createFeatureFlagsRouter());
   app.use('/api/llm', createLLMRouter());
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));

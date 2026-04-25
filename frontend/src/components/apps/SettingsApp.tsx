@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -252,6 +252,163 @@ function HeartbeatSettings() {
       >
         {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
       </button>
+    </div>
+  );
+}
+
+function FeatureFlagsSettings() {
+  const { t } = useTranslation();
+  const [flags, setFlags] = useState<Array<{
+    key: string;
+    name: string;
+    description: string;
+    defaultValue: boolean;
+    category: string;
+    envVar: string;
+    enabled: boolean;
+  }>>([]);
+  const [stats, setStats] = useState<{ total: number; enabled: number; disabled: number; byCategory: Record<string, { total: number; enabled: number }> } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [overriding, setOverriding] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string>('all');
+
+  const categories = useMemo(() => {
+    const cats = new Set(flags.map((f) => f.category));
+    return ['all', ...Array.from(cats)];
+  }, [flags]);
+
+  useEffect(() => {
+    api.featureFlagsGetAll().then((res) => {
+      setFlags(res.flags);
+      setStats(res.stats);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const handleToggle = async (key: string, currentEnabled: boolean) => {
+    setOverriding(key);
+    try {
+      await api.featureFlagsOverride(key, !currentEnabled);
+      setFlags((prev) => prev.map((f) => f.key === key ? { ...f, enabled: !currentEnabled } : f));
+    } catch {
+      // ignore
+    } finally {
+      setOverriding(null);
+    }
+  };
+
+  const handleReset = async () => {
+    try {
+      await api.featureFlagsReset();
+      api.featureFlagsGetAll().then((res) => {
+        setFlags(res.flags);
+        setStats(res.stats);
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const filteredFlags = activeCategory === 'all' ? flags : flags.filter((f) => f.category === activeCategory);
+
+  const categoryLabel: Record<string, string> = {
+    all: '全部',
+    core: '核心功能',
+    experimental: '实验性功能',
+    admin: '管理功能',
+    integrations: '集成功能',
+  };
+
+  if (loading) {
+    return <div className="text-xs text-desktop-muted py-4">{t('settings.loading', '加载中…')}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.featureFlags', '功能开关')}</h3>
+        {stats && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/20 text-green-400">
+            {stats.enabled}/{stats.total} {t('settings.enabled', '已启用')}
+          </span>
+        )}
+      </div>
+      <p className="text-[11px] text-desktop-muted leading-relaxed">
+        {t('settings.featureFlagsDesc', '运行时功能开关，修改仅在当前会话生效，重启后恢复环境变量配置。')}
+      </p>
+
+      {/* 分类筛选 */}
+      <div className="flex flex-wrap gap-1">
+        {categories.map((cat) => (
+          <button
+            key={cat}
+            onClick={() => setActiveCategory(cat)}
+            className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+              activeCategory === cat
+                ? 'bg-desktop-accent/40 text-desktop-text'
+                : 'bg-white/5 text-desktop-muted hover:bg-white/10'
+            }`}
+          >
+            {categoryLabel[cat] ?? cat}
+            {stats && cat !== 'all' && stats.byCategory[cat] && (
+              <span className="ml-1 opacity-60">{stats.byCategory[cat].enabled}/{stats.byCategory[cat].total}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* 功能列表 */}
+      <div className="space-y-2 max-h-96 overflow-y-auto">
+        {filteredFlags.map((flag) => (
+          <div key={flag.key} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white/[0.02] border border-white/5">
+            <div className="min-w-0">
+              <div className="text-xs text-desktop-text font-medium truncate">{flag.name}</div>
+              <div className="text-[10px] text-desktop-muted truncate">{flag.description}</div>
+              <div className="text-[9px] text-desktop-muted/50 mt-0.5">
+                <span className="font-mono">{flag.envVar}</span>
+                {flag.defaultValue !== flag.enabled && (
+                  <span className="ml-2 text-yellow-400/60">（默认值: {flag.defaultValue ? '开' : '关'}）</span>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => handleToggle(flag.key, flag.enabled)}
+              disabled={overriding === flag.key}
+              className={`shrink-0 transition-colors ${
+                flag.enabled ? 'text-green-400' : 'text-desktop-muted/40'
+              }`}
+              title={flag.enabled ? '点击关闭' : '点击开启'}
+            >
+              {overriding === flag.key ? (
+                <RefreshCw size={16} className="animate-spin" />
+              ) : (
+                <ToggleRight size={20} fill={flag.enabled ? 'currentColor' : 'none'} />
+              )}
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={handleReset}
+          className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+        >
+          {t('settings.resetFlags', '重置所有覆盖')}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            api.featureFlagsGetAll().then((res) => {
+              setFlags(res.flags);
+              setStats(res.stats);
+            });
+          }}
+          className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-xs text-desktop-text transition-colors"
+        >
+          {t('settings.refreshFlags', '刷新')}
+        </button>
+      </div>
     </div>
   );
 }
@@ -584,6 +741,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'servers', labelKey: 'settings.servers', icon: Server },
     { id: 'security', labelKey: 'settings.security', icon: Shield },
     { id: 'logs', labelKey: 'settings.logs', icon: FileText },
+    { id: 'flags', labelKey: 'settings.featureFlags', icon: ToggleRight },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -764,6 +922,10 @@ export function SettingsApp({ windowId }: Props) {
               </div>
             </div>
           </div>
+        )}
+
+        {tab === 'flags' && (
+          <FeatureFlagsSettings />
         )}
       </div>
     </div>
