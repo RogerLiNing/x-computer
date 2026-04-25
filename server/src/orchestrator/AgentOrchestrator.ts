@@ -1182,10 +1182,31 @@ export class AgentOrchestrator extends EventEmitter {
     }
     const awareness = getCurrentAwareness();
     const systemPromptOverride = meta?.systemPromptOverride;
+
+    // Load user profile for personalization
+    let userProfileSection = '';
+    if (taskUserId && this.db) {
+      try {
+        const profileRaw = await this.db.getConfig(taskUserId, 'user_profile');
+        if (profileRaw) {
+          const profile = JSON.parse(profileRaw) as Record<string, string>;
+          const parts: string[] = [];
+          if (profile.displayName) parts.push(`昵称: ${profile.displayName}`);
+          if (profile.bio) parts.push(`个人简介: ${profile.bio}`);
+          if (profile.timezone) parts.push(`时区: ${profile.timezone}`);
+          if (profile.language) parts.push(`语言偏好: ${profile.language}`);
+          if (parts.length > 0) {
+            userProfileSection = '\n\n# 用户信息\n' + parts.join('\n');
+          }
+        }
+      } catch { /* ignore profile load errors */ }
+    }
+
     const systemPrompt =
       systemPromptOverride ??
       '你是 X-Computer 主脑。请根据用户需求使用可用工具逐步完成，完成后再用纯文本回复、不要再次调用工具。\n\n# 当前感知\n' +
         awareness +
+        userProfileSection +
         '\n\n可用工具：' +
         tools.map((t) => t.name).join(', ') +
         '。';
