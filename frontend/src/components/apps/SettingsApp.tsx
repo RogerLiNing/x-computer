@@ -1398,20 +1398,28 @@ function UsageAnalyticsSettings() {
     completedTasks: number;
     failedTasks: number;
   }>>([]);
+  const [taskStats, setTaskStats] = useState<{
+    byStatus: Array<{ status: string; count: number }>;
+    byDomain: Array<{ domain: string; count: number }>;
+    topTasks: Array<{ id: string; title: string; domain: string; status: string; createdAt: string; updatedAt: string }>;
+    avgTasksPerDay: number;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const [days, setDays] = useState(30);
 
   const fetchData = useCallback(async (d: number) => {
     setLoading(true);
     try {
-      const [ov, sum, dailyData] = await Promise.all([
+      const [ov, sum, dailyData, taskData] = await Promise.all([
         api.usageGetOverview(d),
         api.usageGetSummary(d),
         api.usageGetDaily(d),
+        api.usageGetTasks(d),
       ]);
       setOverview(ov);
       setSummary(sum);
       setDaily(dailyData.daily);
+      setTaskStats(taskData);
     } catch {
       // ignore
     } finally {
@@ -1427,6 +1435,21 @@ function UsageAnalyticsSettings() {
   const trendSign = (v: number) => v > 0 ? '+' : '';
 
   const maxApiCalls = Math.max(...daily.map((d) => d.aiCalls), 1);
+  const maxTasks = Math.max(...daily.map((d) => d.tasks), 1);
+  const maxDailyTasks = Math.max(...daily.map((d) => d.completedTasks + d.failedTasks), 1);
+
+  const DOMAIN_COLORS = ['bg-blue-500', 'bg-green-500', 'bg-purple-500', 'bg-yellow-500', 'bg-orange-500', 'bg-pink-500', 'bg-cyan-500', 'bg-red-500'];
+
+  const STATUS_LABELS: Record<string, string> = {
+    pending: '待处理', planning: '规划中', running: '运行中',
+    awaiting_approval: '待审批', paused: '已暂停', completed: '已完成',
+    failed: '失败', cancelled: '已取消',
+  };
+  const STATUS_COLORS: Record<string, string> = {
+    pending: 'bg-gray-500/60', planning: 'bg-blue-500/60', running: 'bg-green-500/60',
+    awaiting_approval: 'bg-yellow-500/60', paused: 'bg-orange-500/60', completed: 'bg-green-500/60',
+    failed: 'bg-red-500/60', cancelled: 'bg-gray-500/60',
+  };
 
   return (
     <div className="space-y-6">
@@ -1472,76 +1495,180 @@ function UsageAnalyticsSettings() {
             </div>
           )}
 
-          {/* Daily API Calls Chart */}
+          {/* Dual Bar Charts: API Calls + Task Activity */}
           {daily.length > 0 && (
-            <div>
-              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.dailyApiCalls', '每日 AI 调用')}</h4>
-              <div className="flex items-end gap-0.5 h-24">
-                {daily.map((d, i) => {
-                  const height = Math.max(Math.round((d.aiCalls / maxApiCalls) * 80), d.aiCalls > 0 ? 4 : 0);
-                  return (
-                    <div key={i} className="flex-1 flex flex-col items-center gap-0.5 group relative">
-                      <div
-                        className="w-full bg-desktop-accent/60 hover:bg-desktop-accent rounded-sm transition-colors"
-                        style={{ height: `${height}px` }}
-                        title={`${d.date}: ${d.aiCalls} 调用`}
-                      />
-                      {i % Math.ceil(daily.length / 7) === 0 && (
-                        <span className="text-[9px] text-desktop-muted/60 absolute -bottom-4 left-0">{d.date.slice(5)}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Task Status Breakdown */}
-          {overview && (
-            <div>
-              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.taskBreakdown', '任务状态分布')}</h4>
-              <div className="space-y-2">
-                {[
-                  { label: t('settings.total', '总计'), count: overview.tasks.total, color: 'bg-blue-500/60' },
-                  { label: t('settings.completed', '已完成'), count: overview.tasks.completed, color: 'bg-green-500/60' },
-                  { label: t('settings.failed', '失败'), count: overview.tasks.failed, color: 'bg-red-500/60' },
-                ].map((item) => {
-                  const pct = overview.tasks.total > 0 ? (item.count / overview.tasks.total) * 100 : 0;
-                  return (
-                    <div key={item.label} className="flex items-center gap-2">
-                      <span className="text-[11px] text-desktop-muted w-12">{item.label}</span>
-                      <div className="flex-1 bg-white/5 rounded-full h-1.5">
-                        <div className={`${item.color} rounded-full h-1.5 transition-all`} style={{ width: `${pct}%` }} />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.dailyApiCalls', '每日 AI 调用')}</h4>
+                <div className="flex items-end gap-0.5 h-20">
+                  {daily.map((d, i) => {
+                    const height = Math.max(Math.round((d.aiCalls / maxApiCalls) * 64), d.aiCalls > 0 ? 3 : 0);
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-0.5 group relative">
+                        <div
+                          className="w-full bg-blue-500/70 hover:bg-blue-400 rounded-sm transition-colors"
+                          style={{ height: `${height}px` }}
+                          title={`${d.date}: ${d.aiCalls} 调用`}
+                        />
+                        {i % Math.ceil(daily.length / 5) === 0 && (
+                          <span className="text-[8px] text-desktop-muted/50 absolute -bottom-3.5">{d.date.slice(5)}</span>
+                        )}
                       </div>
-                      <span className="text-[11px] text-desktop-text w-10 text-right">{item.count}</span>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.dailyTaskActivity', '每日任务')}</h4>
+                <div className="flex items-end gap-0.5 h-20">
+                  {daily.map((d, i) => {
+                    const total = d.completedTasks + d.failedTasks;
+                    const height = Math.max(Math.round((total / Math.max(maxDailyTasks, 1)) * 64), total > 0 ? 3 : 0);
+                    const barClass = d.tasks > 0 && d.completedTasks / d.tasks >= 0.8
+                      ? 'bg-green-500/70 hover:bg-green-400'
+                      : d.tasks > 0 && d.completedTasks / d.tasks >= 0.5
+                        ? 'bg-yellow-500/70 hover:bg-yellow-400'
+                        : 'bg-red-500/70 hover:bg-red-400';
+                    return (
+                      <div key={i} className="flex-1 flex flex-col items-center gap-0.5 group relative">
+                        <div
+                          className={`w-full ${barClass} rounded-sm transition-colors`}
+                          style={{ height: `${height}px` }}
+                          title={`${d.date}: ${d.completedTasks} 完成 / ${d.failedTasks} 失败`}
+                        />
+                        {i % Math.ceil(daily.length / 5) === 0 && (
+                          <span className="text-[8px] text-desktop-muted/50 absolute -bottom-3.5">{d.date.slice(5)}</span>
+                        )}
+                        <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block bg-black/90 text-white text-[9px] rounded px-1.5 py-1 whitespace-nowrap z-10 pointer-events-none">
+                          {d.date}<br />完成: {d.completedTasks} 失败: {d.failedTasks}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           )}
 
-          {/* Recent Tasks */}
-          {overview && overview.recentTasks.length > 0 && (
-            <div>
-              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.recentTasks', '最近任务')}</h4>
-              <div className="space-y-1.5">
-                {overview.recentTasks.map((task) => (
-                  <div key={task.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.02] border border-white/5">
-                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                      task.status === 'completed' ? 'bg-green-400' :
-                      task.status === 'failed' ? 'bg-red-400' :
-                      task.status === 'running' ? 'bg-blue-400' : 'bg-desktop-muted/40'
-                    }`} />
-                    <span className="text-[11px] text-desktop-text truncate flex-1">{task.title}</span>
-                    <span className="text-[10px] text-desktop-muted/60 shrink-0">
-                      {new Date(task.updatedAt).toLocaleDateString()}
-                    </span>
-                  </div>
-                ))}
+          {/* Task Status Breakdown + Domain Breakdown */}
+          {overview && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.taskBreakdown', '任务状态分布')}</h4>
+                <div className="space-y-2">
+                  {[
+                    { label: t('settings.total', '总计'), count: overview.tasks.total, color: 'bg-blue-500/60' },
+                    { label: t('settings.completed', '已完成'), count: overview.tasks.completed, color: 'bg-green-500/60' },
+                    { label: t('settings.failed', '失败'), count: overview.tasks.failed, color: 'bg-red-500/60' },
+                  ].map((item) => {
+                    const pct = overview.tasks.total > 0 ? (item.count / overview.tasks.total) * 100 : 0;
+                    return (
+                      <div key={item.label} className="flex items-center gap-2">
+                        <span className="text-[11px] text-desktop-muted w-12">{item.label}</span>
+                        <div className="flex-1 bg-white/5 rounded-full h-1.5">
+                          <div className={`${item.color} rounded-full h-1.5 transition-all`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-[11px] text-desktop-text w-10 text-right">{item.count}</span>
+                      </div>
+                    );
+                  })}
+                  {taskStats && taskStats.byStatus.length > 0 && taskStats.byStatus.slice(0, 3).map((s) => {
+                    const totalTasks = overview.tasks.total || 1;
+                    const pct = (s.count / totalTasks) * 100;
+                    return (
+                      <div key={s.status} className="flex items-center gap-2">
+                        <span className="text-[11px] text-desktop-muted w-12">{STATUS_LABELS[s.status] ?? s.status}</span>
+                        <div className="flex-1 bg-white/5 rounded-full h-1.5">
+                          <div className={`${STATUS_COLORS[s.status] ?? 'bg-gray-500/60'} rounded-full h-1.5 transition-all`} style={{ width: `${pct}%` }} />
+                        </div>
+                        <span className="text-[11px] text-desktop-text w-10 text-right">{s.count}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+
+              {taskStats && taskStats.byDomain.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.domainBreakdown', '任务域分布')}</h4>
+                  <div className="space-y-2">
+                    {taskStats.byDomain.slice(0, 6).map((d, i) => {
+                      const maxCount = taskStats.byDomain[0]?.count || 1;
+                      const pct = (d.count / maxCount) * 100;
+                      const color = DOMAIN_COLORS[i % DOMAIN_COLORS.length];
+                      return (
+                        <div key={d.domain} className="flex items-center gap-2">
+                          <span className="text-[11px] text-desktop-muted w-12 capitalize">{d.domain}</span>
+                          <div className="flex-1 bg-white/5 rounded-full h-1.5">
+                            <div className={`${color}/60 rounded-full h-1.5 transition-all`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-[11px] text-desktop-text w-8 text-right">{d.count}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
+
+          {/* Top Tasks + Avg Per Day */}
+          {(overview && overview.recentTasks.length > 0) || taskStats ? (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <h4 className="text-xs font-medium text-desktop-text mb-2">
+                  {t('settings.topTasks', '最近任务')}
+                  {taskStats && (
+                    <span className="ml-2 text-[10px] text-desktop-muted/60">平均每天 {taskStats.avgTasksPerDay} 个</span>
+                  )}
+                </h4>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {(taskStats?.topTasks ?? overview?.recentTasks ?? []).slice(0, 10).map((task) => {
+                    const domain = (task as unknown as { domain?: string }).domain;
+                    return (
+                    <div key={task.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.02] border border-white/5">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        task.status === 'completed' ? 'bg-green-400' :
+                        task.status === 'failed' ? 'bg-red-400' :
+                        task.status === 'running' ? 'bg-blue-400' : 'bg-desktop-muted/40'
+                      }`} />
+                      {taskStats && domain && (
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-white/5 text-desktop-muted shrink-0 capitalize">{domain}</span>
+                      )}
+                      <span className="text-[11px] text-desktop-text truncate flex-1">{task.title}</span>
+                      <span className="text-[10px] text-desktop-muted/60 shrink-0">
+                        {new Date(task.updatedAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  );
+                  })}
+                </div>
+              </div>
+
+              {taskStats && taskStats.topTasks.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.activityTrend', '任务域趋势')}</h4>
+                  <div className="space-y-2">
+                    {taskStats.byDomain.slice(0, 5).map((d, i) => {
+                      const total = taskStats.byDomain.reduce((s, x) => s + x.count, 0) || 1;
+                      const pct = Math.round((d.count / total) * 100);
+                      const color = DOMAIN_COLORS[i % DOMAIN_COLORS.length];
+                      return (
+                        <div key={d.domain} className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${color}`} />
+                          <span className="text-[11px] text-desktop-muted w-14 capitalize">{d.domain}</span>
+                          <div className="flex-1 bg-white/5 rounded-full h-1.5">
+                            <div className={`${color}/60 rounded-full h-1.5`} style={{ width: `${pct}%` }} />
+                          </div>
+                          <span className="text-[10px] text-desktop-text w-8 text-right">{pct}%</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
 
           {/* Resource Type Breakdown */}
           {overview && overview.byResourceType.length > 0 && (

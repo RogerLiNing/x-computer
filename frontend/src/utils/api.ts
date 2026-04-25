@@ -1987,4 +1987,51 @@ export const api = {
 
   deleteNotification: (id: string) =>
     request<{ success: boolean }>(`/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ── Usage Analytics ────────────────────────────────────────────────
+
+  getUsageOverview: (days = 30) =>
+    request<{
+      data: {
+        period: { days: number; start: number; end: number };
+        aiCalls: number;
+        tasks: { total: number; completed: number; failed: number };
+        byResourceType: Array<{ type: string; total: number }>;
+        dailyApiCalls: Array<{ date: string; count: number }>;
+        dailyTaskCounts: Array<{ date: string; count: number; status: string }>;
+        recentTasks: Array<{ id: string; title: string; status: string; createdAt: string; updatedAt: string }>;
+      };
+    }>(`/admin/usage/overview?days=${days}`),
+
+  getUsageSummary: (days = 7) =>
+    request<{
+      data: {
+        period: { days: number; label: string };
+        current: { aiCalls: number; tasks: number; completedTasks: number };
+        previous: { aiCalls: number; tasks: number; completedTasks: number };
+        trends: { aiCalls: number; tasks: number; completedTasks: number };
+      };
+    }>(`/admin/usage/summary?days=${days}`),
+
+  getUsageDaily: (days = 30) =>
+    request<{
+      data: {
+        period: { days: number; start: number; end: number };
+        daily: Array<{
+          date: string; aiCalls: number; tasks: number;
+          completedTasks: number; failedTasks: number;
+        }>;
+      };
+    }>(`/admin/usage/daily?days=${days}`),
+
+  getUsageTasks: (days = 30) =>
+    request<{
+      data: {
+        period: { days: number; start: number; end: number };
+        byStatus: Array<{ status: string; count: number }>;
+        byDomain: Array<{ domain: string; count: number }>;
+        topTasks: Array<{ id: string; title: string; domain: string; status: string; createdAt: string; updatedAt: string }>;
+        avgTasksPerDay: number;
+      };
+    }>(`/admin/usage/tasks?days=${days}`),
 };
