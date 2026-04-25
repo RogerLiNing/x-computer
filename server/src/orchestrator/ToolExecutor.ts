@@ -40,6 +40,7 @@ import type { ToolExecutorDeps } from './tools/types.js';
 import { decodeHtmlEntities } from './tools/utils.js';
 import { fileDefinitions, createFileHandlers } from './tools/file/index.js';
 import { grepDefinition, createGrepHandler } from './tools/grep.js';
+import { webSearchDefinition, createWebSearchHandler } from './tools/webSearch.js';
 import { shellRunDefinition, createShellRunHandler } from './tools/shell/run.js';
 import {
   dockerRunDefinition,
@@ -1480,6 +1481,7 @@ export class ToolExecutor {
       if (handler) this.register(def, handler);
     }
     this.register(grepDefinition, createGrepHandler(deps));
+    this.register(webSearchDefinition, createWebSearchHandler(deps));
     this.register(shellRunDefinition, createShellRunHandler(deps));
 
     // Docker 容器管理工具 - 已禁用（安全风险：R060）
