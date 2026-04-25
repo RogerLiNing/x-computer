@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2 } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -252,6 +252,203 @@ function HeartbeatSettings() {
       >
         {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
       </button>
+    </div>
+  );
+}
+
+function UsageAnalyticsSettings() {
+  const { t } = useTranslation();
+  const [overview, setOverview] = useState<{
+    period: { days: number; start: number; end: number };
+    aiCalls: number;
+    tasks: { total: number; completed: number; failed: number };
+    byResourceType: Array<{ type: string; total: number }>;
+    dailyApiCalls: Array<{ date: string; count: number }>;
+    dailyTaskCounts: Array<{ date: string; count: number; status: string }>;
+    recentTasks: Array<{ id: string; title: string; status: string; createdAt: string; updatedAt: string }>;
+  } | null>(null);
+  const [summary, setSummary] = useState<{
+    period: { days: number; label: string };
+    current: { aiCalls: number; tasks: number; completedTasks: number };
+    previous: { aiCalls: number; tasks: number; completedTasks: number };
+    trends: { aiCalls: number; tasks: number; completedTasks: number };
+  } | null>(null);
+  const [daily, setDaily] = useState<Array<{
+    date: string;
+    aiCalls: number;
+    tasks: number;
+    completedTasks: number;
+    failedTasks: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [days, setDays] = useState(30);
+
+  const fetchData = useCallback(async (d: number) => {
+    setLoading(true);
+    try {
+      const [ov, sum, dailyData] = await Promise.all([
+        api.usageGetOverview(d),
+        api.usageGetSummary(d),
+        api.usageGetDaily(d),
+      ]);
+      setOverview(ov);
+      setSummary(sum);
+      setDaily(dailyData.daily);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData(days);
+  }, [days, fetchData]);
+
+  const trendColor = (v: number) => v > 0 ? 'text-green-400' : v < 0 ? 'text-red-400' : 'text-desktop-muted';
+  const trendSign = (v: number) => v > 0 ? '+' : '';
+
+  const maxApiCalls = Math.max(...daily.map((d) => d.aiCalls), 1);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.usageAnalytics', '使用量分析')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-0.5">
+            {t('settings.usageAnalyticsDesc', '查看 AI 调用、任务统计和每日趋势')}
+          </p>
+        </div>
+        <select
+          className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-desktop-text outline-none"
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+        >
+          <option value={7}>{t('settings.days7', '7天')}</option>
+          <option value={14}>{t('settings.days14', '14天')}</option>
+          <option value={30}>{t('settings.days30', '30天')}</option>
+          <option value={90}>{t('settings.days90', '90天')}</option>
+        </select>
+      </div>
+
+      {loading ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', '加载中…')}</div>
+      ) : (
+        <>
+          {/* KPI Cards */}
+          {summary && (
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: t('settings.aiCalls', 'AI 调用'), value: summary.current.aiCalls, trend: summary.trends.aiCalls },
+                { label: t('settings.totalTasks', '任务总数'), value: summary.current.tasks, trend: summary.trends.tasks },
+                { label: t('settings.completedTasks', '已完成'), value: summary.current.completedTasks, trend: summary.trends.completedTasks },
+              ].map((card) => (
+                <div key={card.label} className="bg-white/[0.03] rounded-xl p-3 border border-white/5">
+                  <div className="text-[10px] text-desktop-muted mb-1">{card.label}</div>
+                  <div className="text-lg font-bold text-desktop-text">{card.value.toLocaleString()}</div>
+                  <div className={`text-[10px] mt-0.5 ${trendColor(card.trend)}`}>
+                    {trendSign(card.trend)}{card.trend}% {t('settings.vsLastPeriod', 'vs上周期')}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Daily API Calls Chart */}
+          {daily.length > 0 && (
+            <div>
+              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.dailyApiCalls', '每日 AI 调用')}</h4>
+              <div className="flex items-end gap-0.5 h-24">
+                {daily.map((d, i) => {
+                  const height = Math.max(Math.round((d.aiCalls / maxApiCalls) * 80), d.aiCalls > 0 ? 4 : 0);
+                  return (
+                    <div key={i} className="flex-1 flex flex-col items-center gap-0.5 group relative">
+                      <div
+                        className="w-full bg-desktop-accent/60 hover:bg-desktop-accent rounded-sm transition-colors"
+                        style={{ height: `${height}px` }}
+                        title={`${d.date}: ${d.aiCalls} 调用`}
+                      />
+                      {i % Math.ceil(daily.length / 7) === 0 && (
+                        <span className="text-[9px] text-desktop-muted/60 absolute -bottom-4 left-0">{d.date.slice(5)}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Task Status Breakdown */}
+          {overview && (
+            <div>
+              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.taskBreakdown', '任务状态分布')}</h4>
+              <div className="space-y-2">
+                {[
+                  { label: t('settings.total', '总计'), count: overview.tasks.total, color: 'bg-blue-500/60' },
+                  { label: t('settings.completed', '已完成'), count: overview.tasks.completed, color: 'bg-green-500/60' },
+                  { label: t('settings.failed', '失败'), count: overview.tasks.failed, color: 'bg-red-500/60' },
+                ].map((item) => {
+                  const pct = overview.tasks.total > 0 ? (item.count / overview.tasks.total) * 100 : 0;
+                  return (
+                    <div key={item.label} className="flex items-center gap-2">
+                      <span className="text-[11px] text-desktop-muted w-12">{item.label}</span>
+                      <div className="flex-1 bg-white/5 rounded-full h-1.5">
+                        <div className={`${item.color} rounded-full h-1.5 transition-all`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[11px] text-desktop-text w-10 text-right">{item.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Recent Tasks */}
+          {overview && overview.recentTasks.length > 0 && (
+            <div>
+              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.recentTasks', '最近任务')}</h4>
+              <div className="space-y-1.5">
+                {overview.recentTasks.map((task) => (
+                  <div key={task.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.02] border border-white/5">
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      task.status === 'completed' ? 'bg-green-400' :
+                      task.status === 'failed' ? 'bg-red-400' :
+                      task.status === 'running' ? 'bg-blue-400' : 'bg-desktop-muted/40'
+                    }`} />
+                    <span className="text-[11px] text-desktop-text truncate flex-1">{task.title}</span>
+                    <span className="text-[10px] text-desktop-muted/60 shrink-0">
+                      {new Date(task.updatedAt).toLocaleDateString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Resource Type Breakdown */}
+          {overview && overview.byResourceType.length > 0 && (
+            <div>
+              <h4 className="text-xs font-medium text-desktop-text mb-2">{t('settings.resourceBreakdown', '资源类型分布')}</h4>
+              <div className="grid grid-cols-2 gap-2">
+                {overview.byResourceType.map((r) => (
+                  <div key={r.type} className="flex items-center justify-between px-3 py-1.5 rounded-lg bg-white/[0.02] border border-white/5">
+                    <span className="text-[11px] text-desktop-muted">{r.type}</span>
+                    <span className="text-[11px] text-desktop-text font-medium">{r.total.toLocaleString()}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => fetchData(days)}
+            className="w-full px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-xs text-desktop-text transition-colors"
+          >
+            {t('settings.refresh', '刷新')}
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -742,6 +939,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'security', labelKey: 'settings.security', icon: Shield },
     { id: 'logs', labelKey: 'settings.logs', icon: FileText },
     { id: 'flags', labelKey: 'settings.featureFlags', icon: ToggleRight },
+    { id: 'usage', labelKey: 'settings.usageAnalytics', icon: BarChart2 },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -926,6 +1124,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'flags' && (
           <FeatureFlagsSettings />
+        )}
+
+        {tab === 'usage' && (
+          <UsageAnalyticsSettings />
         )}
       </div>
     </div>

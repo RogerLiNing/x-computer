@@ -359,6 +359,52 @@ export const api = {
   featureFlagsReset: () =>
     request<{ success: boolean }>('/admin/feature-flags/reset', { method: 'POST' }),
 
+  // ── 使用量分析 ────────────────────────────────────────────────────
+
+  /** 获取使用量总览（AI调用、任务统计、每日趋势） */
+  usageGetOverview: (days?: number) =>
+    request<{
+      period: { days: number; start: number; end: number };
+      aiCalls: number;
+      tasks: { total: number; completed: number; failed: number };
+      byResourceType: Array<{ type: string; total: number }>;
+      dailyApiCalls: Array<{ date: string; count: number }>;
+      dailyTaskCounts: Array<{ date: string; count: number; status: string }>;
+      recentTasks: Array<{ id: string; title: string; status: string; createdAt: string; updatedAt: string }>;
+    }>(`/admin/usage/overview${days ? `?days=${days}` : ''}`),
+
+  /** 获取使用量摘要（简洁，适合小组件） */
+  usageGetSummary: (days?: number) =>
+    request<{
+      period: { days: number; label: string };
+      current: { aiCalls: number; tasks: number; completedTasks: number };
+      previous: { aiCalls: number; tasks: number; completedTasks: number };
+      trends: { aiCalls: number; tasks: number; completedTasks: number };
+    }>(`/admin/usage/summary${days ? `?days=${days}` : ''}`),
+
+  /** 获取每日使用量详细数据 */
+  usageGetDaily: (days?: number) =>
+    request<{
+      period: { days: number; start: number; end: number };
+      daily: Array<{
+        date: string;
+        aiCalls: number;
+        tasks: number;
+        completedTasks: number;
+        failedTasks: number;
+      }>;
+    }>(`/admin/usage/daily${days ? `?days=${days}` : ''}`),
+
+  /** 获取任务详细统计 */
+  usageGetTasks: (days?: number) =>
+    request<{
+      period: { days: number; start: number; end: number };
+      byStatus: Array<{ status: string; count: number }>;
+      byDomain: Array<{ domain: string; count: number }>;
+      topTasks: Array<{ id: string; title: string; domain: string; status: string; createdAt: string; updatedAt: string }>;
+      avgTasksPerDay: number;
+    }>(`/admin/usage/tasks${days ? `?days=${days}` : ''}`),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{

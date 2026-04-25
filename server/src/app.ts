@@ -34,6 +34,7 @@ import { createContentManagementRoutes } from './routes/contentManagement.js';
 import { createPageIndexRouter } from './routes/pageindex.js';
 import { createFeatureFlagsRouter } from './routes/featureFlags.js';
 import { initFeatureFlags } from './config/featureFlags.js';
+import { createUsageAnalyticsRouter } from './routes/usageAnalytics.js';
 import { userContextMiddleware } from './middleware/userContext.js';
 import { SubscriptionService } from './subscription/SubscriptionService.js';
 import { StripePaymentService } from './subscription/stripeService.js';
@@ -302,6 +303,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/subscriptions', createSubscriptionRoutes(subscriptionService, stripeService));
   app.use('/api/admin', createAdminRouter(db, subscriptionService));
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter());
+  app.use('/api/admin/usage', createUsageAnalyticsRouter(db));
   app.use('/api/llm', createLLMRouter());
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));
