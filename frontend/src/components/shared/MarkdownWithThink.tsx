@@ -3,8 +3,7 @@ import { Sparkles, ChevronDown, ChevronRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { CodeBlock } from './CodeBlock';
 
 interface MarkdownWithThinkProps {
   content: string;
@@ -54,38 +53,12 @@ const markdownComponents: Components = {
     const match = /language-(\w+)/.exec(className || '');
     const isInline = !match;
     const codeString = String(children).replace(/\n$/, '');
-    if (isInline) {
-      return (
-        <code
-          {...props}
-          className="px-1 py-0.5 rounded bg-white/10 text-desktop-accent text-xs font-mono"
-        >
-          {children}
-        </code>
-      );
-    }
     return (
-      <div className="relative group mt-2 rounded-lg overflow-hidden border border-white/10">
-        <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-          <button
-            type="button"
-            className="px-2 py-1 rounded text-[10px] bg-white/10 hover:bg-white/20 text-desktop-muted transition-colors"
-            onClick={() => navigator.clipboard.writeText(codeString)}
-            title="复制代码"
-          >
-            复制
-          </button>
-        </div>
-        <SyntaxHighlighter
-          style={oneDark as any}
-          language={match[1] || 'text'}
-          PreTag="div"
-          customStyle={{ margin: 0, padding: '0.75rem', background: 'transparent', fontSize: '11px' }}
-          codeTagProps={{ style: { fontFamily: 'ui-monospace, monospace' } }}
-        >
-          {codeString}
-        </SyntaxHighlighter>
-      </div>
+      <CodeBlock
+        code={codeString}
+        language={match ? match[1] : 'text'}
+        inline={isInline}
+      />
     );
   },
   a: ({ href, children, ...p }) => (

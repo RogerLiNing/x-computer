@@ -1512,6 +1512,13 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
 
+  /** 执行代码（Python/JavaScript/Bash）并返回输出 */
+  executeCode: (code: string, language: string) =>
+    request<{ stdout: string; stderr: string; exitCode: number }>('/code/exec', {
+      method: 'POST',
+      body: JSON.stringify({ code, language }),
+    }),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),

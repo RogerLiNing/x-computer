@@ -21,6 +21,7 @@ import { createApiRouter } from './routes/api.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createFSRouter } from './routes/fs.js';
 import { createShellRouter } from './routes/shell.js';
+import { createCodeExecRouter } from './routes/codeExec.js';
 import { createUserRouter } from './routes/user.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createServerRouter } from './routes/servers.js';
@@ -314,6 +315,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/users', createUserRouter(db, subscriptionService));
   app.use('/api/fs', createFSRouter(sandboxFS, userSandboxManager));
   app.use('/api/shell', createShellRouter(sandboxShell, userSandboxManager));
+  app.use('/api/code', createCodeExecRouter(sandboxShell, userSandboxManager));
   app.use('/api/servers', createServerRouter());
   app.use('/api/subscriptions', createSubscriptionRoutes(subscriptionService, stripeService));
   app.use('/api/admin', createAdminRouter(db, subscriptionService));
