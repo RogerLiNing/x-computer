@@ -86,6 +86,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
   const [commandPalettePosition, setCommandPalettePosition] = useState({ top: 0, left: 0 });
+  /** 会话已过时间（秒），每分钟更新 */
+  const [sessionElapsed, setSessionElapsed] = useState(0);
   /** 跨会话收藏消息列表 */
   const [allBookmarks, setAllBookmarks] = useState<Array<{ id: string; sessionId: string; role: string; content: string; createdAt: string }>>([]);
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
@@ -154,6 +156,18 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     if (showArchived) loadArchivedSessions();
     else setArchivedSessions([]);
   }, [showArchived, loadArchivedSessions]);
+
+  /** 更新会话已过时间（每分钟刷新） */
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const session = sessions.find((s) => s.id === currentSessionId);
+    if (!session) return;
+    const start = new Date(session.createdAt).getTime();
+    const tick = () => setSessionElapsed(Math.floor((Date.now() - start) / 60000));
+    tick();
+    const id = setInterval(tick, 60000);
+    return () => clearInterval(id);
+  }, [currentSessionId, sessions]);
 
   /** 全局消息搜索（防抖 400ms） */
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1851,8 +1865,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 ))}
               </select>
             </div>
-            <div className="text-[10px] text-desktop-muted mt-0.5">
-              {tasks.length} 个任务
+            <div className="text-[10px] text-desktop-muted mt-0.5 flex items-center gap-1.5 flex-wrap">
+              <span>{tasks.length} 个任务</span>
+              {sessionElapsed > 0 && (
+                <span className="flex items-center gap-0.5 text-desktop-accent/70">
+                  <Clock size={9} />
+                  {sessionElapsed < 60
+                    ? `${sessionElapsed} 分钟`
+                    : `${Math.floor(sessionElapsed / 60)} 小时 ${sessionElapsed % 60 > 0 ? (sessionElapsed % 60) + ' 分钟' : ''}`}
+                </span>
+              )}
               {selectedAgentId && agents.find((a) => a.id === selectedAgentId) && (
                 <span className="ml-1">· 与「{agents.find((a) => a.id === selectedAgentId)!.name}」对话</span>
               )}
