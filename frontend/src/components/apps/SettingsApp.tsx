@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard, Code } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1930,6 +1930,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'templates', labelKey: 'settings.promptTemplates', icon: FileText },
     { id: 'announcements', labelKey: 'settings.announcements', icon: Bell },
     { id: 'systemprompts', labelKey: 'settings.systemPrompts', icon: Brain },
+    { id: 'snippets', labelKey: 'settings.snippets', icon: Code },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -2159,6 +2160,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'systemprompts' && (
           <SystemPromptsSettings />
+        )}
+
+        {tab === 'snippets' && (
+          <SnippetsSettings />
         )}
       </div>
     </div>
@@ -3831,6 +3836,245 @@ const CATEGORY_COLORS: Record<LogCategory, string> = {
 type ServerLogEntry = { id: string; timestamp: number; level: string; category: string; source: string; message: string; detail?: string };
 
 type MergedLogEntry = (SystemLogEntry & { origin: 'frontend' }) | (ServerLogEntry & { origin: 'backend' });
+
+interface CodeSnippet {
+  id: string;
+  title: string;
+  code: string;
+  language: string;
+  description?: string;
+  createdAt: number;
+}
+
+const LANGUAGES = [
+  'javascript', 'typescript', 'python', 'bash', 'shell', 'sql',
+  'html', 'css', 'json', 'yaml', 'markdown', 'go', 'rust', 'java',
+  'csharp', 'cpp', 'c', 'ruby', 'php', 'swift', 'kotlin', 'other',
+];
+
+function SnippetsSettings() {
+  const { t } = useTranslation();
+  const [snippets, setSnippets] = useState<CodeSnippet[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<Partial<CodeSnippet>>({ language: 'javascript' });
+  const [saving, setSaving] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+
+  useEffect(() => {
+    api.getUserConfig().then((cfg) => {
+      const raw = cfg['snippets'];
+      if (Array.isArray(raw)) setSnippets(raw as CodeSnippet[]);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    if (!form.title?.trim() || !form.code?.trim()) return;
+    setSaving(true);
+    let updated: CodeSnippet[];
+    if (editingId) {
+      updated = snippets.map((s) => s.id === editingId ? { ...s, ...form, updatedAt: Date.now() } as CodeSnippet : s);
+    } else {
+      const newSnippet: CodeSnippet = {
+        id: `snip-${Date.now()}`,
+        title: form.title!.trim(),
+        code: form.code!,
+        language: form.language || 'javascript',
+        description: form.description,
+        createdAt: Date.now(),
+      };
+      updated = [...snippets, newSnippet];
+    }
+    try {
+      await api.setUserConfig({ snippets: updated });
+      setSnippets(updated);
+      resetForm();
+    } catch { /* ignore */ }
+    setSaving(false);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm(t('settings.snippetDeleteConfirm'))) return;
+    const updated = snippets.filter((s) => s.id !== id);
+    await api.setUserConfig({ snippets: updated }).catch(() => {});
+    setSnippets(updated);
+  };
+
+  const handleEdit = (snippet: CodeSnippet) => {
+    setForm({ ...snippet });
+    setEditingId(snippet.id);
+    setShowForm(true);
+  };
+
+  const handleCopy = async (code: string, id: string) => {
+    await navigator.clipboard.writeText(code).catch(() => {});
+    setCopied(id);
+    setTimeout(() => setCopied(null), 1500);
+  };
+
+  const resetForm = () => {
+    setForm({ language: 'javascript' });
+    setEditingId(null);
+    setShowForm(false);
+  };
+
+  const filtered = snippets.filter((s) =>
+    !filter ||
+    s.title.toLowerCase().includes(filter.toLowerCase()) ||
+    s.code.toLowerCase().includes(filter.toLowerCase()) ||
+    s.language.toLowerCase().includes(filter.toLowerCase())
+  );
+
+  if (loading) {
+    return <div className="text-xs text-desktop-muted p-4">{t('common.loading', 'Loading…')}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.snippets')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-1">{t('settings.snippetsDesc')}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => { resetForm(); setShowForm(true); }}
+          className="text-[11px] px-3 py-1.5 rounded bg-desktop-accent/60 text-desktop-text hover:bg-desktop-accent/80 transition-colors flex items-center gap-1"
+        >
+          <Plus size={12} /> {t('settings.snippetAdd')}
+        </button>
+      </div>
+
+      {snippets.length > 0 && (
+        <div className="flex">
+          <input
+            type="text"
+            placeholder={t('settings.snippetSearchPlaceholder')}
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none"
+          />
+        </div>
+      )}
+
+      {/* Form */}
+      {showForm && (
+        <div className="border border-white/10 rounded-lg p-4 space-y-3 bg-white/[0.02]">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] text-desktop-muted block mb-1">{t('settings.snippetTitle')}</label>
+              <input
+                type="text"
+                value={form.title ?? ''}
+                onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+                placeholder="e.g. React useEffect cleanup"
+              />
+            </div>
+            <div>
+              <label className="text-[11px] text-desktop-muted block mb-1">{t('settings.snippetLanguage')}</label>
+              <select
+                value={form.language ?? 'javascript'}
+                onChange={(e) => setForm((f) => ({ ...f, language: e.target.value }))}
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+              >
+                {LANGUAGES.map((lang) => (
+                  <option key={lang} value={lang}>{lang}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-desktop-muted block mb-1">{t('settings.snippetDescription')} (optional)</label>
+            <input
+              type="text"
+              value={form.description ?? ''}
+              onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            />
+          </div>
+          <div>
+            <label className="text-[11px] text-desktop-muted block mb-1">{t('settings.snippetCode')}</label>
+            <textarea
+              value={form.code ?? ''}
+              onChange={(e) => setForm((f) => ({ ...f, code: e.target.value }))}
+              rows={6}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none font-mono resize-y"
+              placeholder="// your code here"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={resetForm} className="text-[11px] px-3 py-1.5 rounded text-desktop-muted hover:bg-white/5">
+              {t('settings.snippetCancel')}
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving || !form.title?.trim() || !form.code?.trim()}
+              className="text-[11px] px-3 py-1.5 rounded bg-desktop-accent/60 text-desktop-text hover:bg-desktop-accent/80 disabled:opacity-50"
+            >
+              {t('settings.snippetSave')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      {filtered.length === 0 && !showForm ? (
+        <p className="text-xs text-desktop-muted text-center py-8">{t('settings.snippetNoSnippets')}</p>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((snippet) => (
+            <div key={snippet.id} className="border border-white/10 rounded-lg p-3 hover:border-white/20 transition-colors group">
+              <div className="flex items-start justify-between gap-2 mb-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-desktop-accent/20 text-desktop-accent shrink-0">{snippet.language}</span>
+                  <span className="text-xs font-medium text-desktop-text truncate">{snippet.title}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    onClick={() => handleCopy(snippet.code, snippet.id)}
+                    className="p-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
+                    title="Copy"
+                  >
+                    {copied === snippet.id
+                      ? <CheckCircle size={12} className="text-green-400" />
+                      : <Copy size={12} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleEdit(snippet)}
+                    className="p-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
+                    title="Edit"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(snippet.id)}
+                    className="p-1 rounded text-desktop-muted hover:text-red-400 hover:bg-white/10"
+                    title="Delete"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+              {snippet.description && (
+                <p className="text-[11px] text-desktop-muted mb-2">{snippet.description}</p>
+              )}
+              <pre className="text-[11px] text-desktop-text/80 bg-black/20 rounded p-2 overflow-auto max-h-32 font-mono leading-relaxed">
+                {snippet.code}
+              </pre>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SystemLogTab() {
   const { entries, clearLogs } = useSystemLogStore();
