@@ -1485,6 +1485,11 @@ export const api = {
     return `${window.location.origin}/api/chat/sessions/${sessionId}/export?format=json`;
   },
 
+  /** 导出会话（HTML） */
+  exportChatSessionHtml: (sessionId: string) => {
+    return `${window.location.origin}/api/chat/sessions/${sessionId}/export?format=html`;
+  },
+
   /** 追加消息到会话。images: 图片路径或 URL；attachedFiles: 用户附带文档 [{ name, path }] */
   addChatMessage: (
     sessionId: string,

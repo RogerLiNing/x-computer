@@ -47,6 +47,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   /** 对话框中附加的文档文件（发送时会上传到沙箱并作为 attachedFilePaths 传给后端） */
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; file: File }[]>([]);
   const [snippetPickerOpen, setSnippetPickerOpen] = useState(false);
+  const [exportDropdownSessionId, setExportDropdownSessionId] = useState<string | null>(null);
   const [snippets, setSnippets] = useState<Array<{ id: string; title: string; code: string; language: string; description?: string }>>([]);
   const [snippetFilter, setSnippetFilter] = useState('');
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -1192,18 +1193,58 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 >
                   <Pencil size={12} />
                 </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="导出 MD"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const url = api.exportChatSessionMarkdown(s.id);
-                    window.open(url, '_blank');
-                  }}
-                >
-                  <Download size={12} />
-                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="导出"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setExportDropdownSessionId(exportDropdownSessionId === s.id ? null : s.id);
+                    }}
+                  >
+                    <Download size={12} />
+                  </button>
+                  {exportDropdownSessionId === s.id && (
+                    <div className="absolute right-0 top-full mt-1 bg-desktop-surface border border-white/20 rounded-lg shadow-xl z-50 min-w-[140px] py-1">
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
+                        onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionMarkdown(s.id), '_blank'); setExportDropdownSessionId(null); }}
+                      >
+                        <FileText size={12} /> Markdown
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
+                        onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionHtml(s.id), '_blank'); setExportDropdownSessionId(null); }}
+                      >
+                        <FileText size={12} /> HTML
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const url = api.exportChatSessionHtml(s.id);
+                          const w = window.open(url, '_blank');
+                          if (w) w.onload = () => w.print();
+                          setExportDropdownSessionId(null);
+                        }}
+                      >
+                        <FileText size={12} /> PDF (打印)
+                      </button>
+                      <div className="border-t border-white/10 my-1" />
+                      <button
+                        type="button"
+                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
+                        onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionJson(s.id), '_blank'); setExportDropdownSessionId(null); }}
+                      >
+                        <FileText size={12} /> JSON
+                      </button>
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
                   className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"

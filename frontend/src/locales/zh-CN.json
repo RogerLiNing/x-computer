@@ -374,7 +374,13 @@
     "snippetCopied": "已复制！",
     "snippetInsert": "插入",
     "snippetSearchPlaceholder": "搜索代码片段...",
-    "snippetDeleteConfirm": "确定删除此片段？"
+    "snippetDeleteConfirm": "确定删除此片段？",
+    "exportSession": "导出会话",
+    "exportMarkdown": "Markdown (.md)",
+    "exportHtml": "HTML (.html)",
+    "exportPdf": "PDF（通过打印）",
+    "exportJson": "JSON (.json)",
+    "exportFormat": "导出格式"
   },
   "onboarding": {
     "welcome": "欢迎使用 X-Computer",

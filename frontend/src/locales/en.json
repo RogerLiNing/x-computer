@@ -368,7 +368,13 @@
     "snippetCopied": "Copied!",
     "snippetInsert": "Insert",
     "snippetSearchPlaceholder": "Search snippets...",
-    "snippetDeleteConfirm": "Delete this snippet?"
+    "snippetDeleteConfirm": "Delete this snippet?",
+    "exportSession": "Export Session",
+    "exportMarkdown": "Markdown (.md)",
+    "exportHtml": "HTML (.html)",
+    "exportPdf": "PDF (via Print)",
+    "exportJson": "JSON (.json)",
+    "exportFormat": "Export Format"
   },
   "onboarding": {
     "welcome": "Welcome to X-Computer",

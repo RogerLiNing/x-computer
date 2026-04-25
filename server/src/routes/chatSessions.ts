@@ -218,6 +218,71 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
       return;
     }
 
+    if (format === 'html') {
+      const htmlLines: string[] = [
+        `<!DOCTYPE html>`,
+        `<html lang="en">`,
+        `<head>`,
+        `<meta charset="UTF-8">`,
+        `<meta name="viewport" content="width=device-width, initial-scale=1.0">`,
+        `<title>${session.title || 'Conversation'}</title>`,
+        `<style>`,
+        `  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; color: #1a1a1a; background: #fff; }`,
+        `  h1 { border-bottom: 2px solid #e5e5e5; padding-bottom: 10px; }`,
+        `  .message { margin: 24px 0; padding: 16px; border-radius: 8px; }`,
+        `  .user { background: #f0f7ff; border-left: 4px solid #3b82f6; }`,
+        `  .assistant { background: #f9fafb; border-left: 4px solid #10b981; }`,
+        `  .role { font-weight: 600; margin-bottom: 8px; color: #555; font-size: 12px; }`,
+        `  .time { font-size: 11px; color: #999; margin-bottom: 8px; }`,
+        `  .content { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }`,
+        `  .content pre { background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; }`,
+        `  .tools { margin-top: 8px; font-size: 12px; color: #666; }`,
+        `  .tool { background: #f3f4f6; padding: 4px 8px; border-radius: 4px; margin: 2px; display: inline-block; }`,
+        `  .footer { margin-top: 40px; text-align: center; font-size: 11px; color: #999; }`,
+        `  @media print { body { margin: 20px; } .message { break-inside: avoid; } }`,
+        `</style>`,
+        `</head>`,
+        `<body>`,
+        `<h1>${session.title || 'Untitled Conversation'}</h1>`,
+        `<p class="time">Exported: ${new Date().toLocaleString()}</p>`,
+      ];
+
+      for (const m of messages) {
+        const roleClass = m.role === 'user' ? 'user' : m.role === 'assistant' ? 'assistant' : '';
+        const roleLabel = m.role === 'user' ? 'User' : m.role === 'assistant' ? 'Assistant' : m.role;
+        const time = new Date(m.created_at).toLocaleString();
+        const content = (m.content || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+          .replace(/`([^`]+)`/g, '<code>$1</code>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/\n/g, '<br>');
+
+        htmlLines.push(`<div class="message ${roleClass}">`);
+        htmlLines.push(`<div class="role">${roleLabel}</div>`);
+        htmlLines.push(`<div class="time">${time}</div>`);
+
+        if (m.tool_calls_json) {
+          try {
+            const tools = JSON.parse(m.tool_calls_json);
+            if (tools.length > 0) {
+              htmlLines.push(`<div class="tools">Tools: ${tools.map((t: { name: string }) => `<span class="tool">${t.name}</span>`).join(' ')}</div>`);
+            }
+          } catch { /* ignore */ }
+        }
+
+        htmlLines.push(`<div class="content">${content}</div>`);
+        htmlLines.push(`</div>`);
+      }
+
+      htmlLines.push(`<div class="footer">Exported from X-Computer · ${new Date().toLocaleString()}</div>`);
+      htmlLines.push(`</body></html>`);
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="conversation-${session.id}.html"`);
+      res.send(htmlLines.join('\n'));
+      return;
+    }
+
     // Markdown export
     const lines: string[] = [
       `# ${session.title || 'Untitled Conversation'}`,
