@@ -49,6 +49,7 @@ export interface ChatMessageRow {
   images_json: string | null;
   attached_files_json: string | null;
   reactions: string | null;
+  bookmarked: number | null;
   created_at: string;
 }
 
@@ -148,6 +149,7 @@ export class SqliteAppDatabase {
         images_json TEXT,
         attached_files_json TEXT,
         reactions TEXT,
+        bookmarked INTEGER DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       );
       CREATE INDEX IF NOT EXISTS idx_chat_messages_session ON chat_messages(session_id);
@@ -365,6 +367,9 @@ export class SqliteAppDatabase {
       }
       if (!cols.some((c) => c.name === 'reactions')) {
         this.db.exec('ALTER TABLE chat_messages ADD COLUMN reactions TEXT');
+      }
+      if (!cols.some((c) => c.name === 'bookmarked')) {
+        this.db.exec('ALTER TABLE chat_messages ADD COLUMN bookmarked INTEGER DEFAULT 0');
       }
     } catch {
       /* 忽略 */
@@ -657,6 +662,10 @@ export class SqliteAppDatabase {
 
   updateMessage(messageId: string, content: string): void {
     this.db.prepare('UPDATE chat_messages SET content = ? WHERE id = ?').run(content, messageId);
+  }
+
+  updateMessageBookmark(messageId: string, bookmarked: boolean): void {
+    this.db.prepare('UPDATE chat_messages SET bookmarked = ? WHERE id = ?').run(bookmarked ? 1 : 0, messageId);
   }
 
   getMessages(sessionId: string, limit = 200): ChatMessageRow[] {
@@ -1460,6 +1469,10 @@ export class SqliteDatabaseAdapter {
   }
   updateMessage(messageId: string, content: string): Promise<void> {
     this.db.updateMessage(messageId, content);
+    return Promise.resolve();
+  }
+  updateMessageBookmark(messageId: string, bookmarked: boolean): Promise<void> {
+    this.db.updateMessageBookmark(messageId, bookmarked);
     return Promise.resolve();
   }
   getRecentMessages(sessionId: string, limit?: number): Promise<ChatMessageRow[]> {

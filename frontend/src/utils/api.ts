@@ -1519,6 +1519,13 @@ export const api = {
       body: JSON.stringify({ code, language }),
     }),
 
+  /** 收藏/取消收藏消息 */
+  setMessageBookmark: (msgId: string, bookmarked: boolean) =>
+    request<{ success: boolean; bookmarked: boolean }>(`/chat/messages/${msgId}/bookmark`, {
+      method: 'PATCH',
+      body: JSON.stringify({ bookmarked }),
+    }),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),
@@ -1534,6 +1541,7 @@ export const api = {
         images?: string[];
         attachedFiles?: Array<{ name: string; path: string }>;
         reactions?: Record<string, boolean>;
+        bookmarked?: boolean;
         createdAt: string;
       }>
     >(`/chat/sessions/${sessionId}/messages?limit=${limit}`),

@@ -12,7 +12,7 @@ import { v4 as uuid } from 'uuid';
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
 interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; }
-interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; created_at: string; }
+interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; bookmarked: number | null; created_at: string; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Pool = mysql.Pool;
@@ -88,6 +88,7 @@ export class MysqlDatabase {
       images_json LONGTEXT,
       attached_files_json LONGTEXT,
       reactions TEXT,
+      bookmarked TINYINT(1) DEFAULT 0,
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`, [], true);
     await this.ensureIndex(
@@ -259,6 +260,7 @@ export class MysqlDatabase {
       true,
     );
     await this.ensureColumn('chat_messages', 'reactions', 'ALTER TABLE chat_messages ADD COLUMN reactions TEXT', true);
+    await this.ensureColumn('chat_messages', 'bookmarked', 'ALTER TABLE chat_messages ADD COLUMN bookmarked TINYINT(1) DEFAULT 0', true);
 
     await this._run(`CREATE TABLE IF NOT EXISTS servers (
       id VARCHAR(64) PRIMARY KEY,
@@ -699,6 +701,10 @@ export class MysqlDatabase {
 
   updateMessage(messageId: string, content: string): Promise<void> {
     return this._run('UPDATE chat_messages SET content = ? WHERE id = ?', [content, messageId]);
+  }
+
+  updateMessageBookmark(messageId: string, bookmarked: boolean): Promise<void> {
+    return this._run('UPDATE chat_messages SET bookmarked = ? WHERE id = ?', [bookmarked ? 1 : 0, messageId]);
   }
 
   getMessages(sessionId: string, limit = 200): Promise<ChatMessageRow[]> {

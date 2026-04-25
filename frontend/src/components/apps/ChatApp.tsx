@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2 } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -76,6 +76,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [reminderTime, setReminderTime] = useState('');
   /** 当前正在录音的语音识别 ID，null 表示未在录音 */
   const [recordingId, setRecordingId] = useState<string | null>(null);
+  const [showStarred, setShowStarred] = useState(false);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
@@ -121,6 +122,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         return (s.title ?? '').toLowerCase().includes(q);
       })
     : sessions;
+  const starredMessages = messages.filter((m) => m.bookmarked && m.content && m.id !== 'welcome');
   const tasks = useTaskStore((s) => s.tasks);
   const { openApp, setWindowTitle } = useDesktopStore();
   const addNotification = useConnectionStore((s) => s.addNotification);
@@ -1391,6 +1393,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           >
             <BarChart2 size={13} />
           </button>
+          <button
+            className={`flex items-center gap-2 px-3 py-1.5 mx-2 rounded-lg text-xs transition-colors ${showStarred ? 'bg-desktop-accent/20 text-desktop-accent' : 'hover:bg-white/10 text-desktop-muted'}`}
+            onClick={() => setShowStarred((v) => !v)}
+            title="收藏消息"
+          >
+            <Star size={13} />
+            {starredMessages.length > 0 && (
+              <span className="text-[10px] bg-desktop-accent/30 px-1 rounded-full">{starredMessages.length}</span>
+            )}
+          </button>
           <div className="px-2 mb-1">
             <input
               type="text"
@@ -1423,6 +1435,36 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               </div>
             );
           })()}
+          {showStarred && (
+            <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
+              <div className="text-[10px] text-desktop-muted px-3 py-1 flex items-center gap-1">
+                <Star size={10} /> 收藏消息 ({starredMessages.length})
+              </div>
+              {starredMessages.length === 0 ? (
+                <div className="text-[10px] text-desktop-muted/60 px-3 py-2">暂无收藏</div>
+              ) : (
+                starredMessages.map((msg) => (
+                  <button
+                    key={msg.id}
+                    type="button"
+                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-desktop-muted text-[10px] leading-snug"
+                    onClick={() => {
+                      document.getElementById(`msg-${msg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      document.getElementById(`msg-${msg.id}`)?.classList.add('highlight-flash');
+                    }}
+                  >
+                    <div className="flex items-center gap-1 text-desktop-accent mb-0.5">
+                      <Star size={9} /> {msg.role === 'user' ? '用户' : '助手'}
+                    </div>
+                    <div className="truncate opacity-80">{msg.content?.slice(0, 60)}</div>
+                    <div className="text-[9px] text-desktop-muted/50 mt-0.5">
+                      {new Date(msg.timestamp).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
           <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
             {filteredSessions.map((s) => (
               <div
@@ -1925,6 +1967,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     title="删除"
                   >
                     <Trash2 size={10} />
+                  </button>
+                )}
+                {msg.id !== 'welcome' && (
+                  <button
+                    type="button"
+                    className={`p-1 rounded transition-colors ${msg.bookmarked ? 'text-desktop-accent' : 'text-desktop-muted hover:text-desktop-accent hover:bg-white/10'}`}
+                    onClick={async () => {
+                      const next = !msg.bookmarked;
+                      setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, bookmarked: next } : m)));
+                      try { await api.setMessageBookmark(msg.id, next); } catch { /* revert */ }
+                    }}
+                    title={msg.bookmarked ? '取消收藏' : '收藏'}
+                  >
+                    <Star size={10} />
                   </button>
                 )}
               </div>

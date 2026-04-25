@@ -31,7 +31,7 @@ function syncLastSessionToCloud(sessionId: string | null) {
   api.setUserConfigKey(LAST_SESSION_CLOUD_KEY, sessionId).catch(() => {});
 }
 
-function convertMessages(msgs: Array<{ id: string; role: string; content: string; createdAt: string; toolCalls?: unknown; images?: string[]; attachedFiles?: Array<{ name: string; path: string }> }>): import('./Message').Message[] {
+function convertMessages(msgs: Array<{ id: string; role: string; content: string; createdAt: string; toolCalls?: unknown; images?: string[]; attachedFiles?: Array<{ name: string; path: string }>; bookmarked?: boolean }>): import('./Message').Message[] {
   return msgs.map((m) => ({
     id: m.id,
     role: m.role as 'user' | 'assistant' | 'system',
@@ -40,6 +40,7 @@ function convertMessages(msgs: Array<{ id: string; role: string; content: string
     toolCalls: m.toolCalls ? (m.toolCalls as ToolCallRecord[]) : undefined,
     images: m.images,
     attachedFiles: (m as { attachedFiles?: Array<{ name: string; path: string }> }).attachedFiles,
+    bookmarked: m.bookmarked,
   }));
 }
 

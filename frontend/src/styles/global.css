@@ -94,3 +94,11 @@ html, body, #root {
 textarea, input {
   user-select: text;
 }
+
+@keyframes highlightFlash {
+  0%, 100% { background: transparent; }
+  50% { background: rgba(59, 130, 246, 0.2); }
+}
+.highlight-flash {
+  animation: highlightFlash 0.8s ease-in-out;
+}

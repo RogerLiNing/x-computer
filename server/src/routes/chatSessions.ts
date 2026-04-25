@@ -316,6 +316,22 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     res.json({ success: true });
   });
 
+  /** PATCH /api/chat/messages/:msgId/bookmark - 收藏/取消收藏消息 */
+  router.patch('/messages/:msgId/bookmark', async (req, res) => {
+    const { bookmarked } = req.body ?? {};
+    if (typeof bookmarked !== 'boolean') {
+      res.status(400).json({ error: 'Missing bookmarked (boolean)' });
+      return;
+    }
+    try {
+      await db.updateMessageBookmark(req.params.msgId, bookmarked);
+      res.json({ success: true, bookmarked });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Failed to update bookmark', detail: msg });
+    }
+  });
+
   /** PATCH /api/chat/messages/:msgId - 更新消息内容（用于消息编辑） */
   router.patch('/messages/:msgId', async (req, res) => {
     const { content } = req.body ?? {};
