@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard, Code } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard, Code, History, CheckCircle2, XCircle, Loader2, Timer, DollarSign, Wrench as WrenchIcon2 } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets';
+type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets' | 'history';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -940,6 +940,198 @@ function ScheduledJobsSettings() {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+function TaskHistorySettings() {
+  const { t } = useTranslation();
+  const [loading, setLoading] = useState(true);
+  const [history, setHistory] = useState<{
+    tasks: Array<{
+      id: string;
+      title: string;
+      status: string;
+      updated_at: number;
+      started_at: number | null;
+      completed_at: number | null;
+      duration_ms: number | null;
+      actual_cost: number;
+    }>;
+    stats: {
+      total: number;
+      completed: number;
+      failed: number;
+      success_rate: number;
+      avg_duration_ms: number | null;
+      total_cost: number;
+    };
+    tool_stats: Array<{
+      toolName: string;
+      totalCalls: number;
+      avgDurationMs: number;
+    }>;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getTaskHistory(50)
+      .then((res) => { if (!cancelled) setHistory(res.data); })
+      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const formatDuration = (ms: number | null): string => {
+    if (ms === null || ms === undefined) return '—';
+    if (ms < 1000) return `${ms}ms`;
+    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
+    return `${Math.floor(ms / 3_600_000)}h ${Math.floor((ms % 3_600_000) / 60_000)}m`;
+  };
+
+  const formatCost = (cost: number): string => {
+    if (cost === 0) return '—';
+    return `$${cost.toFixed(4)}`;
+  };
+
+  const STATUS_COLORS: Record<string, string> = {
+    completed: 'text-green-400',
+    failed: 'text-red-400',
+    running: 'text-blue-400',
+    pending: 'text-yellow-400',
+  };
+  const STATUS_ICONS: Record<string, React.ElementType> = {
+    completed: CheckCircle2,
+    failed: XCircle,
+    running: Loader2,
+    pending: Clock,
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-sm font-semibold text-desktop-text mb-1">{t('settings.taskHistory')}</h2>
+        <p className="text-xs text-desktop-muted">任务执行记录、耗时统计和工具调用分析</p>
+      </div>
+
+      {loading && (
+        <div className="flex items-center justify-center py-12 text-desktop-muted text-sm">
+          <Loader2 size={16} className="animate-spin mr-2" /> 加载中...
+        </div>
+      )}
+
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-950/50 p-4">
+          <p className="text-xs text-red-400">{error}</p>
+        </div>
+      )}
+
+      {history && !loading && (
+        <>
+          {/* Stats summary */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <History size={12} className="text-desktop-muted" />
+                <span className="text-[11px] text-desktop-muted">总任务数</span>
+              </div>
+              <p className="text-lg font-semibold text-desktop-text">{history.stats.total}</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <CheckCircle2 size={12} className="text-green-400" />
+                <span className="text-[11px] text-desktop-muted">成功率</span>
+              </div>
+              <p className="text-lg font-semibold text-green-400">{history.stats.success_rate}%</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <Timer size={12} className="text-desktop-muted" />
+                <span className="text-[11px] text-desktop-muted">平均耗时</span>
+              </div>
+              <p className="text-lg font-semibold text-desktop-text">{formatDuration(history.stats.avg_duration_ms)}</p>
+            </div>
+            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+              <div className="flex items-center gap-1.5 mb-1">
+                <DollarSign size={12} className="text-desktop-muted" />
+                <span className="text-[11px] text-desktop-muted">总成本</span>
+              </div>
+              <p className="text-lg font-semibold text-desktop-text">{formatCost(history.stats.total_cost)}</p>
+            </div>
+          </div>
+
+          {/* Task list */}
+          {history.tasks.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-2">
+              <History size={28} className="text-desktop-muted/40" />
+              <p className="text-sm text-desktop-muted/60">暂无任务记录</p>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-white/10 overflow-hidden">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-white/10 bg-white/5">
+                    <th className="text-left px-3 py-2 text-desktop-muted font-medium">任务</th>
+                    <th className="text-left px-3 py-2 text-desktop-muted font-medium">状态</th>
+                    <th className="text-right px-3 py-2 text-desktop-muted font-medium">耗时</th>
+                    <th className="text-right px-3 py-2 text-desktop-muted font-medium">成本</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {history.tasks.map((task) => {
+                    const Icon = STATUS_ICONS[task.status] ?? Clock;
+                    const color = STATUS_COLORS[task.status] ?? 'text-desktop-muted';
+                    return (
+                      <tr key={task.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                        <td className="px-3 py-2.5">
+                          <p className="text-desktop-text truncate max-w-[200px]" title={task.title}>{task.title}</p>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <span className={`flex items-center gap-1 ${color}`}>
+                            <Icon size={12} />
+                            {task.status}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-desktop-muted">
+                          {formatDuration(task.duration_ms)}
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-desktop-muted">
+                          {formatCost(task.actual_cost)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Tool usage breakdown */}
+          {history.tool_stats.length > 0 && (
+            <div>
+              <h3 className="text-xs font-medium text-desktop-text mb-2">工具调用统计</h3>
+              <div className="space-y-1.5">
+                {history.tool_stats.map((tool) => (
+                  <div key={tool.toolName} className="flex items-center gap-3">
+                    <WrenchIcon2 size={11} className="text-desktop-muted shrink-0" />
+                    <span className="text-xs text-desktop-text min-w-[140px] truncate" title={tool.toolName}>{tool.toolName}</span>
+                    <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-desktop-accent/60 rounded-full"
+                        style={{ width: `${Math.min(100, (tool.totalCalls / (history.tool_stats[0]?.totalCalls ?? 1)) * 100)}%` }}
+                      />
+                    </div>
+                    <span className="text-[11px] text-desktop-muted w-12 text-right">{tool.totalCalls}次</span>
+                    <span className="text-[11px] text-desktop-muted w-14 text-right">{formatDuration(tool.avgDurationMs)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -2174,6 +2366,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'tools', labelKey: 'settings.tools', icon: Wrench },
     { id: 'channels', labelKey: 'settings.channels', icon: MessageSquare },
     { id: 'about', labelKey: 'settings.about', icon: Info },
+    { id: 'history', labelKey: 'settings.taskHistory', icon: History },
   ];
 
   // 高级tab，仅管理员可见
@@ -2388,6 +2581,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'usage' && (
           <UsageAnalyticsSettings />
+        )}
+
+        {tab === 'history' && (
+          <TaskHistorySettings />
         )}
 
         {tab === 'webhooks' && (

@@ -53,6 +53,82 @@ export function createTasksRouter(
     res.json(list);
   });
 
+  /** Get task execution history with analytics */
+  router.get('/tasks/history', async (req, res) => {
+    if (!db) {
+      res.status(503).json({ error: 'Database not available' });
+      return;
+    }
+    try {
+      const userId = (req as { userId?: string }).userId;
+      const limit = Math.min(parseInt(String(req.query.limit ?? '50'), 10), 100);
+      const tasks = await db.listTasksByUser(userId ?? 'anonymous', limit);
+
+      // Compute aggregate stats
+      const total = tasks.length;
+      const completed = tasks.filter((t) => t.status === 'completed').length;
+      const failed = tasks.filter((t) => t.status === 'failed').length;
+      const durations = tasks
+        .map((t) => t.duration_ms)
+        .filter((d): d is number => d !== null && d !== undefined);
+      const avgDurationMs = durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null;
+      const totalCost = tasks.reduce((sum, t) => sum + (t.actual_cost ?? 0), 0);
+
+      // Tool execution breakdown (fetch full tasks for tool_executions)
+      const taskIds = tasks.map((t) => t.id);
+      const fullTasks = await db.getAllTasks();
+      const relevantTasks = fullTasks.filter((t) => taskIds.includes(t.id));
+      const toolCounts: Record<string, number> = {};
+      const toolDurations: Record<string, number[]> = {};
+      for (const task of relevantTasks) {
+        if (!task.tool_executions) continue;
+        try {
+          const executions = JSON.parse(task.tool_executions) as Array<{ toolName: string; durationMs: number }>;
+          for (const ex of executions) {
+            toolCounts[ex.toolName] = (toolCounts[ex.toolName] ?? 0) + 1;
+            if (!toolDurations[ex.toolName]) toolDurations[ex.toolName] = [];
+            toolDurations[ex.toolName]!.push(ex.durationMs);
+          }
+        } catch { /* ignore parse errors */ }
+      }
+      const toolStats = Object.entries(toolCounts).map(([toolName, totalCalls]) => {
+        const durs = toolDurations[toolName] ?? [];
+        return {
+          toolName,
+          totalCalls,
+          avgDurationMs: durs.length > 0 ? Math.round(durs.reduce((a, b) => a + b, 0) / durs.length) : 0,
+        };
+      }).sort((a, b) => b.totalCalls - a.totalCalls);
+
+      res.json({
+        success: true,
+        data: {
+          tasks: tasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            updated_at: t.updated_at,
+            started_at: t.started_at,
+            completed_at: t.completed_at,
+            duration_ms: t.duration_ms,
+            actual_cost: t.actual_cost,
+          })),
+          stats: {
+            total,
+            completed,
+            failed,
+            success_rate: total > 0 ? Math.round((completed / total) * 100) : 0,
+            avg_duration_ms: avgDurationMs,
+            total_cost: Math.round(totalCost * 100) / 100,
+          },
+          tool_stats: toolStats.slice(0, 10),
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  });
+
   /** Get a specific task（运行用户只能查看自己的任务） */
   router.get('/tasks/:id', (req, res) => {
     const userId = (req as { userId?: string }).userId;

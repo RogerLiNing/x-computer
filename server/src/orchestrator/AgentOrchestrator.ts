@@ -242,6 +242,17 @@ export class AgentOrchestrator extends EventEmitter {
     });
   }
 
+  private async persistTaskExecution(task: Task): Promise<void> {
+    if (!this.db) return;
+    await this.db.updateTaskExecution(task.id, {
+      started_at: task.startedAt,
+      completed_at: task.completedAt,
+      duration_ms: task.durationMs,
+      actual_cost: task.actualCost,
+      tool_executions: task.toolExecutions ? JSON.stringify(task.toolExecutions) : undefined,
+    });
+  }
+
   // ── Public API ───────────────────────────────────────────
 
   setMode(mode: ExecutionMode) {
@@ -303,7 +314,9 @@ export class AgentOrchestrator extends EventEmitter {
 
     // 2. Start execution
     task.status = 'running';
+    task.startedAt = Date.now();
     task.updatedAt = Date.now();
+    await this.persistTaskExecution(task);
 
     this.emitEvent({
       type: 'status_change',
@@ -879,8 +892,11 @@ export class AgentOrchestrator extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       task.status = 'failed';
       task.result = { success: false, error: msg };
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - (task.startedAt ?? task.completedAt);
       task.updatedAt = Date.now();
       await this.persistTask(task);
+      await this.persistTaskExecution(task);
       return { content: msg };
     }
   }
@@ -947,8 +963,11 @@ export class AgentOrchestrator extends EventEmitter {
       const msg = err instanceof Error ? err.message : String(err);
       task.status = 'failed';
       task.result = { success: false, error: msg };
+      task.completedAt = Date.now();
+      task.durationMs = task.completedAt - (task.startedAt ?? task.completedAt);
       task.updatedAt = Date.now();
       await this.persistTask(task);
+      await this.persistTaskExecution(task);
       return { content: msg };
     }
   }
@@ -1019,6 +1038,11 @@ export class AgentOrchestrator extends EventEmitter {
         // ── Execute step ─────────────────────────────────
         step.status = 'running';
         step.startedAt = Date.now();
+        // Record task-level execution start on first step
+        if (!task.startedAt) {
+          task.startedAt = step.startedAt;
+          await this.persistTaskExecution(task);
+        }
         task.updatedAt = Date.now();
         await this.persistTask(task);
 
@@ -1081,8 +1105,11 @@ export class AgentOrchestrator extends EventEmitter {
           // For MVP: fail the task on first step failure
           task.status = 'failed';
           task.result = { success: false, error: call.error };
+          task.completedAt = Date.now();
+          task.durationMs = task.completedAt - (task.startedAt ?? task.completedAt);
           task.updatedAt = Date.now();
           await this.persistTask(task);
+          await this.persistTaskExecution(task);
 
           this.emitEvent({
             type: 'task_complete',
@@ -1127,8 +1154,11 @@ export class AgentOrchestrator extends EventEmitter {
       if (!controller.signal.aborted) {
         task.status = 'completed';
         task.result = { success: true, output: '所有步骤已完成' };
+        task.completedAt = Date.now();
+        task.durationMs = task.completedAt - (task.startedAt ?? task.completedAt);
         task.updatedAt = Date.now();
         await this.persistTask(task);
+        await this.persistTaskExecution(task);
 
         this.emitEvent({
           type: 'task_complete',

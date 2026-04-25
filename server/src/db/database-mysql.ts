@@ -873,12 +873,34 @@ export class MysqlDatabase {
     );
   }
 
+  /** Update task execution tracking fields (duration, cost, tool executions). Idempotent. */
+  updateTaskExecution(taskId: string, execution: {
+    started_at?: number | null;
+    completed_at?: number | null;
+    duration_ms?: number | null;
+    actual_cost?: number | null;
+    tool_executions?: string | null;
+  }): Promise<void> {
+    const sets: string[] = [];
+    const vals: (string | number | null)[] = [];
+    if (execution.started_at !== undefined) { sets.push('started_at = ?'); vals.push(execution.started_at); }
+    if (execution.completed_at !== undefined) { sets.push('completed_at = ?'); vals.push(execution.completed_at); }
+    if (execution.duration_ms !== undefined) { sets.push('duration_ms = ?'); vals.push(execution.duration_ms); }
+    if (execution.actual_cost !== undefined) { sets.push('actual_cost = ?'); vals.push(execution.actual_cost); }
+    if (execution.tool_executions !== undefined) { sets.push('tool_executions = ?'); vals.push(execution.tool_executions); }
+    if (sets.length === 0) return Promise.resolve();
+    vals.push(taskId);
+    return this._run(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`, vals).catch(() => {
+      // Columns may not exist if migration 014 hasn't run yet — skip silently
+    });
+  }
+
   listTasksByUser(
     userId: string,
     limit = 100,
-  ): Promise<{ id: string; status: string; title: string; updated_at: number }[]> {
-    return this.query<{ id: string; status: string; title: string; updated_at: number }>(
-      'SELECT id, status, title, updated_at FROM tasks WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
+  ): Promise<{ id: string; status: string; title: string; updated_at: number; started_at: number | null; completed_at: number | null; duration_ms: number | null; actual_cost: number }[]> {
+    return this.query<{ id: string; status: string; title: string; updated_at: number; started_at: number | null; completed_at: number | null; duration_ms: number | null; actual_cost: number }>(
+      'SELECT id, status, title, updated_at, started_at, completed_at, duration_ms, actual_cost FROM tasks WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
       [userId, limit],
     );
   }
@@ -896,10 +918,15 @@ export class MysqlDatabase {
       metadata_json: string | null;
       created_at: number;
       updated_at: number;
+      started_at: number | null;
+      completed_at: number | null;
+      duration_ms: number | null;
+      actual_cost: number;
+      tool_executions: string | null;
     }[]
   > {
     return this._query(
-      'SELECT id, user_id, domain, title, description, status, steps_json, result_json, metadata_json, created_at, updated_at FROM tasks ORDER BY updated_at DESC',
+      'SELECT id, user_id, domain, title, description, status, steps_json, result_json, metadata_json, created_at, updated_at, started_at, completed_at, duration_ms, actual_cost, tool_executions FROM tasks ORDER BY updated_at DESC',
     );
   }
 

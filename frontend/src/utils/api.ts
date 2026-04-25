@@ -177,6 +177,36 @@ export const api = {
 
   getTasks: () => request<any[]>('/tasks'),
 
+  getTaskHistory: (limit = 30) =>
+    request<{
+      success: boolean;
+      data: {
+        tasks: Array<{
+          id: string;
+          title: string;
+          status: string;
+          updated_at: number;
+          started_at: number | null;
+          completed_at: number | null;
+          duration_ms: number | null;
+          actual_cost: number;
+        }>;
+        stats: {
+          total: number;
+          completed: number;
+          failed: number;
+          success_rate: number;
+          avg_duration_ms: number | null;
+          total_cost: number;
+        };
+        tool_stats: Array<{
+          toolName: string;
+          totalCalls: number;
+          avgDurationMs: number;
+        }>;
+      };
+    }>(`/tasks/history?limit=${limit}`),
+
   getTask: (id: string) => request<any>(`/tasks/${id}`),
 
   pauseTask: (id: string) =>

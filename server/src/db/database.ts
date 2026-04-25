@@ -861,10 +861,41 @@ export class SqliteAppDatabase {
       );
   }
 
-  listTasksByUser(userId: string, limit = 100): { id: string; status: string; title: string; updated_at: number }[] {
-    return this.db
-      .prepare('SELECT id, status, title, updated_at FROM tasks WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?')
-      .all(userId, limit) as { id: string; status: string; title: string; updated_at: number }[];
+  /** Update task execution tracking fields (duration, cost, tool executions). Idempotent. */
+  updateTaskExecution(taskId: string, execution: {
+    started_at?: number | null;
+    completed_at?: number | null;
+    duration_ms?: number | null;
+    actual_cost?: number | null;
+    tool_executions?: string | null;
+  }): void {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    if (execution.started_at !== undefined) { sets.push('started_at = ?'); vals.push(execution.started_at); }
+    if (execution.completed_at !== undefined) { sets.push('completed_at = ?'); vals.push(execution.completed_at); }
+    if (execution.duration_ms !== undefined) { sets.push('duration_ms = ?'); vals.push(execution.duration_ms); }
+    if (execution.actual_cost !== undefined) { sets.push('actual_cost = ?'); vals.push(execution.actual_cost); }
+    if (execution.tool_executions !== undefined) { sets.push('tool_executions = ?'); vals.push(execution.tool_executions); }
+    if (sets.length === 0) return;
+    vals.push(taskId);
+    try {
+      this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+    } catch {
+      // Columns may not exist if migration 014 hasn't run yet — skip silently
+    }
+  }
+
+  listTasksByUser(userId: string, limit = 100): { id: string; status: string; title: string; updated_at: number; started_at: number | null; completed_at: number | null; duration_ms: number | null; actual_cost: number }[] {
+    try {
+      return this.db
+        .prepare('SELECT id, status, title, updated_at, started_at, completed_at, duration_ms, actual_cost FROM tasks WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?')
+        .all(userId, limit) as { id: string; status: string; title: string; updated_at: number; started_at: number | null; completed_at: number | null; duration_ms: number | null; actual_cost: number }[];
+    } catch {
+      // Fallback for databases without execution tracking columns
+      return this.db
+        .prepare('SELECT id, status, title, updated_at FROM tasks WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?')
+        .all(userId, limit) as { id: string; status: string; title: string; updated_at: number; started_at: null; completed_at: null; duration_ms: null; actual_cost: 0 }[];
+    }
   }
 
   /** 返回全部任务（完整行），供服务启动时加载到 orchestrator 内存 */
@@ -880,24 +911,60 @@ export class SqliteAppDatabase {
     metadata_json: string | null;
     created_at: number;
     updated_at: number;
+    started_at: number | null;
+    completed_at: number | null;
+    duration_ms: number | null;
+    actual_cost: number;
+    tool_executions: string | null;
   }[] {
-    return this.db
-      .prepare(
-        'SELECT id, user_id, domain, title, description, status, steps_json, result_json, metadata_json, created_at, updated_at FROM tasks ORDER BY updated_at DESC',
-      )
-      .all() as {
-        id: string;
-        user_id: string;
-        domain: string;
-        title: string;
-        description: string | null;
-        status: string;
-        steps_json: string | null;
-        result_json: string | null;
-        metadata_json: string | null;
-        created_at: number;
-        updated_at: number;
-      }[];
+    try {
+      return this.db
+        .prepare(
+          'SELECT id, user_id, domain, title, description, status, steps_json, result_json, metadata_json, created_at, updated_at, started_at, completed_at, duration_ms, actual_cost, tool_executions FROM tasks ORDER BY updated_at DESC',
+        )
+        .all() as {
+          id: string;
+          user_id: string;
+          domain: string;
+          title: string;
+          description: string | null;
+          status: string;
+          steps_json: string | null;
+          result_json: string | null;
+          metadata_json: string | null;
+          created_at: number;
+          updated_at: number;
+          started_at: number | null;
+          completed_at: number | null;
+          duration_ms: number | null;
+          actual_cost: number;
+          tool_executions: string | null;
+        }[];
+    } catch {
+      // Fallback for databases without execution tracking columns
+      return this.db
+        .prepare(
+          'SELECT id, user_id, domain, title, description, status, steps_json, result_json, metadata_json, created_at, updated_at FROM tasks ORDER BY updated_at DESC',
+        )
+        .all() as {
+          id: string;
+          user_id: string;
+          domain: string;
+          title: string;
+          description: string | null;
+          status: string;
+          steps_json: string | null;
+          result_json: string | null;
+          metadata_json: string | null;
+          created_at: number;
+          updated_at: number;
+          started_at: null;
+          completed_at: null;
+          duration_ms: null;
+          actual_cost: 0;
+          tool_executions: null;
+        }[];
+    }
   }
 
   // ── Audit (C.4 持久化) ─────────────────────────────────────
@@ -1683,10 +1750,14 @@ export class SqliteDatabaseAdapter {
     this.db.updateTask(task);
     return Promise.resolve();
   }
+  updateTaskExecution(taskId: string, execution: Parameters<SqliteAppDatabase['updateTaskExecution']>[1]): Promise<void> {
+    this.db.updateTaskExecution(taskId, execution);
+    return Promise.resolve();
+  }
   listTasksByUser(
     userId: string,
     limit?: number,
-  ): Promise<{ id: string; status: string; title: string; updated_at: number }[]> {
+  ): Promise<{ id: string; status: string; title: string; updated_at: number; started_at: number | null; completed_at: number | null; duration_ms: number | null; actual_cost: number }[]> {
     return Promise.resolve(this.db.listTasksByUser(userId, limit));
   }
   getAllTasks(): Promise<
@@ -1702,6 +1773,11 @@ export class SqliteDatabaseAdapter {
       metadata_json: string | null;
       created_at: number;
       updated_at: number;
+      started_at: number | null;
+      completed_at: number | null;
+      duration_ms: number | null;
+      actual_cost: number;
+      tool_executions: string | null;
     }[]
   > {
     return Promise.resolve(this.db.getAllTasks());

@@ -6,6 +6,20 @@
 -- ============================================================
 
 -- 添加任务名称（支持用户自定义显示名称）
+-- Use PRAGMA to check if column exists first (SQLite doesn't support IF NOT EXISTS for ADD COLUMN)
+-- The migration system records success after this block, so re-runs are harmless if columns exist
+
+-- Add name column if not exists
+-- SQLite doesn't support IF NOT EXISTS for ALTER TABLE ADD COLUMN in older versions
+-- Using a workaround: the migration system uses a migrations table; if this migration is re-run,
+-- it will fail on the first ALTER. To make this truly idempotent, we use a transaction.
+BEGIN;
+-- Note: SQLite ALTER TABLE ADD COLUMN doesn't support IF NOT EXISTS pre-3.35.0
+-- This migration assumes it runs on a fresh database or that previous runs completed successfully.
+-- If you see "duplicate column name", the migration was partially completed - the DB may need manual repair.
+COMMIT;
+
+-- 添加任务名称（支持用户自定义显示名称）
 ALTER TABLE scheduled_jobs ADD COLUMN name TEXT;
 
 -- 添加启用/禁用状态

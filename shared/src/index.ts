@@ -29,6 +29,28 @@ export interface Task {
   updatedAt: number;
   result?: TaskResult;
   metadata?: Record<string, unknown>;
+  /** When task execution started (set when status changes to 'running') */
+  startedAt?: number;
+  /** When task completed (set on 'completed' or 'failed') */
+  completedAt?: number;
+  /** Duration in milliseconds */
+  durationMs?: number;
+  /** Estimated or actual cost in USD */
+  actualCost?: number;
+  /** Array of tool execution records */
+  toolExecutions?: ToolExecution[];
+}
+
+export interface ToolExecution {
+  toolName: string;
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+  success: boolean;
+  error?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  cost?: number;
 }
 
 export interface TaskStep {
