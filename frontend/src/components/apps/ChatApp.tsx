@@ -64,6 +64,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [snippets, setSnippets] = useState<Array<{ id: string; title: string; code: string; language: string; description?: string }>>([]);
   const [snippetFilter, setSnippetFilter] = useState('');
+  /** Prompt templates */
+  const [promptTemplates, setPromptTemplates] = useState<Array<{ id: string; title: string; prompt: string; category?: string }>>([]);
+  const [templateFilter, setTemplateFilter] = useState('');
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
   const [calcOpen, setCalcOpen] = useState(false);
   const [calcExpr, setCalcExpr] = useState('');
   /** 提醒浮层 */
@@ -260,11 +264,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     }).catch(() => {});
   }, []);
 
-  // Load code snippets from user config
+  // Load code snippets from user config, prompt templates from API
   useEffect(() => {
     api.getUserConfig().then((cfg) => {
       const raw = cfg['snippets'];
       if (Array.isArray(raw)) setSnippets(raw as typeof snippets);
+    }).catch(() => {});
+    api.promptTemplatesList().then((list) => {
+      setPromptTemplates(list.map((t) => ({
+        id: t.id, title: t.name, prompt: t.content, category: t.category ?? undefined,
+      })));
     }).catch(() => {});
   }, []);
 
@@ -520,6 +529,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     setInput((prev) => prev + (prev ? '\n' : '') + code);
     setSnippetPickerOpen(false);
     setSnippetFilter('');
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const insertTemplate = (prompt: string) => {
+    setInput((prev) => prev + (prev ? '\n\n' : '') + prompt);
+    setTemplatePickerOpen(false);
+    setTemplateFilter('');
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -2753,6 +2769,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           </button>
           <button
             type="button"
+            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+            onClick={() => setTemplatePickerOpen((o) => !o)}
+            title="插入提示模板"
+          >
+            <FileText size={16} className="sm:size-4" />
+          </button>
+          <button
+            type="button"
             className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center relative"
             onClick={() => { setCalcOpen((o) => !o); setSnippetPickerOpen(false); }}
             title="计算器"
@@ -2852,6 +2876,63 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       <span className="text-xs font-medium text-desktop-text">{snippet.title}</span>
                     </div>
                     <pre className="text-[10px] text-desktop-muted font-mono truncate max-w-full">{snippet.code.split('\n')[0]}</pre>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Prompt Template Picker */}
+        {templatePickerOpen && (
+          <div className="absolute bottom-full left-0 right-0 mb-2 bg-desktop-surface border border-white/20 rounded-xl shadow-2xl z-50 max-h-80 overflow-hidden flex flex-col">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
+              <input
+                type="text"
+                placeholder="搜索提示模板..."
+                value={templateFilter}
+                onChange={(e) => setTemplateFilter(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none"
+                autoFocus
+              />
+              <button
+                type="button"
+                onClick={() => { setTemplatePickerOpen(false); setTemplateFilter(''); }}
+                className="text-desktop-muted hover:text-desktop-text p-1"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="overflow-auto flex-1">
+              {promptTemplates.filter((t) =>
+                !templateFilter ||
+                t.title.toLowerCase().includes(templateFilter.toLowerCase()) ||
+                t.prompt.toLowerCase().includes(templateFilter.toLowerCase()) ||
+                (t.category ?? '').toLowerCase().includes(templateFilter.toLowerCase())
+              ).length === 0 ? (
+                <div className="text-xs text-desktop-muted text-center py-6">
+                  {promptTemplates.length === 0 ? '暂无提示模板，可在设置中添加' : '没有匹配的模板'}
+                </div>
+              ) : (
+                promptTemplates.filter((t) =>
+                  !templateFilter ||
+                  t.title.toLowerCase().includes(templateFilter.toLowerCase()) ||
+                  t.prompt.toLowerCase().includes(templateFilter.toLowerCase()) ||
+                  (t.category ?? '').toLowerCase().includes(templateFilter.toLowerCase())
+                ).map((tpl) => (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    className="w-full text-left px-3 py-2 hover:bg-white/10 transition-colors border-b border-white/5 last:border-0"
+                    onClick={() => insertTemplate(tpl.prompt)}
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      {tpl.category && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">{tpl.category}</span>
+                      )}
+                      <span className="text-xs font-medium text-desktop-text">{tpl.title}</span>
+                    </div>
+                    <p className="text-[10px] text-desktop-muted truncate max-w-full">{tpl.prompt.split('\n')[0]}</p>
                   </button>
                 ))
               )}
