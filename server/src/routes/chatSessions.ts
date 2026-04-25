@@ -612,5 +612,72 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     res.send(lines.join('\n'));
   });
 
+  /** POST /api/chat/sessions/:id/share - 生成会话分享链接（HMAC 签名，7天有效期） */
+  router.post('/:id/share', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+    const SHARE_SECRET = process.env.SHARE_SECRET || 'x-computer-share-secret-key';
+    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+    const payload = `${session.id}:${expiresAt}`;
+    const sig = createHmac('sha256', SHARE_SECRET).update(payload).digest('hex');
+    const token = Buffer.from(`${payload}:${sig}`).toString('base64url');
+
+    // Store token in user_config for validation
+    await db.setConfig(session.user_id, `share_token:${session.id}:${token}`, JSON.stringify({ createdAt: Date.now(), expiresAt }));
+
+    res.json({ token, expiresAt });
+  });
+
+  return router;
+}
+
+/** 公开分享路由（无需认证）：GET /api/chat/shared/:token */
+export function createSharedSessionRouter(db: AppDatabase): Router {
+  const router = Router();
+
+  router.get('/:token', async (req, res) => {
+    const { token } = req.params;
+    let payload: string;
+    let sig: string;
+    try {
+      const decoded = Buffer.from(token, 'base64url').toString('utf8');
+      [payload, sig] = decoded.split(':');
+    } catch { res.status(400).json({ error: 'Invalid token' }); return; }
+
+    const [sessionId, expiresAtStr] = payload.split(':');
+    const expiresAt = parseInt(expiresAtStr);
+    if (isNaN(expiresAt) || Date.now() > expiresAt) { res.status(410).json({ error: 'Share link expired' }); return; }
+
+    // Verify HMAC
+    const SHARE_SECRET = process.env.SHARE_SECRET || 'x-computer-share-secret-key';
+    const expectedSig = createHmac('sha256', SHARE_SECRET).update(payload).digest('hex');
+    try {
+      const a = Buffer.from(sig, 'hex');
+      const b = Buffer.from(expectedSig, 'hex');
+      if (a.length !== b.length || !timingSafeEqual(a, b)) { res.status(403).json({ error: 'Invalid token' }); return; }
+    } catch { res.status(403).json({ error: 'Invalid token' }); return; }
+
+    const session = await db.getSession(sessionId);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    const messages = await db.getMessages(sessionId, 2000);
+
+    res.json({
+      session: {
+        id: session.id,
+        title: session.title,
+        createdAt: session.created_at,
+        updatedAt: session.updated_at,
+      },
+      messages: messages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content || '',
+        createdAt: m.created_at,
+      })),
+    });
+  });
+
   return router;
 }

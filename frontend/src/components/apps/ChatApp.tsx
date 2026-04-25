@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -1739,6 +1739,24 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   }}
                 >
                   <Archive size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="分享链接"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    try {
+                      const { token } = await api.shareChatSession(s.id);
+                      const url = `${window.location.origin}/shared/${token}`;
+                      await navigator.clipboard.writeText(url);
+                      addNotification({ type: 'info', title: '已复制', message: '分享链接已复制到剪贴板（7天有效）' });
+                    } catch {
+                      addNotification({ type: 'error', title: '分享失败', message: '请重试' });
+                    }
+                  }}
+                >
+                  <Link size={12} />
                 </button>
                 <div className="relative">
                   <button

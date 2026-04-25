@@ -32,7 +32,7 @@ import type { MiniAppLogStore } from '../miniAppLogStore.js';
 import { MemoryService } from '../memory/MemoryService.js';
 import { VectorStore } from '../memory/vectorStore.js';
 import { callEmbedding } from '../memory/embeddingService.js';
-import { createChatSessionRouter } from './chatSessions.js';
+import { createChatSessionRouter, createSharedSessionRouter } from './chatSessions.js';
 import { createAgentsRouter } from './agents.js';
 import { createMcpRouter } from './mcp.js';
 import { createAppsRouter } from './apps.js';
@@ -1203,6 +1203,8 @@ export function createApiRouter(
 
   router.use(createEditorAgentRouter(aiQuota));
 
+  // ── 公开分享路由（无需认证，在 auth guard 之后挂载） ──
+  router.use('/chat/shared', createSharedSessionRouter(db));
 
   return router;
 }

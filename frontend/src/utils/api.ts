@@ -1574,6 +1574,10 @@ export const api = {
       body: JSON.stringify({ messageId }),
     }),
 
+  /** 生成会话分享链接（7天有效期） */
+  shareChatSession: (sessionId: string) =>
+    request<{ token: string; expiresAt: number }>(`/chat/sessions/${sessionId}/share`, { method: 'POST' }),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),
