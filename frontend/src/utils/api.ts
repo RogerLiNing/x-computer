@@ -259,6 +259,66 @@ export const api = {
       body: JSON.stringify({ email, code, newPassword }),
     }),
 
+  // ── Heartbeat 心跳 ─────────────────────────────────────────────
+
+  /** 获取当前用户心跳配置 */
+  heartbeatGetConfig: () =>
+    request<{
+      userId: string;
+      enabled: boolean;
+      intervalMinutes: number;
+      lastCheckAt: number | null;
+      lastSummaryAt: number | null;
+      quotaAlertThreshold: number;
+      taskAlertEnabled: boolean;
+    }>('/heartbeat/config'),
+
+  /** 更新心跳配置 */
+  heartbeatSetConfig: (config: {
+    enabled?: boolean;
+    intervalMinutes?: number;
+    quotaAlertThreshold?: number;
+    taskAlertEnabled?: boolean;
+  }) =>
+    request<{ success: boolean }>('/heartbeat/config', {
+      method: 'PUT',
+      body: JSON.stringify(config),
+    }),
+
+  /** 获取心跳通知列表 */
+  heartbeatGetNotifications: (limit?: number) => {
+    const url = limit ? `/heartbeat/notifications?limit=${limit}` : '/heartbeat/notifications';
+    return request<{
+      notifications: Array<{
+        id: string;
+        userId: string;
+        checkType: string;
+        content: string;
+        payload?: Record<string, unknown>;
+        notifiedAt: number;
+        dismissed: boolean;
+      }>;
+    }>(url);
+  },
+
+  /** 忽略通知 */
+  heartbeatDismissNotification: (id: string) =>
+    request<{ success: boolean }>(`/heartbeat/notifications/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
+  /** 获取 OAuth 提供商配置状态（前端据此决定是否显示 OAuth 按钮） */
+  oauthGetStatus: () =>
+    request<{ google: boolean; github: boolean }>('/auth/oauth/status'),
+
+  /** 获取 Google OAuth 授权 URL */
+  oauthGetGoogleUrl: () =>
+    request<{ authUrl: string; state: string }>('/auth/oauth/google/url'),
+
+  /** 获取 GitHub OAuth 授权 URL */
+  oauthGetGithubUrl: () =>
+    request<{ authUrl: string; state: string }>('/auth/oauth/github/url'),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{

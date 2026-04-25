@@ -155,6 +155,107 @@ function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
   );
 }
 
+/** X 主脑主动心跳设置：配置定时主动检查和通知 */
+function HeartbeatSettings() {
+  const { t } = useTranslation();
+  const [enabled, setEnabled] = useState(true);
+  const [intervalMinutes, setIntervalMinutes] = useState(60);
+  const [quotaThreshold, setQuotaThreshold] = useState(0.8);
+  const [taskAlert, setTaskAlert] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.heartbeatGetConfig().then((cfg) => {
+      setEnabled(cfg.enabled);
+      setIntervalMinutes(cfg.intervalMinutes);
+      setQuotaThreshold(cfg.quotaAlertThreshold);
+      setTaskAlert(cfg.taskAlertEnabled);
+    }).catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    setLoading(true);
+    try {
+      await api.heartbeatSetConfig({
+        enabled,
+        intervalMinutes,
+        quotaAlertThreshold: quotaThreshold,
+        taskAlertEnabled: taskAlert,
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.heartbeatTitle', 'X 主脑主动通知')}</h3>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-desktop-accent/20 text-desktop-muted">Beta</span>
+      </div>
+      <p className="text-[11px] text-desktop-muted leading-relaxed">
+        {t('settings.heartbeatDescription', 'X 主脑会定期主动检查你的使用情况，并在必要时提醒你。')}
+      </p>
+
+      <SettingRow label={t('settings.heartbeatEnabled', '启用心跳通知')} description={t('settings.heartbeatEnabledDesc', '关闭后不再收到 X 主脑的主动提醒')}>
+        <ToggleSwitch value={enabled} onToggle={(v) => setEnabled(v)} />
+      </SettingRow>
+
+      {enabled && (
+        <>
+          <SettingRow label={t('settings.heartbeatInterval', '检查间隔')} description={t('settings.heartbeatIntervalDesc', '多久检查一次使用情况')}>
+            <select
+              className="bg-white/5 border border-white/10 rounded-lg px-2 py-1 text-xs text-desktop-text outline-none"
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+            >
+              <option value={15}>15 {t('settings.minutes', '分钟')}</option>
+              <option value={30}>30 {t('settings.minutes', '分钟')}</option>
+              <option value={60}>1 {t('settings.hour', '小时')}</option>
+              <option value={120}>2 {t('settings.hours', '小时')}</option>
+              <option value={360}>6 {t('settings.hours', '小时')}</option>
+              <option value={720}>12 {t('settings.hours', '小时')}</option>
+              <option value={1440}>24 {t('settings.hours', '小时')}</option>
+            </select>
+          </SettingRow>
+
+          <SettingRow label={t('settings.heartbeatQuotaThreshold', '配额告警阈值')} description={t('settings.heartbeatQuotaThresholdDesc', '配额使用超过此比例时提醒')}>
+            <div className="flex items-center gap-2">
+              <input
+                type="range"
+                min={50}
+                max={100}
+                value={Math.round(quotaThreshold * 100)}
+                onChange={(e) => setQuotaThreshold(Number(e.target.value) / 100)}
+                className="w-24 accent-desktop-accent"
+              />
+              <span className="text-xs text-desktop-muted w-10">{Math.round(quotaThreshold * 100)}%</span>
+            </div>
+          </SettingRow>
+
+          <SettingRow label={t('settings.heartbeatTaskAlert', '任务状态提醒')} description={t('settings.heartbeatTaskAlertDesc', '任务长时间运行或失败时提醒')}>
+            <ToggleSwitch value={taskAlert} onToggle={(v) => setTaskAlert(v)} />
+          </SettingRow>
+        </>
+      )}
+
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={loading}
+        className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 disabled:opacity-50 text-xs text-desktop-text transition-colors"
+      >
+        {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
+      </button>
+    </div>
+  );
+}
+
 function AccountSettingsSection(props: {
   email: string;
   setEmail: (v: string) => void;
@@ -570,6 +671,7 @@ export function SettingsApp({ windowId }: Props) {
             <SettingRow label={t('settings.notifications')} description={t('settings.notifications')}>
               <ToggleSwitch defaultOn={true} />
             </SettingRow>
+            <HeartbeatSettings />
           </div>
         )}
 

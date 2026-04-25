@@ -26,6 +26,9 @@ import { createAdminRouter } from './routes/admin.js';
 import { createServerRouter } from './routes/servers.js';
 import { createSubscriptionRoutes } from './routes/subscriptionRoutes.js';
 import { createAuthEnhancedRoutes } from './routes/authEnhanced.js';
+import { createOAuthCallbackRouter } from './routes/oauthCallback.js';
+import { HeartbeatService } from './heartbeat/HeartbeatService.js';
+import { createHeartbeatRouter } from './routes/heartbeat.js';
 import { createLLMRouter } from './routes/llm.js';
 import { createContentManagementRoutes } from './routes/contentManagement.js';
 import { createPageIndexRouter } from './routes/pageindex.js';
@@ -69,7 +72,9 @@ export interface AppResult {
   sandboxFS: SandboxFS;
   sandboxShell: SandboxShell;
   userSandboxManager: UserSandboxManager;
+  userContainerManager?: UserContainerManager;
   db: AsyncDatabase;
+  heartbeatService: HeartbeatService;
 }
 
 /**
@@ -246,6 +251,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   );
   await orchestrator.init();
 
+  // ── Heartbeat 心跳服务（定期主动检查并通知用户） ──
+  const heartbeatService = new HeartbeatService(db, subscriptionService, orchestrator);
+  await heartbeatService.start();
+
   // ── 审计持久化（C.4）：根据 taskId 解析 userId 写入 audit_log ──
   audit.setPersist((entry) => {
     const task = orchestrator.getTask(entry.taskId);
@@ -269,13 +278,18 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use(cors());
   app.use(express.json({ limit: '5mb' }));
 
+  // ── OAuth 回调（无需用户上下文，在 userContextMiddleware 之前挂载） ──
+  const oauthConfig = config.oauth;
+  app.use('/oauth/callback', createOAuthCallbackRouter(db, oauthConfig));
+
   // ── 用户上下文中间件（所有 /api 路由前注入 userId） ──
   app.use('/api', userContextMiddleware(allowAnonymous));
 
   // ── 路由 ──
-  app.use('/api', createApiRouter(orchestrator, policy, audit, sandboxFS, userSandboxManager, db, miniAppLogStore, subscriptionService));
+  // Auth 路由放在 api router 前面，避免 chat router（挂载在 api router 根路径）拦截 /api/auth/* 路径
   app.use('/api/auth', createAuthRouter(db, userSandboxManager));
-  app.use('/api/auth', createAuthEnhancedRoutes(db));
+  app.use('/api/auth', createAuthEnhancedRoutes(db, oauthConfig));
+  app.use('/api', createApiRouter(orchestrator, policy, audit, sandboxFS, userSandboxManager, db, miniAppLogStore, subscriptionService));
   app.use('/api/users', createUserRouter(db, subscriptionService));
   app.use('/api/fs', createFSRouter(sandboxFS, userSandboxManager));
   app.use('/api/shell', createShellRouter(sandboxShell, userSandboxManager));
@@ -286,6 +300,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));
   app.use('/api/pageindex', createPageIndexRouter(userSandboxManager, db, subscriptionService));
+  app.use('/api/heartbeat', createHeartbeatRouter(db, subscriptionService, orchestrator, heartbeatService));
 
   return {
     app,
@@ -295,6 +310,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
     sandboxFS,
     sandboxShell,
     userSandboxManager,
+    userContainerManager: containerManager,
     db,
+    heartbeatService,
   };
 }

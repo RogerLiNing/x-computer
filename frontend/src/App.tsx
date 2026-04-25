@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Desktop } from './components/desktop/Desktop';
 import { LoginScreen } from './components/auth/LoginScreen';
+import { OAuthCallbackPage } from './components/auth/OAuthCallbackPage';
 import { LandingPage } from './components/landing/LandingPage';
 import { api } from '@/utils/api';
 
@@ -46,6 +47,7 @@ export function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/app" element={<AuthOrDesktop />} />
       <Route path="/app/*" element={<AuthOrDesktop />} />
+      <Route path="/oauth-callback" element={<OAuthCallbackPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

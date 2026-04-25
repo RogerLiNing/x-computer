@@ -7,7 +7,29 @@
         "id": "bailian",
         "name": "阿里百炼",
         "baseUrl": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "apiKey": "{env:BAILIAN_API_KEY}"
+        "apiKey": "{env:BAILIAN_API_KEY}",
+        "apiType": "openai"
+      },
+      {
+        "id": "anthropic",
+        "name": "Anthropic",
+        "baseUrl": "https://api.anthropic.com",
+        "apiKey": "{env:ANTHROPIC_API_KEY}",
+        "apiType": "anthropic"
+      },
+      {
+        "id": "minimax",
+        "name": "MiniMax",
+        "baseUrl": "https://api.minimaxi.com/v1",
+        "apiKey": "{env:MINIMAX_API_KEY}",
+        "apiType": "openai"
+      },
+      {
+        "id": "minimax-anthropic",
+        "name": "MiniMax (Anthropic 兼容)",
+        "baseUrl": "https://api.minimaxi.com/anthropic",
+        "apiKey": "{env:MINIMAX_API_KEY}",
+        "apiType": "anthropic"
       }
     ],
     "defaultByModality": {
@@ -31,5 +53,16 @@
     "networkMode": "none",
     "idleTimeout": 300000,
     "maxIdleTime": 86400000
+  },
+  "oauth": {
+    "callbackUrl": "https://your-production-domain.com/oauth/callback",
+    "google": {
+      "clientId": "{env:GOOGLE_CLIENT_ID}",
+      "clientSecret": "{env:GOOGLE_CLIENT_SECRET}"
+    },
+    "github": {
+      "clientId": "{env:GITHUB_CLIENT_ID}",
+      "clientSecret": "{env:GITHUB_CLIENT_SECRET}"
+    }
   }
 }

@@ -104,7 +104,23 @@ export interface XConfig {
   mcp_servers?: XConfigMcpServer[] | Record<string, Record<string, unknown>>;
   /** 系统邮件配置（发送验证码等系统邮件） */
   email?: XConfigEmail;
+  /** OAuth 2.0 配置（Google / GitHub 登录） */
+  oauth?: XConfigOAuth;
   [key: string]: unknown;
+}
+
+/** OAuth 2.0 配置 */
+export interface XConfigOAuth {
+  /** OAuth 回调 URL（必须与 Google/GitHub 应用配置一致） */
+  callbackUrl: string;
+  google?: {
+    clientId: string;
+    clientSecret: string;
+  };
+  github?: {
+    clientId: string;
+    clientSecret: string;
+  };
 }
 
 /** 从配置或环境变量读取工具加载模式 */

@@ -169,6 +169,15 @@ export function useWebSocket() {
         cs.addXProactiveMessage(msg.data);
         break;
 
+      case 'heartbeat_notification':
+        cs.addNotification({
+          type: 'info',
+          title: '🔔 X 主脑提醒',
+          message: msg.data?.content ?? '您有一条新通知',
+          actionRequired: false,
+        });
+        break;
+
       case 'app_channel':
         cs.notifyAppChannel(msg.data?.appId ?? '', msg.data?.message);
         break;

@@ -4,13 +4,19 @@
  */
 
 import { Router } from 'express';
+import crypto from 'crypto';
+import { v4 as uuid } from 'uuid';
 import type { AppDatabase } from '../db/database.js';
+import type { XConfigOAuth } from '../config/defaultConfig.js';
 import { EmailVerificationService } from '../auth/emailVerification.js';
 import { PasswordResetService } from '../auth/passwordReset.js';
 import { sendSystemEmail } from '../email/emailService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
-export function createAuthEnhancedRoutes(db: AppDatabase): Router {
+export function createAuthEnhancedRoutes(
+  db: AppDatabase,
+  oauthConfig?: XConfigOAuth,
+): Router {
   const router = Router();
   const verificationService = new EmailVerificationService(db);
   const passwordResetService = new PasswordResetService(db);
@@ -159,26 +165,111 @@ export function createAuthEnhancedRoutes(db: AppDatabase): Router {
   });
 
   /**
-   * POST /api/auth/oauth/google
-   * Google OAuth 登录（占位符）
+   * GET /api/auth/oauth/google/url
+   * 获取 Google OAuth 授权 URL（PKCE 流程）
    */
-  router.post('/oauth/google', async (req, res) => {
-    res.status(501).json({
-      error: 'Not implemented',
-      message: 'Google OAuth integration is under development',
-    });
+  router.get('/oauth/google/url', async (_req, res) => {
+    if (!oauthConfig?.google) {
+      res.status(503).json({ error: 'Google OAuth not configured' });
+      return;
+    }
+    try {
+      const { authUrl, state } = await initiateOAuthFlow(db, oauthConfig, 'google');
+      res.json({ authUrl, state });
+    } catch (err) {
+      serverLogger.error('oauth', `Failed to initiate Google OAuth`, `error=${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: 'Failed to initiate OAuth flow' });
+    }
   });
 
   /**
-   * POST /api/auth/oauth/github
-   * GitHub OAuth 登录（占位符）
+   * GET /api/auth/oauth/github/url
+   * 获取 GitHub OAuth 授权 URL（PKCE 流程）
    */
-  router.post('/oauth/github', async (req, res) => {
-    res.status(501).json({
-      error: 'Not implemented',
-      message: 'GitHub OAuth integration is under development',
+  router.get('/oauth/github/url', async (_req, res) => {
+    if (!oauthConfig?.github) {
+      res.status(503).json({ error: 'GitHub OAuth not configured' });
+      return;
+    }
+    try {
+      const { authUrl, state } = await initiateOAuthFlow(db, oauthConfig, 'github');
+      res.json({ authUrl, state });
+    } catch (err) {
+      serverLogger.error('oauth', `Failed to initiate GitHub OAuth`, `error=${err instanceof Error ? err.message : String(err)}`);
+      res.status(500).json({ error: 'Failed to initiate OAuth flow' });
+    }
+  });
+
+  /**
+   * GET /api/auth/oauth/status
+   * 查询 OAuth 提供商配置状态（前端据此决定是否显示 OAuth 按钮）
+   */
+  router.get('/oauth/status', (_req, res) => {
+    res.json({
+      google: !!(oauthConfig?.google?.clientId),
+      github: !!(oauthConfig?.github?.clientId),
     });
   });
 
   return router;
+}
+
+// ── OAuth 启动辅助函数 ─────────────────────────────────────────────
+
+type OAuthProvider = 'google' | 'github';
+
+async function initiateOAuthFlow(
+  db: AppDatabase,
+  oauthConfig: XConfigOAuth,
+  provider: OAuthProvider,
+): Promise<{ authUrl: string; state: string }> {
+  const cfg = oauthConfig[provider]!;
+  const callbackBase = oauthConfig.callbackUrl.replace(/\/oauth\/callback$/, '');
+
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const state = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.createHash('sha256').update(codeVerifier).digest();
+  const codeChallenge = hash.toString('base64url');
+  const now = Date.now();
+  const expiresAt = now + 10 * 60 * 1000; // 10 分钟
+
+  await db.run(
+    `INSERT OR REPLACE INTO oauth_states (state, provider, code_verifier, redirect_uri, user_id, created_at, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [state, provider, codeVerifier, null, null, now, expiresAt],
+  );
+
+  const callbackUrl = `${callbackBase}/oauth/callback`;
+
+  if (provider === 'google') {
+    const scopes = encodeURIComponent([
+      'openid', 'email', 'profile',
+      'https://www.googleapis.com/auth/userinfo.email',
+      'https://www.googleapis.com/auth/userinfo.profile',
+    ].join(' '));
+    const authUrl = [
+      'https://accounts.google.com/o/oauth2/v2/auth',
+      `?client_id=${cfg.clientId}`,
+      `&redirect_uri=${encodeURIComponent(callbackUrl)}`,
+      `&response_type=code`,
+      `&scope=${scopes}`,
+      `&access_type=online`,
+      `&prompt=select_account`,
+      `&code_challenge=${codeChallenge}`,
+      `&code_challenge_method=S256`,
+      `&state=${state}`,
+    ].join('');
+    return { authUrl, state };
+  }
+
+  // GitHub
+  const scopes = encodeURIComponent('read:user user:email');
+  const authUrl = [
+    'https://github.com/login/oauth/authorize',
+    `?client_id=${cfg.clientId}`,
+    `&redirect_uri=${encodeURIComponent(callbackUrl)}`,
+    `&scope=${scopes}`,
+    `&state=${state}`,
+  ].join('');
+  return { authUrl, state };
 }
