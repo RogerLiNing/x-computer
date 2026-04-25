@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import path from 'path';
 import os from 'os';
 import { createApp } from './app.js';
+import { resetRateLimitState } from './middleware/chatRateLimit.js';
 
 vi.mock('./chat/chatService.js', () => ({
   callLLM: vi.fn().mockResolvedValue('mock-reply'),
@@ -11,12 +12,29 @@ vi.mock('./chat/chatService.js', () => ({
   }),
   callLLMWithTools: vi.fn().mockResolvedValue({ content: '', toolCalls: [] }),
 }));
+
+// Mock credential resolver so LLM config resolves in tests
+vi.mock('./llm/credentialResolver.js', () => ({
+  resolveLLMCredentials: () =>
+    Promise.resolve({
+      providerId: 'openai',
+      modelId: 'gpt-4o-mini',
+      baseUrl: 'https://api.openai.com',
+      apiKey: 'test-key',
+      apiType: 'openai' as const,
+    }),
+}));
 import { callLLM, callLLMWithTools } from './chat/chatService.js';
 
 /**
  * API 集成测试：覆盖 /api、/api/fs、/api/shell 下所有接口
  */
 describe('API', () => {
+  beforeEach(() => {
+    resetRateLimitState();
+    vi.clearAllMocks();
+  });
+
   const workspaceRoot = path.join(os.tmpdir(), `x-computer-api-test-${Date.now()}`);
   let app: any, orchestrator: any, sandboxFS: any, db: any;
   const TEST_USER = 'test-api-user-' + Date.now();
@@ -286,10 +304,11 @@ describe('API', () => {
     it('返回能力列表（内置+注册）', async () => {
       const res = await request(app).get('/api/capabilities');
       expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
-      expect(res.body.length).toBeGreaterThan(0);
-      expect(res.body[0]).toHaveProperty('name');
-      expect(res.body[0]).toHaveProperty('description');
+      expect(res.body).toHaveProperty('capabilities');
+      expect(Array.isArray(res.body.capabilities)).toBe(true);
+      expect(res.body.capabilities.length).toBeGreaterThan(0);
+      expect(res.body.capabilities[0]).toHaveProperty('name');
+      expect(res.body.capabilities[0]).toHaveProperty('description');
     });
   });
 
@@ -609,6 +628,8 @@ describe('API', () => {
       await request(app).post('/api/mode').send({ mode: 'auto' });
       const uniqueContent = `file.write 集成测试内容 ${Date.now()}`;
       const pathToWrite = `文档/ai-output-${Date.now()}.txt`;
+      // Reset any queued responses left by prior tests in this file
+      vi.mocked(callLLMWithTools).mockReset();
       vi.mocked(callLLMWithTools)
         .mockResolvedValueOnce({
           content: '',

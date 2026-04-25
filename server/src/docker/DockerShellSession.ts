@@ -5,7 +5,6 @@
 
 import Docker from 'dockerode';
 import { serverLogger } from '../observability/ServerLogger.js';
-import { Writable } from 'stream';
 
 export interface ShellSessionConfig {
   container: string;              // 容器 ID 或名称
@@ -109,26 +108,28 @@ export class DockerShellSession {
     });
 
     const stream = await exec.start({ Detach: false });
-    
+
+    // 收集原始数据并解析 multiplexed Docker 帧
+    const { Writable } = await import('stream');
+    const bufs: Buffer[] = [];
+    const collector = new Writable({ write(chunk, _, cb) { bufs.push(chunk); cb(); } });
+    stream.pipe(collector);
+    await new Promise((resolve) => { stream.on('end', resolve); });
+
+    // 帧格式：[1-byte type][3-byte padding][4-byte BE size][payload of 'size' bytes]
+    // size 在 off+4，type 在 off+0，payload 从 off+8 开始
     let output = '';
-    const stdoutStream = new Writable({
-      write: (chunk, encoding, callback) => {
-        output += chunk.toString();
-        callback();
-      },
-    });
-
-    const stderrStream = new Writable({
-      write: (chunk, encoding, callback) => {
-        callback();
-      },
-    });
-
-    this.docker.modem.demuxStream(stream as any, stdoutStream as any, stderrStream as any);
-
-    await new Promise((resolve) => {
-      stream.on('end', resolve);
-    });
+    for (const buf of bufs) {
+      let off = 0;
+      while (off + 8 <= buf.length) {
+        const size = buf.readUInt32BE(off + 4);
+        const type = buf[off];
+        const payloadOff = off + 8;
+        if (payloadOff + size > buf.length) break;
+        if (type === 1) output += buf.slice(payloadOff, payloadOff + size).toString();
+        off = payloadOff + size;
+      }
+    }
 
     try {
       const state = JSON.parse(output.trim());
@@ -209,46 +210,38 @@ export class DockerShellSession {
       });
 
       const stream = await exec.start({ Detach: false });
-      
+
+      // 收集原始数据并解析 multiplexed Docker 帧
+      const { Writable } = await import('stream');
+      const bufs: Buffer[] = [];
+      const collector = new Writable({ write(chunk, _, cb) { bufs.push(chunk); cb(); } });
+      stream.pipe(collector);
+
+      // 等待流结束或超时
+      await Promise.race([
+        new Promise((resolve) => { stream.on('end', resolve); }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Command timeout after ${effectiveTimeout}ms`)), effectiveTimeout)),
+      ]).catch((err) => {
+        if (isBackground) return;
+        throw err;
+      });
+
+      // 解析 multiplexed Docker 帧: [1-byte type][3-byte padding][4-byte BE size][payload]
+      // size 在 off+4，type 在 off+0，payload 从 off+8 开始
       let stdout = '';
       let stderr = '';
-
-      const stdoutStream = new Writable({
-        write: (chunk, encoding, callback) => {
-          stdout += chunk.toString();
-          callback();
-        },
-      });
-
-      const stderrStream = new Writable({
-        write: (chunk, encoding, callback) => {
-          stderr += chunk.toString();
-          callback();
-        },
-      });
-
-      this.docker.modem.demuxStream(stream as any, stdoutStream as any, stderrStream as any);
-
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          if (isBackground) {
-            // 后台命令超时不算错误，直接返回
-            resolve(undefined);
-          } else {
-            reject(new Error(`Command timeout after ${effectiveTimeout}ms`));
-          }
-        }, effectiveTimeout);
-
-        stream.on('end', () => {
-          clearTimeout(timeout);
-          resolve(undefined);
-        });
-
-        stream.on('error', (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
-      });
+      for (const buf of bufs) {
+        let off = 0;
+        while (off + 8 <= buf.length) {
+          const size = buf.readUInt32BE(off + 4);
+          const type = buf[off];
+          const payloadOff = off + 8;
+          if (payloadOff + size > buf.length) break;
+          if (type === 1) stdout += buf.slice(payloadOff, payloadOff + size).toString();
+          else if (type === 2) stderr += buf.slice(payloadOff, payloadOff + size).toString();
+          off = payloadOff + size;
+        }
+      }
 
       const duration = Date.now() - startTime;
       const output = stdout + stderr;
@@ -326,41 +319,37 @@ export class DockerShellSession {
       });
 
       const stream = await exec.start({ Detach: false });
-      
-      let stdout = '';
-      let stderr = '';
 
-      const stdoutStream = new Writable({
-        write: (chunk, encoding, callback) => {
-          stdout += chunk.toString();
-          callback();
-        },
-      });
-
-      const stderrStream = new Writable({
-        write: (chunk, encoding, callback) => {
-          stderr += chunk.toString();
-          callback();
-        },
-      });
-
-      this.docker.modem.demuxStream(stream as any, stdoutStream as any, stderrStream as any);
+      // 收集原始数据并解析 multiplexed Docker 帧
+      const { Writable } = await import('stream');
+      const bufs: Buffer[] = [];
+      const collector = new Writable({ write(chunk, _, cb) { bufs.push(chunk); cb(); } });
+      stream.pipe(collector);
 
       await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error(`Interactive command timeout after ${timeoutMs}ms`));
         }, timeoutMs);
-
-        stream.on('end', () => {
-          clearTimeout(timeout);
-          resolve(undefined);
-        });
-
-        stream.on('error', (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        });
+        stream.on('end', () => { clearTimeout(timeout); resolve(undefined); });
+        stream.on('error', (error) => { clearTimeout(timeout); reject(error); });
       });
+
+      // 解析 multiplexed Docker 帧: [1-byte type][3-byte padding][4-byte BE size][payload]
+      // size 在 off+4，type 在 off+0，payload 从 off+8 开始
+      let stdout = '';
+      let stderr = '';
+      for (const buf of bufs) {
+        let off = 0;
+        while (off + 8 <= buf.length) {
+          const size = buf.readUInt32BE(off + 4);
+          const type = buf[off];
+          const payloadOff = off + 8;
+          if (payloadOff + size > buf.length) break;
+          if (type === 1) stdout += buf.slice(payloadOff, payloadOff + size).toString();
+          else if (type === 2) stderr += buf.slice(payloadOff, payloadOff + size).toString();
+          off = payloadOff + size;
+        }
+      }
 
       const duration = Date.now() - startTime;
       const output = stdout + stderr;

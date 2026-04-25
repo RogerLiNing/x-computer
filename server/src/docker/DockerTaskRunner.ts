@@ -37,61 +37,101 @@ export class DockerTaskRunner {
 
   /**
    * 执行 Docker 任务
+   * 使用 docker.run() API：自动处理输出流收集、容器生命周期和超时
    */
   async runTask(config: DockerTaskConfig): Promise<DockerTaskResult> {
     const startTime = Date.now();
     const timeout = config.timeout || 60000; // 默认 60 秒
-    const autoRemove = config.autoRemove !== false; // 默认自动删除
+    const autoRemove = config.autoRemove !== false;
 
-    let containerId = '';
+    // 构建命令
+    // 优先使用 config.command（直接命令数组，避免 BusyBox sh 的多行脚本限制）
+    // config.script 用于纯脚本语言：写入临时文件后执行
+    let cmd: string[];
+    if (config.command) {
+      cmd = config.command;
+    } else if (config.script) {
+      // 写入脚本到临时文件并执行，兼容 BusyBox sh
+      const workdir = config.workdir || '/workspace';
+      // 使用 cat heredoc 写入脚本（heredoc 不受引号和转义影响）
+      const escaped = config.script.replace(/'/g, "'\\''");
+      cmd = ['/bin/sh', '-c', `cat > /tmp/script << 'SCRIPT'\n${config.script}\nSCRIPT\n/bin/sh /tmp/script`];
+    } else {
+      cmd = ['echo', 'no command'];
+    }
+
+    // 构建环境变量
+    const env: string[] | undefined = config.env
+      ? Object.entries(config.env).map(([k, v]) => `${k}=${v}`)
+      : undefined;
+
+    // 收集输出的可写流
+    const { Writable } = await import('stream');
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    const stdoutStream = new Writable({
+      write(chunk, _, cb) { stdoutChunks.push(chunk); cb(); },
+    });
+    const stderrStream = new Writable({
+      write(chunk, _, cb) { stderrChunks.push(chunk); cb(); },
+    });
 
     try {
-      // 1. 创建容器
-      const container = await this.createContainer(config);
-      containerId = container.id;
-
-      serverLogger.info('docker-task', `容器已创建: ${containerId.substring(0, 12)}`);
-
-      // 2. 启动容器
-      await container.start();
-      serverLogger.info('docker-task', `容器已启动: ${containerId.substring(0, 12)}`);
-
-      // 3. 等待容器完成（带超时）
-      const result = await this.waitForContainer(container, timeout);
-
-      // 4. 获取日志
-      const logs = await this.getContainerLogs(container);
+      // 使用 Promise.race 实现超时
+      const [result, container] = await Promise.race([
+        this.docker.run(
+          config.image,
+          cmd,
+          [stdoutStream, stderrStream],
+          {
+            name: '',
+            Tty: false,
+            Env: env,
+            WorkingDir: config.workdir || '/workspace',
+            HostConfig: {
+              Memory: config.memory || 512 * 1024 * 1024,
+              NanoCpus: (config.cpus || 0.5) * 1e9,
+              NetworkMode: config.network || 'bridge',
+              AutoRemove: autoRemove,
+              SecurityOpt: ['no-new-privileges:true'],
+              CapDrop: ['ALL'],
+              Binds: config.volumes
+                ? Object.entries(config.volumes).map(([h, c]) => `${h}:${c}`)
+                : undefined,
+            },
+          },
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Task timeout after ${timeout}ms`)), timeout),
+        ),
+      ]).catch(async (err) => {
+        // 超时后尝试停止并清理容器
+        try {
+          const containers = await this.docker.listContainers({ all: true });
+          const running = containers.find((c) => c.Image === config.image && c.State === 'running');
+          if (running) {
+            const c = this.docker.getContainer(running.Id);
+            await c.stop();
+            await c.remove();
+          }
+        } catch {}
+        throw err;
+      });
 
       const duration = Date.now() - startTime;
-
+      const containerId = (container as Docker.Container).id || '';
       serverLogger.info('docker-task', `任务完成: ${containerId.substring(0, 12)} (exitCode: ${result.StatusCode}, duration: ${duration}ms)`);
 
-      // 5. 自动删除容器
-      if (autoRemove) {
-        await this.removeContainer(container);
-      }
-
       return {
-        stdout: logs.stdout,
-        stderr: logs.stderr,
-        exitCode: result.StatusCode,
+        stdout: Buffer.concat(stdoutChunks).toString(),
+        stderr: Buffer.concat(stderrChunks).toString(),
+        exitCode: result.StatusCode ?? 0,
         duration,
         containerId,
       };
     } catch (error) {
       const duration = Date.now() - startTime;
-      serverLogger.error('docker-task', `任务失败: ${containerId.substring(0, 12)}`, error instanceof Error ? error.message : String(error));
-
-      // 清理容器
-      if (containerId && autoRemove) {
-        try {
-          const container = this.docker.getContainer(containerId);
-          await this.removeContainer(container);
-        } catch (cleanupError) {
-          serverLogger.warn('docker-task', '清理容器失败', cleanupError instanceof Error ? cleanupError.message : String(cleanupError));
-        }
-      }
-
+      serverLogger.error('docker-task', `任务失败`, error instanceof Error ? error.message : String(error));
       throw error;
     }
   }
@@ -160,39 +200,48 @@ export class DockerTaskRunner {
 
   /**
    * 获取容器日志
+   * container.logs() 在 dockerode 4.x 中：follow=true → 返回可读流；follow=false → 直接返回 Buffer
    */
   private async getContainerLogs(
     container: Docker.Container
   ): Promise<{ stdout: string; stderr: string }> {
-    const stream = await container.logs({
+    const data = await container.logs({
       stdout: true,
       stderr: true,
       follow: false,
     });
 
+    // dockerode 4.x: follow=false 时 data 是 Buffer；follow=true 时是 ReadableStream
+    const chunks: Buffer[] = [];
+    if (Buffer.isBuffer(data)) {
+      chunks.push(data);
+    } else if (typeof (data as any).on === 'function') {
+      // 是 Node.js 流，直接收集
+      await new Promise<void>((resolve, reject) => {
+        (data as NodeJS.ReadableStream).on('data', (chunk: Buffer) => chunks.push(chunk));
+        (data as NodeJS.ReadableStream).on('end', () => resolve());
+        (data as NodeJS.ReadableStream).on('error', () => resolve());
+      });
+    }
+
+    // Docker 日志流在 non-TTY 模式下每帧有 8 字节头：[4字节长度, 1字节 stream type, 3字节保留]
+    // stream type: 0=stdin, 1=stdout, 2=stderr
     let stdout = '';
     let stderr = '';
-
-    return new Promise((resolve) => {
-      // Docker 的 demuxStream 需要 NodeJS.WritableStream
-      const stdoutStream = {
-        write: (chunk: Buffer) => {
-          stdout += chunk.toString();
-        },
-      };
-      
-      const stderrStream = {
-        write: (chunk: Buffer) => {
-          stderr += chunk.toString();
-        },
-      };
-
-      this.docker.modem.demuxStream(stream as any, stdoutStream as any, stderrStream as any);
-
-      (stream as any).on('end', () => {
-        resolve({ stdout, stderr });
-      });
-    });
+    for (const buf of chunks) {
+      let offset = 0;
+      while (offset + 8 <= buf.length) {
+        const size = buf.readUInt32BE(offset);
+        const streamType = buf[offset + 4];
+        offset += 8;
+        if (offset + size > buf.length) break;
+        const payload = buf.slice(offset, offset + size).toString();
+        if (streamType === 1) stdout += payload;
+        else if (streamType === 2) stderr += payload;
+        offset += size;
+      }
+    }
+    return { stdout, stderr };
   }
 
   /**
@@ -242,7 +291,7 @@ export class DockerTaskRunner {
      */
     nodejs: (script: string, options?: Partial<DockerTaskConfig>): DockerTaskConfig => ({
       image: 'node:20-alpine',
-      script,
+      command: ['node', '-e', script],
       workdir: '/workspace',
       ...options,
     }),
@@ -252,7 +301,7 @@ export class DockerTaskRunner {
      */
     python: (script: string, options?: Partial<DockerTaskConfig>): DockerTaskConfig => ({
       image: 'python:3.11-slim',
-      script,
+      command: ['python3', '-c', script],
       workdir: '/workspace',
       ...options,
     }),
@@ -262,7 +311,7 @@ export class DockerTaskRunner {
      */
     bash: (script: string, options?: Partial<DockerTaskConfig>): DockerTaskConfig => ({
       image: 'alpine:latest',
-      script,
+      command: ['/bin/sh', '-c', script],
       workdir: '/workspace',
       ...options,
     }),
@@ -272,7 +321,8 @@ export class DockerTaskRunner {
      */
     go: (script: string, options?: Partial<DockerTaskConfig>): DockerTaskConfig => ({
       image: 'golang:1.21-alpine',
-      script,
+      command: ['go', 'run', '/dev/stdin'],
+      env: { 'GONOSUMCHECK': '*', 'GOPROXY': 'off' },
       workdir: '/workspace',
       ...options,
     }),
@@ -282,7 +332,7 @@ export class DockerTaskRunner {
      */
     rust: (script: string, options?: Partial<DockerTaskConfig>): DockerTaskConfig => ({
       image: 'rust:1.75-alpine',
-      script,
+      command: ['rustc', '-', '--edition=2021'],
       workdir: '/workspace',
       ...options,
     }),

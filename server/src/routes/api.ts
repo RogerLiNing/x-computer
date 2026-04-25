@@ -19,6 +19,7 @@ import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
 import { createAdminRouter } from './adminUtils.js';
+import { createContentManagementRoutes } from './contentManagement.js';
 import type { AgentDefinition } from '../../../shared/src/index.js';
 import { callLLM } from '../chat/chatService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
@@ -285,6 +286,7 @@ export function createApiRouter(
     router.use(createWhatsAppRouter(db));
     router.use(createSlackRouter(db));
     router.use(createQQRouter(db));
+    router.use(createContentManagementRoutes(db));
   }
   router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
@@ -341,6 +343,8 @@ export function createApiRouter(
 
   // ── X 主脑自主定时执行：到点以对应用户身份跑 Agent，不限制内容 ──
   const getSystemPromptForScheduler = async (uid: string) => {
+    const toolLoadingMode = getToolLoadingMode();
+    const onDemandTools = toolLoadingMode === 'on_demand';
     const [learnedPrompt, evolvedCorePrompt, basePrompt] = await Promise.all([
       getLearnedPromptForUser(uid),
       getEvolvedCorePromptForUser(uid),
@@ -348,13 +352,16 @@ export function createApiRouter(
     ]);
     const tools = listAllCapabilities(orchestrator.getTools());
     const skills = getDiscoveredSkills(uid);
-    const caps = USE_CONDENSED_SYSTEM_PROMPT
-      ? formatCapabilitiesSummaryCondensed(tools) + formatSkillsSummary(skills, true)
-      : formatCapabilitiesSummary(tools) + formatSkillsSummary(skills);
+    const caps = onDemandTools
+      ? ''
+      : USE_CONDENSED_SYSTEM_PROMPT
+        ? formatCapabilitiesSummaryCondensed(tools) + formatSkillsSummary(skills, true)
+        : formatCapabilitiesSummary(tools) + formatSkillsSummary(skills);
     const base = getAssembledSystemPrompt({
       scene: 'none',
       promptMode: 'minimal',
       basePrompt,
+      toolLoadingModeOnDemand: onDemandTools,
       capabilities: caps,
       learnedPrompt,
       evolvedCorePrompt,
@@ -744,6 +751,7 @@ export function createApiRouter(
         systemPrompt,
         maxSteps: 5,
         userId,
+        toolLoadingMode: getToolLoadingMode(),
       });
       ensureDefaultScheduleForUser(userId ?? undefined);
       const lang = db && userId ? await getUserLanguage(db, userId) : 'zh-CN';
@@ -813,6 +821,9 @@ export function createApiRouter(
       await ensureUserMcpForScheduler(userId);
     }
 
+    const toolLoadingMode = getToolLoadingMode();
+    const onDemandTools = toolLoadingMode === 'on_demand';
+
     // 获取各种提示词（标准做法）
     const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
       getLearnedPromptForUser(userId),
@@ -821,17 +832,20 @@ export function createApiRouter(
       getAssistantPromptForUser(userId),
     ]);
 
-    // 构建系统提示（使用标准 assemble 逻辑）
+    // 构建系统提示（与 /chat/agent、定时/事件主脑一致：on_demand 时用 CAPABILITIES_ON_DEMAND，不全量塞能力列表）
     const tools = listAllCapabilities(orchestrator.getTools());
     const skills = getDiscoveredSkills(userId);
-    const caps = USE_CONDENSED_SYSTEM_PROMPT
-      ? formatCapabilitiesSummaryCondensed(tools) + formatSkillsSummary(skills, true)
-      : formatCapabilitiesSummary(tools) + formatSkillsSummary(skills);
+    const caps = onDemandTools
+      ? ''
+      : USE_CONDENSED_SYSTEM_PROMPT
+        ? formatCapabilitiesSummaryCondensed(tools) + formatSkillsSummary(skills, true)
+        : formatCapabilitiesSummary(tools) + formatSkillsSummary(skills);
 
     const systemPrompt = getAssembledSystemPrompt({
       scene: 'none',
       promptMode: 'minimal',
       basePrompt,
+      toolLoadingModeOnDemand: onDemandTools,
       capabilities: caps,
       learnedPrompt,
       evolvedCorePrompt,
@@ -848,7 +862,6 @@ export function createApiRouter(
     ];
 
     // 直接调用 orchestrator 的聊天循环，获取回复内容
-    const toolLoadingMode = getToolLoadingMode();
     const result = await orchestrator.runChatAgentLoop({
       messages: allMessages,
       systemPrompt,
@@ -944,8 +957,8 @@ export function createApiRouter(
   router.use(createXGroupRunRouter(
     orchestrator,
     db,
+    subscriptionService,
     getSystemPromptForScheduler,
-    getLLMConfigForScheduler,
     ensureUserMcpForScheduler,
     ensureDefaultScheduleForUser,
     triggerXRunForUser,

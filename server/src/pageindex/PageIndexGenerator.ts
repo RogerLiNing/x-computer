@@ -179,14 +179,12 @@ Format: [{"title": "...", "level": 1, "pageNumber": 0}]`
     const nodes: PageIndexNode[] = []
     
     for (const section of sections) {
+      const pageCount = section.endIndex - section.startIndex + 1
       const maxDepth = opts.maxDepth || 5
-      if (section.endIndex - section.startIndex > (opts.maxPagesPerNode || 10) && depth < maxDepth) {
-        // 进一步分割
-        const subSections = await this.splitSection(
-          document,
-          section,
-          opts
-        )
+      const shouldSplit = pageCount > opts.maxPagesPerNode && depth < maxDepth
+      
+      if (shouldSplit) {
+        const subSections = await this.splitSection(document, section, opts)
         
         const node: PageIndexNode = {
           title: section.title,
@@ -206,17 +204,12 @@ Format: [{"title": "...", "level": 1, "pageNumber": 0}]`
         
         nodes.push(node)
       } else {
-        // 创建叶子节点
         const pages = document.pages.slice(
           section.startIndex,
           section.endIndex + 1
         )
         
-        const node = await this.createNodeFromPages(
-          pages,
-          section.title,
-          opts
-        )
+        const node = await this.createNodeFromPages(pages, section.title, opts)
         
         node.startIndex = section.startIndex
         node.endIndex = section.endIndex

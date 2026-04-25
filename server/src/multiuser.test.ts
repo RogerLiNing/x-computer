@@ -1,15 +1,18 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import request from 'supertest';
 import path from 'path';
 import os from 'os';
 import fs from 'fs/promises';
 import { createApp } from './app.js';
 import { clearDefaultConfigCache } from './config/defaultConfig.js';
+import { resetRateLimitState } from './middleware/chatRateLimit.js';
 
 /**
  * 多用户基础设施测试：覆盖用户上下文中间件、用户隔离、配置 API、聊天会话 API。
  */
 describe('多用户基础设施', () => {
+  beforeEach(() => { resetRateLimitState(); });
+
   const workspaceRoot = path.join(os.tmpdir(), `x-computer-multiuser-test-${Date.now()}`);
   let app: any, sandboxFS: any, userSandboxManager: any, db: any;
 
@@ -36,10 +39,10 @@ describe('多用户基础设施', () => {
   // ── 中间件测试 ──
 
   describe('用户上下文中间件', () => {
-    it('无 X-User-Id 时返回 401', async () => {
+    it('无 X-User-Id 时公开路径返回 200', async () => {
+      // /api/health 在 AUTH_PUBLIC_PATHS 中，无需 X-User-Id 即可访问
       const res = await request(app).get('/api/health');
-      expect(res.status).toBe(401);
-      expect(res.body.error).toMatch(/X-User-Id/i);
+      expect(res.status).toBe(200);
     });
 
     it('携带 X-User-Id 时正常响应', async () => {
@@ -169,6 +172,8 @@ describe('多用户基础设施', () => {
       await request(app)
         .delete('/api/users/me/config/theme')
         .set('X-User-Id', USER_A);
+      // Wait for rate-limit window to pass (2 s)
+      await new Promise((r) => setTimeout(r, 2100));
       const res = await request(app)
         .get('/api/users/me/config/theme')
         .set('X-User-Id', USER_A);
@@ -280,6 +285,8 @@ describe('多用户基础设施', () => {
         .post('/api/fs/write')
         .set('X-User-Id', USER_A)
         .send({ path: 'test-isolation.txt', content: 'hello from A' });
+      // 等待速率限制窗口通过（2 秒）
+      await new Promise((r) => setTimeout(r, 2100));
 
       // 用户 A 能读到
       const readA = await request(app)

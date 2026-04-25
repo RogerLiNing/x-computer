@@ -134,24 +134,35 @@ export async function runMigrations(db: AsyncDatabase, migrationsDir?: string): 
 /**
  * 获取迁移状态（用于管理界面）
  */
-export async function getMigrationStatus(db: AsyncDatabase): Promise<{
+export async function getMigrationStatus(db: AsyncDatabase, migrationsDir?: string): Promise<{
   applied: MigrationRecord[];
   pending: string[];
 }> {
   await initMigrationsTable(db);
-  
+
   const rows = await db.query<{ id: number; filename: string; applied_at: number }>(
     'SELECT * FROM migrations ORDER BY applied_at DESC'
   );
-  
+
   const applied: MigrationRecord[] = rows.map(r => ({
     id: String(r.id),
     filename: r.filename,
     applied_at: r.applied_at,
   }));
-  
-  // TODO: 读取 migrations 目录，找出未应用的
-  const pending: string[] = [];
-  
+
+  // 读取 migrations 目录，找出未应用的
+  const dir = migrationsDir ?? path.join(process.cwd(), 'migrations');
+  let pending: string[] = [];
+  try {
+    const files = await fs.readdir(dir);
+    const appliedNames = new Set(rows.map(r => r.filename));
+    pending = files
+      .filter(f => f.endsWith('.sql') && !f.endsWith('.mysql.sql'))
+      .filter(f => !appliedNames.has(f))
+      .sort();
+  } catch (err) {
+    serverLogger.warn('db/migrate', '无法读取迁移目录', `dir=${dir} error=${err instanceof Error ? err.message : String(err)}`);
+  }
+
   return { applied, pending };
 }

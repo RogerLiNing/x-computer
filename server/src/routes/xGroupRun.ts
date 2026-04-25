@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { AppDatabase } from '../db/database.js';
+import type { SubscriptionService } from '../subscription/SubscriptionService.js';
+import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 import { runWithRetry } from '../scheduler/runScheduledIntent.js';
 import { fire as fireHook } from '../hooks/HookRegistry.js';
 import { serverLogger } from '../observability/ServerLogger.js';
@@ -8,8 +10,8 @@ import { serverLogger } from '../observability/ServerLogger.js';
 export function createXGroupRunRouter(
   orchestrator: AgentOrchestrator,
   db: AppDatabase | undefined,
+  subscriptionService: SubscriptionService | undefined,
   getSystemPromptForScheduler: (uid: string) => Promise<string>,
-  getLLMConfigForScheduler: (uid: string) => Promise<{ providerId: string; modelId: string; baseUrl?: string; apiKey?: string } | null>,
   ensureUserMcpForScheduler: ((uid: string) => Promise<void>) | undefined,
   ensureDefaultScheduleForUser: (userId: string | undefined) => void,
   triggerXRunForUser: (
@@ -37,33 +39,19 @@ export function createXGroupRunRouter(
         intent?: string;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
+        // baseUrl/apiKey 不从客户端接收，防止安全绕过
       };
       const intent =
         body.intent?.trim() ||
         '用户手动触发：做一次自检，简要说明当前状态与待办；如有需要可联系用户。你可以使用任何工具（读对话、更新提示词、定下一个定时等）。';
       if (ensureUserMcpForScheduler) await ensureUserMcpForScheduler(userId);
-      let llmConfig: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string } | null = null;
-      if (body.providerId && body.modelId) {
-        llmConfig = {
-          providerId: body.providerId,
-          modelId: body.modelId,
-          baseUrl: body.baseUrl || undefined,
-          apiKey: body.apiKey || undefined,
-        };
-      }
-      if (!llmConfig) {
-        const fromDb = await getLLMConfigForScheduler(userId);
-        if (fromDb?.providerId && fromDb?.modelId) {
-          llmConfig = {
-            providerId: fromDb.providerId,
-            modelId: fromDb.modelId,
-            baseUrl: fromDb.baseUrl,
-            apiKey: fromDb.apiKey,
-          };
-        }
-      }
+      // 服务器端凭证查找：不再接受客户端的 apiKey/baseUrl
+      const llmConfig = await resolveLLMCredentials(
+        userId,
+        db as any,
+        subscriptionService,
+        body.providerId && body.modelId ? { providerId: body.providerId, modelId: body.modelId } : undefined,
+      );
       if (!llmConfig?.providerId || !llmConfig?.modelId) {
         res.status(400).json({
           error: '请先在「系统设置 → 大模型配置」中配置聊天模型，X 才能执行。',

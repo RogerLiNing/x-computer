@@ -55,7 +55,6 @@ function isAdvancedTool(name: string): boolean {
     'x.',
     'skill.',
     'search.web',
-    'browser.',
     'llm.analyze',
     'llm.generate_image',
     'llm.generate_music',

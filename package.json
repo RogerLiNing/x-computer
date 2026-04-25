@@ -34,7 +34,9 @@
     "shared",
     "server",
     "frontend",
-    "workflow-engine"
+    "workflow-engine",
+    "packages/core",
+    "packages/sdk/js"
   ],
   "devDependencies": {
     "@types/mailparser": "^3.4.6",

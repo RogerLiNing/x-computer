@@ -1,0 +1,35 @@
+{
+  "name": "@x-computer/core",
+  "version": "1.0.0",
+  "description": "X-Computer core types and utilities",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "x-computer",
+    "types",
+    "core"
+  ],
+  "author": "X-Computer Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3"
+  }
+}

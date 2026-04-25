@@ -53,8 +53,13 @@ export async function handleQQMessage(
 ): Promise<void> {
   const { db, getConfig, setConfig, runIntent, runAgent, handleChannelMessageAsChat } = deps;
   const msgId = `qq-${msg.messageId}`;
+  
+  // 先保存已处理 ID，防止并发时重复处理
   const processed = await loadProcessedIds(getConfig, userId);
   if (processed.has(msgId)) return;
+  
+  // 立即保存，防止竞态条件
+  await saveProcessedIds(setConfig, userId, [...processed, msgId]);
 
   const id = `qq-${uuid()}`;
   await db.insertChannelMessage(userId, {
@@ -100,6 +105,5 @@ ${msg.text}
     await fireSignal(userId, 'qq_message_received', { from: msg.fromId, chatId: msg.chatId, text: msg.text, messageId: msgId, messageType: msg.messageType, goal }, { getConfig, runIntent, runAgent });
   }
 
-  await saveProcessedIds(setConfig, userId, [...processed, msgId]);
   serverLogger.info('qq/loop', `qq_message_received 已发出`, `userId=${userId} from=${fromDisplay}`);
 }

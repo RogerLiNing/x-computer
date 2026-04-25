@@ -10,6 +10,7 @@ import { serverLogger } from '../observability/ServerLogger.js';
 import { fire as fireHook } from '../hooks/HookRegistry.js';
 import { MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT } from '../prompts/systemCore.js';
 import { callLLM } from '../chat/chatService.js';
+import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 
 const MEMORY_DIR = 'memory';
 const EMBED_BATCH_SIZE = 10;
@@ -34,6 +35,17 @@ export function createMemoryRouter(
     if (!userId || userId === 'anonymous' || !userSandboxManager) return null;
     const { sandboxFS: userFS } = await userSandboxManager.getForUser(userId);
     return new MemoryService(userFS, vectorStore);
+  }
+
+  /**
+   * 解析向量嵌入凭证（服务器端查找，不信任客户端 apiKey）。
+   * 优先级：用户 DB 配置 > 服务器默认 .x-config.json > 环境变量
+   * 失败时返回 null（调用方降级到关键词检索）。
+   */
+  async function resolveVectorCredentials(userId: string, providerId: string, modelId: string) {
+    const creds = await resolveLLMCredentials(userId, db, subscriptionService, { providerId, modelId });
+    if (!creds) return null;
+    return { providerId: creds.providerId, modelId: creds.modelId, baseUrl: creds.baseUrl ?? '', apiKey: creds.apiKey };
   }
 
   /** 后台执行：根据本轮对话判断是否写入记忆并可选建向量索引（不向调用方返回结果，参考 OpenClaw） */
@@ -250,8 +262,6 @@ export function createMemoryRouter(
         workspaceId: bodyWorkspaceId,
         providerId,
         modelId,
-        baseUrl,
-        apiKey,
       } = req.body as {
         query?: string;
         days?: number;
@@ -262,17 +272,23 @@ export function createMemoryRouter(
         workspaceId?: string;
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
       };
       const q = (query ?? '').trim();
       const daysVal = Math.min(5, Math.max(1, parseInt(String(days), 10) || 2));
       const topKVal = Math.min(10, Math.max(1, parseInt(String(topK), 10) || 5));
       const workspaceId = typeof bodyWorkspaceId === 'string' ? bodyWorkspaceId.trim() || undefined : undefined;
+      const userId = (req as { userId?: string }).userId ?? '';
 
       if (providerId && modelId && q) {
+        const resolved = await resolveVectorCredentials(userId, providerId, modelId);
+        if (!resolved) {
+          serverLogger.warn('memory/recall', '向量模型凭证解析失败，降级到关键词检索', `providerId=${providerId}`);
+          const content = await memoryService.recall(q, { days: daysVal, workspaceId });
+          res.json({ content, vectorUsed: false, embedError: '向量模型凭证未配置' });
+          return;
+        }
         try {
-          const queryVector = await callEmbedding(q, { providerId, modelId, baseUrl, apiKey });
+          const queryVector = await callEmbedding(q, resolved);
           await memoryService.updateStatusMeta(
             {
               retrievalMode: 'hybrid',
@@ -329,16 +345,12 @@ export function createMemoryRouter(
         type,
         providerId,
         modelId,
-        baseUrl,
-        apiKey,
         workspaceId: bodyWorkspaceId,
       } = req.body as {
         content?: string;
         type?: 'preference' | 'decision' | 'fact';
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
         workspaceId?: string;
       };
       if (!rawContent || typeof rawContent !== 'string') {
@@ -349,44 +361,50 @@ export function createMemoryRouter(
       await memoryService.capture(content, type);
 
       const workspaceId = typeof bodyWorkspaceId === 'string' ? bodyWorkspaceId.trim() || undefined : undefined;
+      const userId = (req as { userId?: string }).userId ?? '';
+      const effectiveWorkspaceId = userId && userId !== 'anonymous' ? userId : undefined;
+
       if (providerId && modelId) {
-        try {
-          const vector = await callEmbedding(content, { providerId, modelId, baseUrl, apiKey });
-          const date = new Date().toISOString().slice(0, 10);
-          await memoryService.addToIndex(
-            { filePath: dailyPath(date), date, text: content, vector },
-            workspaceId,
-          );
-          await memoryService.updateStatusMeta(
-            {
-              retrievalMode: 'hybrid',
-              provider: {
-                configured: true,
-                available: true,
-                providerId,
-                modelId,
+        const resolved = await resolveVectorCredentials(userId, providerId, modelId);
+        if (resolved) {
+          try {
+            const vector = await callEmbedding(content, resolved);
+            const date = new Date().toISOString().slice(0, 10);
+            await memoryService.addToIndex(
+              { filePath: dailyPath(date), date, text: content, vector },
+              workspaceId,
+            );
+            await memoryService.updateStatusMeta(
+              {
+                retrievalMode: 'hybrid',
+                provider: {
+                  configured: true,
+                  available: true,
+                  providerId,
+                  modelId,
+                },
+                lastEmbedError: undefined,
+                fallback: { active: false },
               },
-              lastEmbedError: undefined,
-              fallback: { active: false },
-            },
-            workspaceId,
-          );
-        } catch (embedErr: any) {
-          serverLogger.error('memory/capture (index)', embedErr.message);
-          await memoryService.updateStatusMeta(
-            {
-              retrievalMode: 'keyword_fallback',
-              provider: {
-                configured: true,
-                available: false,
-                providerId,
-                modelId,
+              workspaceId,
+            );
+          } catch (embedErr: any) {
+            serverLogger.error('memory/capture (index)', embedErr.message);
+            await memoryService.updateStatusMeta(
+              {
+                retrievalMode: 'keyword_fallback',
+                provider: {
+                  configured: true,
+                  available: false,
+                  providerId,
+                  modelId,
+                },
+                lastEmbedError: embedErr?.message ?? String(embedErr),
+                fallback: { active: true, reason: 'embedding_failed' },
               },
-              lastEmbedError: embedErr?.message ?? String(embedErr),
-              fallback: { active: true, reason: 'embedding_failed' },
-            },
-            workspaceId,
-          );
+              workspaceId,
+            );
+          }
         }
       }
       res.json({ success: true });
@@ -399,17 +417,21 @@ export function createMemoryRouter(
   /** 测试向量嵌入连接（用于校验 Base URL、模型、API Key） */
   router.post('/memory/test-embedding', async (req, res) => {
     try {
-      const { providerId, modelId, baseUrl, apiKey } = req.body as {
+      const { providerId, modelId } = req.body as {
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
       };
       if (!providerId || !modelId) {
         res.status(400).json({ ok: false, error: '缺少 providerId 或 modelId' });
         return;
       }
-      const vector = await callEmbedding('测试文本', { providerId, modelId, baseUrl, apiKey });
+      const userId = (req as { userId?: string }).userId ?? '';
+      const resolved = await resolveVectorCredentials(userId, providerId, modelId);
+      if (!resolved) {
+        res.json({ ok: false, error: '向量模型凭证未配置，请联系管理员' });
+        return;
+      }
+      const vector = await callEmbedding('测试文本', resolved);
       await memoryService.updateStatusMeta(
         {
           retrievalMode: 'hybrid',
@@ -442,18 +464,17 @@ export function createMemoryRouter(
   /** 从已有记忆文件重建向量索引。按用户隔离：已登录用户从其工作区 memory/ 读取并索引 */
   router.post('/memory/rebuild-index', async (req, res) => {
     try {
-      const { providerId, modelId, baseUrl, apiKey, workspaceId: bodyWorkspaceId } = req.body as {
+      const { providerId, modelId, workspaceId: bodyWorkspaceId } = req.body as {
         providerId?: string;
         modelId?: string;
-        baseUrl?: string;
-        apiKey?: string;
         workspaceId?: string;
       };
       if (!providerId || !modelId) {
         res.status(400).json({ error: '缺少 providerId 或 modelId（向量嵌入）' });
         return;
       }
-      const userId = (req as { userId?: string }).userId;
+      const userId = (req as { userId?: string }).userId ?? '';
+      const resolved = await resolveVectorCredentials(userId, providerId, modelId);
       const effectiveWorkspaceId = userId && userId !== 'anonymous' ? userId : undefined;
       let fsToUse = sandboxFS;
       if (effectiveWorkspaceId && userSandboxManager && userId) {
@@ -508,7 +529,11 @@ export function createMemoryRouter(
           blocks.push({ filePath, date, text: text.slice(0, 8000) });
         }
       }
-      const embedConfig = { providerId, modelId, baseUrl, apiKey };
+      if (!resolved) {
+        res.json({ indexed: 0, filesFound: mdFiles.length, fileNames: mdFiles.map((f) => f.name), workspaceRoot, error: '向量模型凭证未配置，请联系管理员' });
+        return;
+      }
+      const embedConfig = resolved;
       let indexed = 0;
       let lastEmbedError: string | undefined;
       for (let i = 0; i < blocks.length; i += EMBED_BATCH_SIZE) {

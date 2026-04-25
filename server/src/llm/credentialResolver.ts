@@ -21,6 +21,8 @@ export interface LLMConfig {
   modelId: string;
   baseUrl?: string;
   apiKey: string;
+  /** API 类型：'openai' 使用 OpenAI 兼容接口，'anthropic' 使用 Anthropic 接口 */
+  apiType?: 'openai' | 'anthropic';
 }
 
 /** 只暴露给前端的配置（不含 apiKey） */
@@ -43,15 +45,15 @@ export function buildPublicLLMConfig(): PublicLLMConfig {
   };
 }
 
-/** 从配置对象中提取 provider 的 apiKey */
+/** 从配置对象中提取 provider 的 apiKey 和 apiType */
 function extractApiKeyFromConfig(
-  config: { providers?: Array<{ id: string; baseUrl?: string; apiKey?: string }> } | null,
+  config: { providers?: Array<{ id: string; baseUrl?: string; apiKey?: string; apiType?: string }> } | null,
   providerId: string,
-): { baseUrl?: string; apiKey?: string } | null {
+): { baseUrl?: string; apiKey?: string; apiType?: string } | null {
   if (!config?.providers?.length) return null;
   const provider = config.providers.find((p) => p.id === providerId);
   if (!provider?.apiKey) return null;
-  return { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
+  return { baseUrl: provider.baseUrl, apiKey: provider.apiKey, apiType: provider.apiType };
 }
 
 /** 统一凭证查找：返回 { providerId, modelId, baseUrl, apiKey } 或 null */
@@ -80,7 +82,7 @@ export async function resolveLLMCredentials(
     try {
       const raw = await db.getConfig(userId, 'llm_config');
       if (raw) {
-        const config = JSON.parse(raw) as { providers?: Array<{ id: string; baseUrl?: string; apiKey?: string }> };
+        const config = JSON.parse(raw) as { providers?: Array<{ id: string; baseUrl?: string; apiKey?: string; apiType?: string }> };
         const creds = extractApiKeyFromConfig(config, provId);
         if (creds) {
           return {
@@ -88,6 +90,7 @@ export async function resolveLLMCredentials(
             modelId: modId || '__custom__',
             baseUrl: creds.baseUrl,
             apiKey: creds.apiKey as string,
+            apiType: creds.apiType as 'openai' | 'anthropic' | undefined,
           };
         }
       }
@@ -105,6 +108,7 @@ export async function resolveLLMCredentials(
       modelId: modId || '__custom__',
       baseUrl: defaultCreds.baseUrl,
       apiKey: defaultCreds.apiKey as string,
+      apiType: defaultCreds.apiType as 'openai' | 'anthropic' | undefined,
     };
   }
 
@@ -117,6 +121,7 @@ export async function resolveLLMCredentials(
       modelId: model,
       baseUrl: 'https://openrouter.ai/api/v1',
       apiKey,
+      apiType: 'openai' as const,
     };
   }
 

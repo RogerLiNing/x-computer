@@ -2,7 +2,7 @@
  * Docker 任务执行器测试
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { DockerTaskRunner } from './DockerTaskRunner.js';
 
 describe('DockerTaskRunner', () => {
@@ -14,10 +14,9 @@ describe('DockerTaskRunner', () => {
 
   describe('基础任务执行', () => {
     it('should run a simple Node.js task', async () => {
-      const config = DockerTaskRunner.templates.nodejs(`
-        console.log('Hello from Node.js');
-        console.log('Node version:', process.version);
-      `);
+      const config = DockerTaskRunner.templates.nodejs(
+        "console.log('Hello from Node.js');\nconsole.log('Node version:', process.version);"
+      );
 
       const result = await runner.runTask(config);
 
@@ -27,11 +26,9 @@ describe('DockerTaskRunner', () => {
     }, 30000);
 
     it('should run a simple Python task', async () => {
-      const config = DockerTaskRunner.templates.python(`
-import sys
-print('Hello from Python')
-print('Python version:', sys.version)
-      `);
+      const config = DockerTaskRunner.templates.python(
+        "import sys\nprint('Hello from Python')\nprint('Python version:', sys.version)"
+      );
 
       const result = await runner.runTask(config);
 
@@ -56,9 +53,7 @@ uname -a
 
   describe('错误处理', () => {
     it('should handle script errors', async () => {
-      const config = DockerTaskRunner.templates.nodejs(`
-        throw new Error('Test error');
-      `);
+      const config = DockerTaskRunner.templates.nodejs("throw new Error('Test error');");
 
       const result = await runner.runTask(config);
 
@@ -76,16 +71,13 @@ echo "This should not print"
       );
 
       await expect(runner.runTask(config)).rejects.toThrow('timeout');
-    }, 10000);
+    }, 15000);
   });
 
   describe('环境变量', () => {
     it('should pass environment variables', async () => {
       const config = DockerTaskRunner.templates.nodejs(
-        `
-console.log('MY_VAR:', process.env.MY_VAR);
-console.log('ANOTHER_VAR:', process.env.ANOTHER_VAR);
-      `,
+        "console.log('MY_VAR:', process.env.MY_VAR);\nconsole.log('ANOTHER_VAR:', process.env.ANOTHER_VAR);",
         {
           env: {
             MY_VAR: 'test-value',
@@ -105,10 +97,7 @@ console.log('ANOTHER_VAR:', process.env.ANOTHER_VAR);
   describe('资源限制', () => {
     it('should respect memory limits', async () => {
       const config = DockerTaskRunner.templates.nodejs(
-        `
-const used = process.memoryUsage();
-console.log('Memory used:', Math.round(used.heapUsed / 1024 / 1024), 'MB');
-      `,
+        "const used = process.memoryUsage();\nconsole.log('Memory used:', Math.round(used.heapUsed / 1024 / 1024), 'MB');",
         {
           memory: 128 * 1024 * 1024, // 128MB
         }

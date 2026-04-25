@@ -69,13 +69,14 @@ class UserQQConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
-  private reconnectDelay = 5000; // 初始重连延迟 5 秒
+  private reconnectDelay = 3000; // 初始重连延迟 3 秒（缩短）
   private savedConfig: { appId: string; secret: string; sandbox?: boolean } | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  private readonly HEARTBEAT_INTERVAL = 60000; // 60秒心跳
+  private readonly HEARTBEAT_INTERVAL = 30000; // 30秒心跳（缩短，更频繁检测）
   private readonly MAX_SEND_RETRIES = 3; // 发送消息最大重试次数
   private heartbeatFailCount = 0;
-  private readonly MAX_HEARTBEAT_FAILURES = 3; // 心跳连续失败超过此次数则停止重连
+  private readonly MAX_HEARTBEAT_FAILURES = 3; // 心跳连续失败超过此次数则重连
+  private isReconnecting = false; // 防止并发重连
 
   constructor(
     private userId: string,
@@ -88,7 +89,7 @@ class UserQQConnection {
 
     // 监听 WebSocket 断开事件
     this.bot.on('close', (hadError: boolean) => {
-      if (this.reconnectTimer) return; // 防止重复触发
+      if (this.reconnectTimer || this.isReconnecting) return; // 防止重复触发
       serverLogger.warn('qq', `WebSocket 连接断开${hadError ? '（有错误）' : ''} userId=${this.userId}`);
       this.running = false;
       this.stopHeartbeat();
@@ -98,11 +99,21 @@ class UserQQConnection {
     // 监听错误事件
     this.bot.on('error', (err: Error) => {
       serverLogger.warn('qq', `WebSocket 错误 userId=${this.userId}`, err.message);
+      // 如果连接不在运行状态，触发重连
+      if (!this.running && !this.reconnectTimer && !this.isReconnecting && this.savedConfig) {
+        this.scheduleReconnect();
+      }
     });
 
     // 监听 ready 事件（重连成功时）
     this.bot.on('ready', () => {
-      serverLogger.info('qq', `Bot ready 事件触发 userId=${this.userId}`);
+      serverLogger.info('qq', `Bot ready 事件触发，连接已建立 userId=${this.userId}`);
+      // 重置重连状态
+      this.isReconnecting = false;
+      this.reconnectAttempts = 0;
+      this.reconnectDelay = 3000;
+      // 重新启动心跳
+      this.startHeartbeat();
     });
   }
 
@@ -120,9 +131,11 @@ class UserQQConnection {
         this.heartbeatFailCount++;
         serverLogger.warn('qq', `心跳保活失败(${this.heartbeatFailCount}/${this.MAX_HEARTBEAT_FAILURES}) userId=${this.userId}`, err instanceof Error ? err.message : String(err));
         if (this.heartbeatFailCount >= this.MAX_HEARTBEAT_FAILURES) {
-          serverLogger.error('qq', `QQ 心跳连续失败 ${this.heartbeatFailCount} 次，Token 可能已过期，停止重连。请重新配置 QQ Bot。 userId=${this.userId}`);
+          serverLogger.error('qq', `QQ 心跳连续失败 ${this.heartbeatFailCount} 次，主动触发重连 userId=${this.userId}`);
           this.stopHeartbeat();
           this.running = false;
+          // 主动触发重连而不是停止
+          this.scheduleReconnect();
         }
       }
     }, this.HEARTBEAT_INTERVAL);
@@ -137,23 +150,28 @@ class UserQQConnection {
 
   private scheduleReconnect(): void {
     if (!this.savedConfig) return;
+    if (this.isReconnecting) return; // 防止并发重连
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       serverLogger.error('qq', `重连次数已达上限（${this.maxReconnectAttempts}），请检查网络或 Token`, `userId=${this.userId}`);
+      this.isReconnecting = false;
       return;
     }
 
     const delay = Math.min(this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts), 60000); // 指数退避，最大 60 秒
     this.reconnectAttempts++;
+    this.isReconnecting = true;
     serverLogger.info('qq', `计划 ${Math.round(delay / 1000)} 秒后重连（第 ${this.reconnectAttempts} 次）`, `userId=${this.userId}`);
 
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       const result = await this.connect(this.savedConfig!.appId, this.savedConfig!.secret, this.savedConfig!.sandbox);
       if (!result.ok) {
+        this.isReconnecting = false;
         this.scheduleReconnect();
       } else {
+        this.isReconnecting = false;
         this.reconnectAttempts = 0;
-        this.reconnectDelay = 5000;
+        this.reconnectDelay = 3000;
       }
     }, delay);
   }
@@ -163,6 +181,16 @@ class UserQQConnection {
     
     // 保存配置用于重连
     this.savedConfig = { appId, secret, sandbox };
+    
+    // 定义连接超时（防止 DNS 解析等网络问题导致卡死）
+    const CONNECT_TIMEOUT = 10000; // 10秒
+    const timeoutId = setTimeout(() => {
+      serverLogger.warn('qq', `连接超时（${CONNECT_TIMEOUT}ms），中止连接 userId=${this.userId}`);
+      if (this.bot) {
+        try { void this.bot.stop(); } catch {}
+        this.bot = null;
+      }
+    }, CONNECT_TIMEOUT);
     
     try {
       this.bot = new Bot({
@@ -199,6 +227,8 @@ class UserQQConnection {
       });
 
       await this.bot.start();
+      clearTimeout(timeoutId); // 清除超时定时器
+      
       try {
         const info = await this.bot.getSelfInfo();
         this.botInfo = { id: info.id, username: info.username };
@@ -207,13 +237,20 @@ class UserQQConnection {
         serverLogger.info('qq', `Bot 已连接 userId=${this.userId}`);
       }
       this.running = true;
+      this.isReconnecting = false;
       this.reconnectAttempts = 0;
-      this.reconnectDelay = 5000;
+      this.reconnectDelay = 3000;
       this.startHeartbeat();
       return { ok: true };
     } catch (err) {
+      clearTimeout(timeoutId); // 确保清除超时定时器
       const msg = err instanceof Error ? err.message : String(err);
       serverLogger.warn('qq', `连接失败 userId=${this.userId}`, msg);
+      // 如果连接失败，清理资源
+      if (this.bot) {
+        try { void this.bot.stop(); } catch {}
+        this.bot = null;
+      }
       return { ok: false, error: msg };
     }
   }
@@ -300,6 +337,7 @@ class UserQQConnection {
     this.botInfo = null;
     this.savedConfig = null;
     this.reconnectAttempts = 0;
+    this.isReconnecting = false;
   }
 }
 
@@ -376,9 +414,24 @@ export async function reconnectQQForConfiguredUsers(
     const config = parseQQConfig(raw instanceof Promise ? await raw : raw);
     if (!config?.enabled || !config?.appId || !config?.secret) continue;
     const conn = getOrCreateConnection(userId, getConfig);
-    conn.connect(config.appId, config.secret, config.sandbox).then((r) => {
-      if (r.ok) serverLogger.info('qq', `启动时已恢复连接 userId=${userId}`);
-      else serverLogger.warn('qq', `启动时恢复连接失败 userId=${userId}`, r.error);
+    // 添加超时和错误处理，避免启动时卡死
+    const CONNECT_TIMEOUT = 15000; // 15秒超时
+    const timeoutPromise = new Promise<{ ok: false; error: string }>((_, reject) => {
+      setTimeout(() => reject(new Error('连接超时')), CONNECT_TIMEOUT);
     });
+    try {
+      const result = await Promise.race([
+        conn.connect(config.appId, config.secret, config.sandbox),
+        timeoutPromise,
+      ]);
+      if (result.ok) {
+        serverLogger.info('qq', `启动时已恢复连接 userId=${userId}`);
+      } else {
+        serverLogger.warn('qq', `启动时恢复连接失败 userId=${userId}`, result.error);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      serverLogger.warn('qq', `启动时连接失败（${userId}）`, msg);
+    }
   }
 }

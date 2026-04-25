@@ -62,7 +62,7 @@ export function createSkillsRouter(
         return;
       }
       const isOpenClaw = lower.startsWith('openclaw:');
-      const slug = lower.slice(isOpenClaw ? 8 : 8).trim();
+      const slug = lower.slice(isOpenClaw ? 'openclaw:'.length : 'skillhub:'.length).trim();
       if (!slug) {
         res.status(400).json({ error: `${isOpenClaw ? 'openclaw' : 'skillhub'}: 后需填写 slug` });
         return;

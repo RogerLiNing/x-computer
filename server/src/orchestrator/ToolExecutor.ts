@@ -6,6 +6,7 @@ import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
 import type { MiniAppLogStore } from '../miniAppLogStore.js';
 import { callLLM, callLLMWithTools, callLLMGenerateImage, type LLMToolDef } from '../chat/chatService.js';
+import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import { getDiscoveredSkills, getSkillContentByName, deleteSkill } from '../skills/discovery.js';
 import { installFromSkillHub, installFromUrl, searchSkillHub } from '../skills/install.js';
@@ -87,6 +88,67 @@ import {
   createServerTestHandler,
 } from './tools/server/manage.js';
 import { parseAgentIds } from '../utils/agentIds.js';
+import {
+  pageIndexIndexDef,
+  pageIndexSearchDef,
+  pageIndexListDef,
+  pageIndexDeleteDef,
+  createPageIndexHandlers,
+} from './tools/pageindex.js';
+import {
+  boardListDef,
+  boardAddDef,
+  boardUpdateDef,
+  boardRemoveDef,
+  sendEmailDef,
+  sendWhatsAppDef,
+  sendTelegramDef,
+  sendDiscordDef,
+  sendSlackDef,
+  sendQQDef,
+  listEmailConfigsDef,
+  setEmailConfigDef,
+  deleteEmailConfigDef,
+  checkEmailDef,
+  listEmailImapConfigDef,
+  setEmailImapConfigDef,
+  setEmailFromFilterDef,
+  listEmailFromFilterDef,
+  listMcpConfigDef,
+  addMcpServerDef,
+  updateMcpServerDef,
+  removeMcpServerDef,
+  markProactiveReadDef,
+  backendKvSetDef,
+  backendKvGetDef,
+  backendKvDeleteDef,
+  backendKvListDef,
+  backendQueuePushDef,
+  backendQueuePopDef,
+  backendQueueLenDef,
+  backendBroadcastDef,
+  createBoardHandlers,
+} from './tools/board.js';
+import {
+  createAgentDef,
+  listAgentsDef,
+  runAgentDef,
+  updateAgentDef,
+  removeAgentDef,
+  createTeamDef,
+  listTeamsDef,
+  runTeamDef,
+  updateTeamDef,
+  removeTeamDef,
+  createGroupDef,
+  listGroupsDef,
+  addAgentsToGroupDef,
+  removeAgentsFromGroupDef,
+  runGroupDef,
+  updateGroupDef,
+  removeGroupDef,
+  createAgentHandlers,
+} from './tools/agent.js';
 
 /**
  * ToolExecutor — executes individual task steps by dispatching to tool handlers.
@@ -287,7 +349,6 @@ export type RunCustomAgentLoop = (params: {
   userId: string;
 }) => Promise<{ content: string }>;
 
-const X_AGENTS_CONFIG_KEY = 'x_agents';
 const X_MINI_APPS_CONFIG_KEY = 'x_mini_apps';
 const LLM_CONFIG_KEY = 'llm_config';
 const LLM_IMPORTED_MODELS_KEY = 'llm_imported_models';
@@ -389,110 +450,6 @@ function saveMiniApps(setConfig: (userId: string, key: string, value: string) =>
   setConfig(userId, X_MINI_APPS_CONFIG_KEY, JSON.stringify(list));
 }
 
-async function loadAgents(getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>, userId: string): Promise<AgentDefinition[]> {
-  const raw = await resolveGetConfig(getConfig, userId, X_AGENTS_CONFIG_KEY);
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw) as unknown[];
-    return Array.isArray(arr)
-      ? arr.filter((x): x is AgentDefinition => {
-          if (!x || typeof x !== 'object') return false;
-          const a = x as Record<string, unknown>;
-          return typeof a.id === 'string';
-        })
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveAgents(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: AgentDefinition[]): void {
-  setConfig(userId, X_AGENTS_CONFIG_KEY, JSON.stringify(list));
-}
-
-const X_AGENT_TEAMS_CONFIG_KEY = 'x_agent_teams';
-
-async function loadTeams(getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>, userId: string): Promise<AgentTeam[]> {
-  const raw = await resolveGetConfig(getConfig, userId, X_AGENT_TEAMS_CONFIG_KEY);
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw) as unknown[];
-    return Array.isArray(arr)
-      ? arr.filter((x): x is AgentTeam => {
-          if (!x || typeof x !== 'object') return false;
-          const t = x as Record<string, unknown>;
-          return typeof t.id === 'string' && typeof t.name === 'string' && Array.isArray(t.agentIds);
-        })
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveTeams(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: AgentTeam[]): void {
-  setConfig(userId, X_AGENT_TEAMS_CONFIG_KEY, JSON.stringify(list));
-}
-
-const X_AGENT_GROUPS_CONFIG_KEY = 'x_agent_groups';
-const X_GROUP_RUN_HISTORY_KEY = 'x_group_run_history';
-const MAX_GROUP_RUN_HISTORY = 50;
-
-export interface GroupRunRecord {
-  id: string;
-  groupId: string;
-  groupName: string;
-  goal: string;
-  results: Array<{ agentId: string; agentName: string; content: string }>;
-  cancelled?: boolean;
-  createdAt: number;
-}
-
-async function loadGroups(getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>, userId: string): Promise<AgentGroup[]> {
-  const raw = await resolveGetConfig(getConfig, userId, X_AGENT_GROUPS_CONFIG_KEY);
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw) as unknown[];
-    return Array.isArray(arr)
-      ? arr.filter((x): x is AgentGroup => {
-          if (!x || typeof x !== 'object') return false;
-          const g = x as Record<string, unknown>;
-          return typeof g.id === 'string' && typeof g.name === 'string' && Array.isArray(g.agentIds);
-        })
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveGroups(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: AgentGroup[]): void {
-  setConfig(userId, X_AGENT_GROUPS_CONFIG_KEY, JSON.stringify(list));
-}
-
-async function appendGroupRunHistory(
-  getConfig: ExecutionContext['getConfig'],
-  setConfig: ExecutionContext['setConfig'],
-  userId: string,
-  record: Omit<GroupRunRecord, 'id' | 'createdAt'>,
-): Promise<void> {
-  if (!getConfig || !setConfig) return;
-  const raw = await getConfigValue(getConfig, userId, X_GROUP_RUN_HISTORY_KEY);
-  let list: GroupRunRecord[];
-  try {
-    const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
-    list = Array.isArray(arr) ? arr.filter((x): x is GroupRunRecord => Boolean(x && typeof x === 'object' && typeof (x as GroupRunRecord).createdAt === 'number')) : [];
-  } catch {
-    list = [];
-  }
-  const full: GroupRunRecord = {
-    ...record,
-    id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt: Date.now(),
-  };
-  list.unshift(full);
-  list = list.slice(0, MAX_GROUP_RUN_HISTORY);
-  const setResult = setConfig(userId, X_GROUP_RUN_HISTORY_KEY, JSON.stringify(list));
-  if (setResult instanceof Promise) await setResult;
-}
 
 export class ToolExecutor {
   private tools = new Map<string, ToolHandler>();
@@ -743,6 +700,74 @@ export class ToolExecutor {
   // ── Built-in Tools ───────────────────────────────────────
 
   private registerBuiltinTools() {
+    // PageIndex 工具（提取到独立模块）
+    const { indexHandler, searchHandler, listHandler, deleteHandler } = createPageIndexHandlers({
+      resolveFS: this.resolveFS.bind(this),
+    });
+    this.register(pageIndexIndexDef as any, indexHandler);
+    this.register(pageIndexSearchDef as any, searchHandler);
+    this.register(pageIndexListDef as any, listHandler);
+    this.register(pageIndexDeleteDef as any, deleteHandler);
+
+    // Board、通知、MCP、MiniApp 后端
+    const boardHandlers = createBoardHandlers({
+      resolveDB: () => this.db ?? null,
+      resolveFS: this.resolveFS.bind(this),
+    });
+    this.register(boardListDef as any, boardHandlers.boardListHandler);
+    this.register(boardAddDef as any, boardHandlers.boardAddHandler);
+    this.register(boardUpdateDef as any, boardHandlers.boardUpdateHandler);
+    this.register(boardRemoveDef as any, boardHandlers.boardRemoveHandler);
+    this.register(sendEmailDef as any, boardHandlers.sendEmailHandler);
+    this.register(sendWhatsAppDef as any, boardHandlers.sendWhatsAppHandler);
+    this.register(sendTelegramDef as any, boardHandlers.sendTelegramHandler);
+    this.register(sendDiscordDef as any, boardHandlers.sendDiscordHandler);
+    this.register(sendSlackDef as any, boardHandlers.sendSlackHandler);
+    this.register(sendQQDef as any, boardHandlers.sendQQHandler);
+    this.register(listEmailConfigsDef as any, boardHandlers.listEmailConfigsHandler);
+    this.register(setEmailConfigDef as any, boardHandlers.setEmailConfigHandler);
+    this.register(deleteEmailConfigDef as any, boardHandlers.deleteEmailConfigHandler);
+    this.register(checkEmailDef as any, boardHandlers.checkEmailHandler);
+    this.register(listEmailImapConfigDef as any, boardHandlers.listEmailImapConfigHandler);
+    this.register(setEmailImapConfigDef as any, boardHandlers.setEmailImapConfigHandler);
+    this.register(setEmailFromFilterDef as any, boardHandlers.setEmailFromFilterHandler);
+    this.register(listEmailFromFilterDef as any, boardHandlers.listEmailFromFilterHandler);
+    this.register(listMcpConfigDef as any, boardHandlers.listMcpConfigHandler);
+    this.register(addMcpServerDef as any, boardHandlers.addMcpServerHandler);
+    this.register(updateMcpServerDef as any, boardHandlers.updateMcpServerHandler);
+    this.register(removeMcpServerDef as any, boardHandlers.removeMcpServerHandler);
+    this.register(markProactiveReadDef as any, boardHandlers.markProactiveReadHandler);
+    this.register(backendKvSetDef as any, boardHandlers.backendKvSetHandler);
+    this.register(backendKvGetDef as any, boardHandlers.backendKvGetHandler);
+    this.register(backendKvDeleteDef as any, boardHandlers.backendKvDeleteHandler);
+    this.register(backendKvListDef as any, boardHandlers.backendKvListHandler);
+    this.register(backendQueuePushDef as any, boardHandlers.backendQueuePushHandler);
+    this.register(backendQueuePopDef as any, boardHandlers.backendQueuePopHandler);
+    this.register(backendQueueLenDef as any, boardHandlers.backendQueueLenHandler);
+    this.register(backendBroadcastDef as any, boardHandlers.backendBroadcastHandler);
+
+    // Agent 管理（智能体 CRUD / 团队 / 群组）
+    const agentHandlers = createAgentHandlers({
+      resolveRunCustomAgentLoop: () => this.runCustomAgentLoop,
+    });
+    this.register(createAgentDef as any, agentHandlers.createAgentHandler);
+    this.register(listAgentsDef as any, agentHandlers.listAgentsHandler);
+    this.register(runAgentDef as any, agentHandlers.runAgentHandler);
+    this.register(updateAgentDef as any, agentHandlers.updateAgentHandler);
+    this.register(removeAgentDef as any, agentHandlers.removeAgentHandler);
+    this.register(createTeamDef as any, agentHandlers.createTeamHandler);
+    this.register(listTeamsDef as any, agentHandlers.listTeamsHandler);
+    this.register(runTeamDef as any, agentHandlers.runTeamHandler);
+    this.register(updateTeamDef as any, agentHandlers.updateTeamHandler);
+    this.register(removeTeamDef as any, agentHandlers.removeTeamHandler);
+    this.register(createGroupDef as any, agentHandlers.createGroupHandler);
+    this.register(listGroupsDef as any, agentHandlers.listGroupsHandler);
+    this.register(addAgentsToGroupDef as any, agentHandlers.addAgentsToGroupHandler);
+    this.register(removeAgentsFromGroupDef as any, agentHandlers.removeAgentsFromGroupHandler);
+    this.register(runGroupDef as any, agentHandlers.runGroupHandler);
+    this.register(updateGroupDef as any, agentHandlers.updateGroupHandler);
+    this.register(removeGroupDef as any, agentHandlers.removeGroupHandler);
+
     // 按需加载模式下的元工具：搜索与加载工具（减少系统提示 token）
     this.register(
       {
@@ -1963,6 +1988,7 @@ export class ToolExecutor {
         const raw = (input?.source as string)?.trim() || (input?.name as string)?.trim();
         if (!raw) throw new Error('skill.install: source 必填，格式如 skillhub:openclaw/skills/serpapi');
         const skillIndex = typeof input?.skill_index === 'number' ? Math.max(0, Math.floor(input.skill_index)) : 0;
+        const skillName = raw.includes('/') ? raw.split('/').pop() || raw : raw;
 
         if (raw.toLowerCase().startsWith('skillhub:')) {
           const slug = raw.slice(8).trim();
@@ -1977,7 +2003,27 @@ export class ToolExecutor {
               dirName: result.dirName,
             };
           }
-          return { text: result.message, isError: true, skillName: result.skillName };
+          // 安装失败，提供手动安装指引
+          const manualInstallGuide = `
+❌ Skill 安装失败：${result.message}
+
+### 📦 手动安装方法
+
+**方法 1：使用 Claude Code CLI**
+\`\`\`bash
+npx skills add https://github.com/op7418/${skillName}.git
+# 或
+git clone https://github.com/op7418/${skillName}.git ~/.claude/skills/${skillName.toLowerCase()}
+\`\`\`
+
+**方法 2：手动安装**
+\`\`\`bash
+cd ~/.claude/skills
+git clone https://github.com/op7418/${skillName}.git
+\`\`\`
+
+安装后可调用 \`skill.load(name: "${result.skillName}")\` 加载。`;
+          return { text: manualInstallGuide, isError: true, skillName: result.skillName };
         }
 
         if (raw.toLowerCase().startsWith('openclaw:')) {
@@ -1994,7 +2040,18 @@ export class ToolExecutor {
               dirName: result.dirName,
             };
           }
-          return { text: result.message, isError: true, skillName: result.skillName };
+          const manualInstallGuide = `
+❌ Skill 安装失败：${result.message}
+
+### 📦 手动安装方法
+
+\`\`\`bash
+cd ~/.claude/skills
+git clone https://github.com/${slug}.git
+\`\`\`
+
+安装后可调用 \`skill.load(name: "${result.skillName}")\` 加载。`;
+          return { text: manualInstallGuide, isError: true, skillName: result.skillName };
         }
 
         if (raw.toLowerCase().startsWith('url:')) {
@@ -2010,7 +2067,20 @@ export class ToolExecutor {
               dirName: result.dirName,
             };
           }
-          return { text: result.message, isError: true, skillName: result.skillName };
+          const manualInstallGuide = `
+❌ Skill 安装失败：${result.message}
+
+### 📦 手动安装方法
+
+Skill 通常托管在 GitHub，请访问项目页面获取安装说明，或手动克隆：
+
+\`\`\`bash
+cd ~/.claude/skills
+git clone <repository-url>
+\`\`\`
+
+安装后可调用 \`skill.load(name: "${result.skillName}")\` 加载。`;
+          return { text: manualInstallGuide, isError: true, skillName: result.skillName };
         }
 
         // 没有前缀时，尝试作为 skillhub slug 安装（自动添加前缀）
@@ -2023,7 +2093,28 @@ export class ToolExecutor {
               dirName: result.dirName,
             };
           }
-          return { text: result.message, isError: true, skillName: result.skillName };
+          // 安装失败，提供手动安装指引
+          const hostname = raw.includes('/') ? `github.com/${raw.split('/').slice(0, 2).join('/')}` : 'github.com';
+          const manualInstallGuide = `
+❌ Skill 安装失败：${result.message}
+
+### 📦 手动安装方法
+
+**方法 1：使用 Claude Code CLI**
+\`\`\`bash
+npx skills add https://${hostname}/${skillName}.git
+# 或
+git clone https://${hostname}/${skillName}.git ~/.claude/skills/${skillName.toLowerCase()}
+\`\`\`
+
+**方法 2：手动安装**
+\`\`\`bash
+cd ~/.claude/skills
+git clone https://${hostname}/${skillName}.git
+\`\`\`
+
+安装后可调用 \`skill.load(name: "${result.skillName}")\` 加载。`;
+          return { text: manualInstallGuide, isError: true, skillName: result.skillName };
         }
 
         return {
@@ -2586,1115 +2677,6 @@ export class ToolExecutor {
       },
     );
 
-    // ── X Board（任务看板）：X 自主管理的待办/进行中/待定/已完成看板 ──
-
-    const VALID_BOARD_STATUSES = ['todo', 'in_progress', 'pending', 'done'];
-    const VALID_BOARD_PRIORITIES = ['low', 'medium', 'high'];
-
-    this.register(
-      {
-        name: 'x.board_list',
-        displayName: '查看看板',
-        description: '列出当前看板中的所有任务项，按状态分栏（todo/in_progress/pending/done）。可用于了解当前工作安排、决定下一步。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'status', type: 'string', description: '筛选状态（todo/in_progress/pending/done），不传返回全部', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-        if (!this.db) throw new Error('数据库不可用');
-        const items = await Promise.resolve(this.db.listBoardItems(userId));
-        const statusFilter = typeof _input.status === 'string' && VALID_BOARD_STATUSES.includes(_input.status) ? _input.status : null;
-        const filtered = statusFilter ? items.filter((i) => i.status === statusFilter) : items;
-        return { items: filtered, total: items.length };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.board_add',
-        displayName: '添加看板项',
-        description: '向看板添加新任务项。status: todo（待做）、in_progress（进行中）、pending（等待/阻塞）、done（已完成）。priority: low/medium/high。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'title', type: 'string', description: '任务标题', required: true },
-          { name: 'description', type: 'string', description: '任务描述', required: false },
-          { name: 'status', type: 'string', description: '初始状态，默认 todo', required: false },
-          { name: 'priority', type: 'string', description: '优先级，默认 medium', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-        if (!this.db) throw new Error('数据库不可用');
-        const title = String(input.title ?? '').trim();
-        if (!title) throw new Error('title 必填');
-        const status = VALID_BOARD_STATUSES.includes(String(input.status)) ? String(input.status) : 'todo';
-        const priority = VALID_BOARD_PRIORITIES.includes(String(input.priority)) ? String(input.priority) : 'medium';
-        const id = uuid();
-        await Promise.resolve(this.db.insertBoardItem({ id, user_id: userId, title, description: input.description ? String(input.description).trim() : undefined, status, priority }));
-        return { ok: true, id, title, status, priority };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.board_update',
-        displayName: '更新看板项',
-        description: '更新看板项的状态、标题、描述或优先级。常用于把任务从 todo 移到 in_progress，或标记为 done。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'id', type: 'string', description: '看板项 ID', required: true },
-          { name: 'title', type: 'string', description: '新标题', required: false },
-          { name: 'description', type: 'string', description: '新描述', required: false },
-          { name: 'status', type: 'string', description: '新状态（todo/in_progress/pending/done）', required: false },
-          { name: 'priority', type: 'string', description: '新优先级（low/medium/high）', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-        if (!this.db) throw new Error('数据库不可用');
-        const id = String(input.id ?? '').trim();
-        if (!id) throw new Error('id 必填');
-        const existing = await Promise.resolve(this.db.getBoardItem(id));
-        if (!existing || existing.user_id !== userId) throw new Error('未找到该看板项');
-        const fields: Record<string, unknown> = {};
-        if (input.title !== undefined) fields.title = String(input.title).trim();
-        if (input.description !== undefined) fields.description = String(input.description).trim();
-        if (input.status !== undefined && VALID_BOARD_STATUSES.includes(String(input.status))) fields.status = String(input.status);
-        if (input.priority !== undefined && VALID_BOARD_PRIORITIES.includes(String(input.priority))) fields.priority = String(input.priority);
-        await Promise.resolve(this.db.updateBoardItem(id, fields));
-        return { ok: true, id, updated: fields };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.board_remove',
-        displayName: '移除看板项',
-        description: '从看板中删除一个任务项。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'id', type: 'string', description: '看板项 ID', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-        if (!this.db) throw new Error('数据库不可用');
-        const id = String(input.id ?? '').trim();
-        if (!id) throw new Error('id 必填');
-        const existing = await Promise.resolve(this.db.getBoardItem(id));
-        if (!existing || existing.user_id !== userId) throw new Error('未找到该看板项');
-        await Promise.resolve(this.db.deleteBoardItem(id));
-        return { ok: true, removed: id };
-      },
-    );
-
-    // 邮件通知：配置 SMTP 后可通过邮件触达用户（用户不在线时）
-    this.register(
-      {
-        name: 'x.send_email',
-        displayName: '发送邮件',
-        description:
-          '通过邮件触达用户。需先配置 SMTP（x.set_email_config 或 设置 → 通知/邮件）。to 不填时默认发给当前登录用户；subject、body 必填。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'to', type: 'string', description: '收件人邮箱；不填时发给当前登录用户', required: false },
-          { name: 'subject', type: 'string', description: '邮件主题', required: true },
-          { name: 'body', type: 'string', description: '正文内容（Markdown），将转成 HTML 富文本发送', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.send_email: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.send_email: 配置不可用');
-        let to = typeof input.to === 'string' ? input.to.trim() : '';
-        if (!to && this.db) {
-          to = (await this.db.getEmailByUserId(userId)) ?? '';
-        }
-        const subject = String(input.subject ?? '').trim();
-        const body = String(input.body ?? '').trim();
-        if (!subject || !body) throw new Error('x.send_email: subject 与 body 必填');
-        if (!to) throw new Error('x.send_email: 未指定收件人且当前用户无绑定邮箱，请传入 to 参数');
-        const result = await sendEmail(getConfig, userId, { to, subject, body });
-        if (!result.ok) throw new Error(result.error ?? '发送失败');
-        return { ok: true, messageId: result.messageId, message: '邮件已发送' };
-      },
-    );
-
-    // WhatsApp 通知（R052）：需先扫码登录，配置 allowFrom 白名单
-    this.register(
-      {
-        name: 'x.send_whatsapp',
-        displayName: '发送 WhatsApp',
-        description:
-          '通过 WhatsApp 发送消息。需先在 设置 → 通知/WhatsApp 中扫码登录并配置白名单。to 为收件人号码（E.164 格式，如 +8613800138000 或 13800138000）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'to', type: 'string', description: '收件人号码，E.164 格式（如 +8613800138000）', required: true },
-          { name: 'message', type: 'string', description: '消息内容', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.send_whatsapp: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.send_whatsapp: 配置不可用');
-        const to = String(input.to ?? '').trim();
-        const message = String(input.message ?? input.content ?? '').trim();
-        if (!to || !message) throw new Error('x.send_whatsapp: to 与 message 必填');
-        const config = parseWhatsAppConfig(await getConfigValue(getConfig, userId, 'whatsapp_config'));
-        if (!config?.enabled) throw new Error('x.send_whatsapp: 未启用 WhatsApp，请在 设置 → 通知/WhatsApp 中配置并扫码登录');
-        const result = await sendWhatsAppMessage(getConfig, userId, to, message);
-        if (!result.ok) throw new Error(result.error ?? '发送失败');
-        return { ok: true, message: 'WhatsApp 消息已发送' };
-      },
-    );
-
-    // Telegram 通知
-    this.register(
-      {
-        name: 'x.send_telegram',
-        displayName: '发送 Telegram',
-        description: '通过 Telegram Bot 发送消息。需先在 设置 → 通知/Telegram 中配置 Bot Token 并连接。chatId 为接收者的 Chat ID。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'chatId', type: 'string', description: '目标 Chat ID', required: true },
-          { name: 'message', type: 'string', description: '消息内容', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.send_telegram: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.send_telegram: 配置不可用');
-        const chatId = String(input.chatId ?? '').trim();
-        const message = String(input.message ?? input.content ?? '').trim();
-        if (!chatId || !message) throw new Error('x.send_telegram: chatId 与 message 必填');
-        const config = parseTelegramConfig(await getConfigValue(getConfig, userId, 'telegram_config'));
-        if (!config?.enabled) throw new Error('x.send_telegram: 未启用 Telegram，请在设置中配置');
-        const result = await sendTelegramMessage(getConfig, userId, chatId, message);
-        if (!result.ok) throw new Error(result.error ?? '发送失败');
-        return { ok: true, message: 'Telegram 消息已发送' };
-      },
-    );
-
-    // Discord 通知
-    this.register(
-      {
-        name: 'x.send_discord',
-        displayName: '发送 Discord',
-        description: '通过 Discord Bot 发送消息。需先在 设置 → 通知/Discord 中配置 Bot Token 并连接。channelId 为目标频道或 DM 的 Channel ID。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'channelId', type: 'string', description: '目标 Channel ID', required: true },
-          { name: 'message', type: 'string', description: '消息内容', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.send_discord: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.send_discord: 配置不可用');
-        const channelId = String(input.channelId ?? '').trim();
-        const message = String(input.message ?? input.content ?? '').trim();
-        if (!channelId || !message) throw new Error('x.send_discord: channelId 与 message 必填');
-        const config = parseDiscordConfig(await getConfigValue(getConfig, userId, 'discord_config'));
-        if (!config?.enabled) throw new Error('x.send_discord: 未启用 Discord，请在设置中配置');
-        const result = await sendDiscordMessage(getConfig, userId, channelId, message);
-        if (!result.ok) throw new Error(result.error ?? '发送失败');
-        return { ok: true, message: 'Discord 消息已发送' };
-      },
-    );
-
-    // Slack 通知
-    this.register(
-      {
-        name: 'x.send_slack',
-        displayName: '发送 Slack',
-        description: '通过 Slack Bot 发送消息。需先在 设置 → 通知/Slack 中配置 Token 并连接。channelId 为频道或 DM 的 Channel ID，可选 threadTs 进行线程回复。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'channelId', type: 'string', description: '目标 Channel ID', required: true },
-          { name: 'message', type: 'string', description: '消息内容', required: true },
-          { name: 'threadTs', type: 'string', description: '（可选）线程 ts，回复到特定线程', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.send_slack: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.send_slack: 配置不可用');
-        const channelId = String(input.channelId ?? '').trim();
-        const message = String(input.message ?? input.content ?? '').trim();
-        const threadTs = input.threadTs ? String(input.threadTs).trim() : undefined;
-        if (!channelId || !message) throw new Error('x.send_slack: channelId 与 message 必填');
-        const config = parseSlackConfig(await getConfigValue(getConfig, userId, 'slack_config'));
-        if (!config?.enabled) throw new Error('x.send_slack: 未启用 Slack，请在设置中配置');
-        const result = await sendSlackMessage(getConfig, userId, channelId, message, threadTs);
-        if (!result.ok) throw new Error(result.error ?? '发送失败');
-        return { ok: true, message: 'Slack 消息已发送' };
-      },
-    );
-
-    // QQ 通知
-    this.register(
-      {
-        name: 'x.send_qq',
-        displayName: '发送 QQ 消息',
-        description: '通过 QQ 官方 Bot 发送消息。需先在 设置 → 通知/QQ 中配置 AppID+Secret 并连接。targetType 为 private/group/guild 或 self（发给自己）。targetId 为对应的用户ID/群ID/频道ID。使用 self 时会自动使用用户已记录的 OpenID（用户首次私聊时会自动记录）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'targetType', type: 'string', description: '消息目标类型：private（私聊）、group（群聊）、guild（频道）或 self（发给自己）', required: true },
-          { name: 'targetId', type: 'string', description: '目标 ID（用户 openid、群 openid 或频道 channel_id）。当 targetType 为 self 时此参数可选', required: false },
-          { name: 'message', type: 'string', description: '消息内容', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.send_qq: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig) throw new Error('x.send_qq: 配置不可用');
-        let targetTypeRaw = String(input.targetType ?? '').trim();
-        let targetId = String(input.targetId ?? '').trim();
-        const message = String(input.message ?? input.content ?? '').trim();
-
-        // 支持 targetType 为 "self"，表示发送给用户自己（使用已记录的 OpenID）
-        let targetType: 'private' | 'group' | 'guild' = 'private';
-        if (targetTypeRaw === 'self') {
-          // 获取用户之前记录的 OpenID
-          const selfOpenid = await getConfigValue(getConfig, userId, 'qq_self_openid');
-          if (!selfOpenid) {
-            throw new Error('x.send_qq: 尚未记录您的 QQ OpenID。请先通过 QQ 私聊发送一条消息，系统会自动记录。');
-          }
-          targetId = selfOpenid;
-          targetType = 'private';
-        } else {
-          targetType = targetTypeRaw as 'private' | 'group' | 'guild';
-          if (!targetType || !targetId || !message) throw new Error('x.send_qq: targetType、targetId、message 必填');
-          if (!['private', 'group', 'guild'].includes(targetType)) throw new Error('x.send_qq: targetType 必须为 private、group、guild 或 self');
-        }
-
-        if (!targetId || !message) throw new Error('x.send_qq: targetId 和 message 必填');
-
-        // 智能修正 targetId：如果 AI 错误地传了 "user" 或空字符串，尝试从上下文获取正确的发送者 ID
-        if (!targetId || targetId === 'user' || targetId === 'chat') {
-          // 从当前任务的 metadata 中获取原始消息的 fromId（发送者的 QQ openid）
-          const taskMetadata = ctx?.taskMetadata as { sourceMessage?: { fromId?: string; chatId?: string } } | undefined;
-          if (taskMetadata?.sourceMessage?.fromId) {
-            targetId = taskMetadata.sourceMessage.fromId;
-          } else if (targetTypeRaw !== 'self') {
-            throw new Error('x.send_qq: targetId 无效。请确保使用发送者的 QQ ID（openid）作为 targetId，或使用 targetType:"self" 发送给用户自己。');
-          }
-        }
-
-        const config = parseQQConfig(await getConfigValue(getConfig, userId, 'qq_config'));
-        if (!config?.enabled) throw new Error('x.send_qq: 未启用 QQ，请在设置中配置');
-        const result = await sendQQMessage(getConfig, userId, { type: targetType, id: targetId }, message);
-        if (!result.ok) throw new Error(result.error ?? '发送失败');
-        return { ok: true, message: 'QQ 消息已发送' };
-      },
-    );
-
-    // 邮箱配置管理：X 可新增、更新、删除 SMTP 配置
-    const EMAIL_SMTP_CONFIG_KEY = 'email_smtp_config';
-
-    this.register(
-      {
-        name: 'x.list_email_configs',
-        displayName: '列出邮箱配置',
-        description: '查看当前 SMTP 配置（host、port、user 等），密码以 *** 脱敏。未配置时返回 configured: false。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.list_email_configs: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.list_email_configs: 配置不可用');
-        const config = parseSmtpConfigExport(await getConfigValue(getConfig, userId, EMAIL_SMTP_CONFIG_KEY));
-        if (!config) return { configured: false, message: '未配置 SMTP' };
-        return {
-          configured: true,
-          host: config.host,
-          port: config.port,
-          secure: config.secure,
-          user: config.user,
-          pass: config.pass ? '***' : undefined,
-          from: config.from,
-        };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.set_email_config',
-        displayName: '新增或更新邮箱配置',
-        description:
-          '新增或覆盖 SMTP 配置。host（如 smtp.qq.com）、port（465 或 587）、user（邮箱）、pass（授权码）必填；secure 默认 true；from 可选。QQ 邮箱需在账户中生成授权码。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'host', type: 'string', description: 'SMTP 服务器，如 smtp.qq.com', required: true },
-          { name: 'port', type: 'number', description: '端口，465（SSL）或 587（TLS）', required: true },
-          { name: 'secure', type: 'boolean', description: '是否使用 SSL，465 一般为 true', required: false },
-          { name: 'user', type: 'string', description: '发件邮箱，如 xxx@qq.com', required: true },
-          { name: 'pass', type: 'string', description: '授权码（QQ 邮箱为 SMTP 授权码）', required: true },
-          { name: 'from', type: 'string', description: '发件人显示名，如 X Computer <xxx@qq.com>', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.set_email_config: 需要已登录用户');
-        const setConfig = ctx?.setConfig;
-        if (!setConfig) throw new Error('x.set_email_config: 配置不可用');
-        const host = String(input.host ?? '').trim();
-        const port = Number(input.port);
-        const user = String(input.user ?? '').trim();
-        const pass = String(input.pass ?? '').trim();
-        if (!host || !user || !pass) throw new Error('x.set_email_config: host、user、pass 必填');
-        if (!Number.isFinite(port) || port <= 0 || port > 65535) throw new Error('x.set_email_config: port 须为 1–65535');
-        const secure = input.secure !== false;
-        const from = typeof input.from === 'string' ? input.from.trim() : undefined;
-        const config = { host, port, secure, user, pass, ...(from ? { from } : {}) };
-        const setResult = setConfig(userId, EMAIL_SMTP_CONFIG_KEY, JSON.stringify(config));
-        if (setResult instanceof Promise) await setResult;
-        clearEmailTransporterCache();
-        return { ok: true, message: '邮箱配置已保存，可使用 x.send_email 发信' };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.delete_email_config',
-        displayName: '删除邮箱配置',
-        description: '删除当前 SMTP 配置，删除后将无法使用 x.send_email。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.delete_email_config: 需要已登录用户');
-        const setConfig = ctx?.setConfig;
-        const getConfig = ctx?.getConfig;
-        if (!setConfig || !getConfig) throw new Error('x.delete_email_config: 配置不可用');
-        const config = parseSmtpConfigExport(await getConfigValue(getConfig, userId, EMAIL_SMTP_CONFIG_KEY));
-        if (!config) return { ok: true, message: '当前未配置邮箱' };
-        const setResult = setConfig(userId, EMAIL_SMTP_CONFIG_KEY, '{}');
-        if (setResult instanceof Promise) await setResult;
-        clearEmailTransporterCache();
-        return { ok: true, message: '邮箱配置已删除' };
-      },
-    );
-
-    // IMAP 收信（R042 邮件渠道双向通信）：x.check_email 拉取收件箱，收到回复后 X 可处理并用 x.send_email 回复
-    const EMAIL_IMAP_CONFIG_KEY = 'email_imap_config';
-
-    this.register(
-      {
-        name: 'x.check_email',
-        displayName: '检查收件箱',
-        description:
-          '从 IMAP 收件箱拉取邮件。from_user_only 为 true 时仅拉取当前用户发来的邮件（用于用户通过邮箱与 X 沟通）。limit 默认 10；unseen_only 为 true 时仅拉未读。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'limit', type: 'number', description: '拉取数量，默认 10，最多 50', required: false },
-          { name: 'unseen_only', type: 'boolean', description: '仅拉取未读邮件', required: false },
-          { name: 'from_user_only', type: 'boolean', description: '仅拉取当前用户发来的邮件', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.check_email: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.check_email: 配置不可用');
-        const limit = typeof input.limit === 'number' ? Math.min(50, Math.max(1, input.limit)) : 10;
-        const unseenOnly = input.unseen_only === true;
-        const fromUserOnly = input.from_user_only === true;
-        let fromFilter: string | undefined;
-        if (fromUserOnly && this.db) {
-          fromFilter = (await this.db.getEmailByUserId(userId)) ?? undefined;
-          if (!fromFilter) throw new Error('x.check_email: from_user_only 需要当前用户已绑定邮箱');
-        }
-        const result = await fetchEmails(getConfig, userId, { limit, unseenOnly, fromFilter });
-        if (!result.ok) throw new Error(result.error ?? '收信失败');
-        return { ok: true, emails: result.emails ?? [], count: (result.emails ?? []).length };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.list_email_imap_config',
-        displayName: '列出 IMAP 配置',
-        description: '查看当前 IMAP 收信配置（host、port、user），密码脱敏。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.list_email_imap_config: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.list_email_imap_config: 配置不可用');
-        const config = parseImapConfig(await getConfigValue(getConfig, userId, EMAIL_IMAP_CONFIG_KEY));
-        if (!config) return { configured: false, message: '未配置 IMAP 收信' };
-        return {
-          configured: true,
-          host: config.host,
-          port: config.port,
-          secure: config.secure,
-          user: config.user,
-          pass: config.pass ? '***' : undefined,
-        };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.set_email_imap_config',
-        displayName: '新增或更新 IMAP 配置',
-        description:
-          '配置 IMAP 收信。host（如 imap.qq.com）、port（993）、user、pass 必填。QQ 邮箱 user/pass 可与 SMTP 相同。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'host', type: 'string', description: 'IMAP 服务器，如 imap.qq.com', required: true },
-          { name: 'port', type: 'number', description: '端口，通常 993', required: true },
-          { name: 'secure', type: 'boolean', description: '是否 SSL', required: false },
-          { name: 'user', type: 'string', description: '邮箱账号', required: true },
-          { name: 'pass', type: 'string', description: '授权码', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.set_email_imap_config: 需要已登录用户');
-        const setConfig = ctx?.setConfig;
-        if (!setConfig) throw new Error('x.set_email_imap_config: 配置不可用');
-        const host = String(input.host ?? '').trim();
-        const port = Number(input.port);
-        const user = String(input.user ?? '').trim();
-        const pass = String(input.pass ?? '').trim();
-        if (!host || !user || !pass) throw new Error('x.set_email_imap_config: host、user、pass 必填');
-        if (!Number.isFinite(port) || port <= 0 || port > 65535) throw new Error('x.set_email_imap_config: port 须为 1–65535');
-        const secure = input.secure !== false;
-        const config = { host, port, secure, user, pass };
-        setConfig(userId, EMAIL_IMAP_CONFIG_KEY, JSON.stringify(config));
-        return { ok: true, message: 'IMAP 配置已保存，可使用 x.check_email 收信' };
-      },
-    );
-
-    const EMAIL_FROM_FILTER_KEY = 'email_from_filter';
-    this.register(
-      {
-        name: 'x.set_email_from_filter',
-        displayName: '设置邮件发件人过滤',
-        description:
-          '设置只处理来自指定发件人的新邮件。传入 emails 数组（如 ["user@gmail.com"]），未配置则处理所有。用于「只监听来自某邮箱的邮件」场景。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'emails', type: 'string', description: '发件人邮箱列表，逗号分隔或 JSON 数组', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.set_email_from_filter: 需要已登录用户');
-        const setConfig = ctx?.setConfig;
-        if (!setConfig) throw new Error('x.set_email_from_filter: 配置不可用');
-        const raw = String(input.emails ?? '').trim();
-        if (!raw) {
-          setConfig(userId, EMAIL_FROM_FILTER_KEY, '');
-          return { ok: true, message: '已清除发件人过滤，将处理所有新邮件' };
-        }
-        let arr: string[];
-        if (raw.startsWith('[')) {
-          try {
-            arr = JSON.parse(raw) as string[];
-            if (!Array.isArray(arr)) arr = [raw];
-          } catch {
-            arr = raw.split(',').map((e) => e.trim()).filter(Boolean);
-          }
-        } else {
-          arr = raw.split(',').map((e) => e.trim()).filter(Boolean);
-        }
-        setConfig(userId, EMAIL_FROM_FILTER_KEY, JSON.stringify(arr));
-        return { ok: true, message: `已设置发件人过滤：${arr.join(', ')}，仅这些地址的来信会触发回复` };
-      },
-    );
-    this.register(
-      {
-        name: 'x.list_email_from_filter',
-        displayName: '查看邮件发件人过滤',
-        description: '查看当前发件人过滤配置。若已配置，仅来自这些邮箱的新邮件会触发 email_received。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.list_email_from_filter: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.list_email_from_filter: 配置不可用');
-        const raw = await getConfigValue(getConfig, userId, EMAIL_FROM_FILTER_KEY);
-        if (!raw?.trim()) return { emails: [], message: '未设置过滤，处理所有新邮件' };
-        try {
-          const arr = JSON.parse(raw) as unknown[];
-          const emails = Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : raw.split(',').map((e) => e.trim()).filter(Boolean);
-          return { emails, message: emails.length ? `仅处理来自 ${emails.join(', ')} 的邮件` : '未设置过滤' };
-        } catch {
-          return { emails: raw.split(',').map((e) => e.trim()).filter(Boolean), message: '' };
-        }
-      },
-    );
-
-    // ── MCP 配置管理：X 可查看、添加、修改、删除 MCP 服务器 ─────────────────────────────
-    const MCP_CONFIG_KEY = 'mcp_config';
-
-    this.register(
-      {
-        name: 'x.list_mcp_config',
-        displayName: '列出 MCP 配置',
-        description: '查看当前 MCP 服务器列表（id、name、url 或 command+args、工具数）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.list_mcp_config: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) throw new Error('x.list_mcp_config: 配置不可用');
-        const raw = await getConfigValue(getConfig, userId, MCP_CONFIG_KEY);
-        const servers = raw?.trim()
-          ? normalizeMcpConfig(
-              (() => {
-                try {
-                  const p = JSON.parse(raw) as unknown;
-                  return Array.isArray(p) ? { servers: p } : (typeof p === 'object' && p !== null ? p : {});
-                } catch {
-                  return {};
-                }
-              })(),
-            )
-          : [];
-        return {
-          servers: servers.map((s) => ({
-            id: s.id,
-            name: s.name ?? s.id,
-            url: s.url,
-            command: s.command,
-            args: s.args,
-          })),
-          count: servers.length,
-        };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.add_mcp_server',
-        displayName: '添加 MCP 服务器',
-        description:
-          '添加一个 MCP 服务器。方式一：传 id、url（HTTP）或 id、command、args（Stdio），可选 name、headers。方式二：传 config（JSON），格式为 {"serverId":{"url":"...","headers":{...}} } 或 {"serverId":{"type":"streamableHttp","url":"...","headers":{...}} }，从 config 中解析 id、url、headers。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'id', type: 'string', description: '唯一标识；若传 config 则可省略（从 config 的 key 提取）', required: false },
-          { name: 'config', type: 'string', description: '可选。完整配置 JSON，如 {"metaso":{"url":"https://...","headers":{"Authorization":"Bearer xxx"}}}', required: false },
-          { name: 'name', type: 'string', description: '显示名称', required: false },
-          { name: 'url', type: 'string', description: 'HTTP 传输：JSON-RPC 端点 URL', required: false },
-          { name: 'headers', type: 'string', description: 'HTTP 传输：请求头 JSON，如 {"Authorization":"Bearer xxx"}', required: false },
-          { name: 'command', type: 'string', description: 'Stdio 传输：启动命令，如 npx', required: false },
-          { name: 'args', type: 'string', description: 'Stdio 传输：参数 JSON 数组，如 ["bing-cn-mcp"]', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.add_mcp_server: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        const reloadMcp = ctx?.reloadMcpForUser;
-        if (!getConfig || !setConfig) throw new Error('x.add_mcp_server: 配置不可用');
-        let id = String(input.id ?? '').trim();
-        let url = typeof input.url === 'string' ? input.url.trim() || undefined : undefined;
-        let headers: Record<string, string> | undefined;
-        let name = typeof input.name === 'string' ? input.name.trim() || undefined : undefined;
-        let command = typeof input.command === 'string' ? input.command.trim() || undefined : undefined;
-        let args: string[] | undefined;
-        const configStr = typeof input.config === 'string' ? input.config.trim() : undefined;
-        if (configStr) {
-          try {
-            const cfg = JSON.parse(configStr) as Record<string, unknown>;
-            if (!cfg || typeof cfg !== 'object') throw new Error('config 须为 JSON 对象');
-            const entries = Object.entries(cfg);
-            if (entries.length === 0) throw new Error('config 不能为空');
-            const [serverId, serverCfg] = entries[0]!;
-            const c = serverCfg && typeof serverCfg === 'object' ? (serverCfg as Record<string, unknown>) : {};
-            if (!id) id = serverId;
-            if (!url) url = typeof c.url === 'string' ? c.url.trim() : undefined;
-            if (c.headers && typeof c.headers === 'object') {
-              headers = Object.fromEntries(Object.entries(c.headers).map(([k, v]) => [String(k), String(v)]));
-            }
-            if (!name && typeof c.name === 'string') name = c.name.trim();
-          } catch (e) {
-            throw new Error(`x.add_mcp_server: config 解析失败: ${e instanceof Error ? e.message : String(e)}`);
-          }
-        }
-        if (!id) throw new Error('x.add_mcp_server: id 必填，或通过 config 传入 {"serverId":{...}}');
-        const raw = await getConfigValue(getConfig, userId, MCP_CONFIG_KEY);
-        const servers = raw?.trim()
-          ? normalizeMcpConfig((() => {
-              try {
-                const p = JSON.parse(raw) as unknown;
-                return Array.isArray(p) ? { servers: p } : (typeof p === 'object' && p !== null ? p : {});
-              } catch {
-                return {};
-              }
-            })())
-          : [];
-        if (servers.some((s) => s.id === id)) throw new Error(`x.add_mcp_server: id "${id}" 已存在`);
-        if (!url) url = typeof input.url === 'string' ? input.url.trim() || undefined : undefined;
-        if (!name && typeof input.name === 'string') name = input.name.trim() || undefined;
-        if (headers === undefined && typeof input.headers === 'string' && input.headers.trim()) {
-          try {
-            const h = JSON.parse(input.headers);
-            if (h && typeof h === 'object') headers = Object.fromEntries(Object.entries(h).map(([k, v]) => [String(k), String(v)]));
-          } catch {
-            throw new Error('x.add_mcp_server: headers 须为 JSON 对象');
-          }
-        }
-        if (!command) command = typeof input.command === 'string' ? input.command.trim() || undefined : undefined;
-        if (args === undefined && typeof input.args === 'string' && input.args.trim()) {
-          try {
-            const a = JSON.parse(input.args);
-            args = Array.isArray(a) ? a.map(String) : undefined;
-          } catch {
-            throw new Error('x.add_mcp_server: args 须为 JSON 数组');
-          }
-        }
-        if (url) {
-          const s: McpServerConfig = { id, name, url, headers };
-          servers.push(s);
-        } else if (command) {
-          const s: McpServerConfig = { id, name, command, args };
-          servers.push(s);
-        } else {
-          throw new Error('x.add_mcp_server: 需提供 url（HTTP）或 command+args（Stdio）');
-        }
-        const setResult = setConfig(userId, MCP_CONFIG_KEY, JSON.stringify(servers));
-        if (setResult instanceof Promise) await setResult;
-        if (reloadMcp) await reloadMcp(userId);
-        return { ok: true, message: `已添加 MCP 服务器 ${id}，配置已重载` };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.update_mcp_server',
-        displayName: '更新 MCP 服务器',
-        description: '按 id 更新已有 MCP 服务器。可更新 name、url、headers、command、args，未传的字段保持不变。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'id', type: 'string', description: '要更新的服务器 id', required: true },
-          { name: 'name', type: 'string', description: '显示名称', required: false },
-          { name: 'url', type: 'string', description: 'HTTP：JSON-RPC 端点 URL', required: false },
-          { name: 'headers', type: 'string', description: 'HTTP：请求头 JSON', required: false },
-          { name: 'command', type: 'string', description: 'Stdio：启动命令', required: false },
-          { name: 'args', type: 'string', description: 'Stdio：参数 JSON 数组', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.update_mcp_server: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        const reloadMcp = ctx?.reloadMcpForUser;
-        if (!getConfig || !setConfig) throw new Error('x.update_mcp_server: 配置不可用');
-        const id = String(input.id ?? '').trim();
-        if (!id) throw new Error('x.update_mcp_server: id 必填');
-        const raw = await getConfigValue(getConfig, userId, MCP_CONFIG_KEY);
-        const servers = raw?.trim()
-          ? normalizeMcpConfig((() => {
-              try {
-                const p = JSON.parse(raw) as unknown;
-                return Array.isArray(p) ? { servers: p } : (typeof p === 'object' && p !== null ? p : {});
-              } catch {
-                return {};
-              }
-            })())
-          : [];
-        const idx = servers.findIndex((s) => s.id === id);
-        if (idx < 0) throw new Error(`x.update_mcp_server: 未找到 id "${id}"`);
-        const s = servers[idx];
-        if (typeof input.name === 'string') s.name = input.name.trim() || s.id;
-        if (typeof input.url === 'string') s.url = input.url.trim() || undefined;
-        if (typeof input.headers === 'string' && input.headers.trim()) {
-          try {
-            const h = JSON.parse(input.headers);
-            if (h && typeof h === 'object') s.headers = Object.fromEntries(Object.entries(h).map(([k, v]) => [String(k), String(v)]));
-          } catch {
-            throw new Error('x.update_mcp_server: headers 须为 JSON 对象');
-          }
-        }
-        if (typeof input.command === 'string') s.command = input.command.trim() || undefined;
-        if (typeof input.args === 'string' && input.args.trim()) {
-          try {
-            const a = JSON.parse(input.args);
-            s.args = Array.isArray(a) ? a.map(String) : undefined;
-          } catch {
-            throw new Error('x.update_mcp_server: args 须为 JSON 数组');
-          }
-        }
-        const setResult = setConfig(userId, MCP_CONFIG_KEY, JSON.stringify(servers));
-        if (setResult instanceof Promise) await setResult;
-        if (reloadMcp) await reloadMcp(userId);
-        return { ok: true, message: `已更新 MCP 服务器 ${id}，配置已重载` };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.remove_mcp_server',
-        displayName: '删除 MCP 服务器',
-        description: '按 id 删除 MCP 服务器，删除后立即重载。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [{ name: 'id', type: 'string', description: '要删除的服务器 id', required: true }],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.remove_mcp_server: 需要已登录用户');
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        const reloadMcp = ctx?.reloadMcpForUser;
-        if (!getConfig || !setConfig) throw new Error('x.remove_mcp_server: 配置不可用');
-        const id = String(input.id ?? '').trim();
-        if (!id) throw new Error('x.remove_mcp_server: id 必填');
-        const raw = await getConfigValue(getConfig, userId, MCP_CONFIG_KEY);
-        const servers = raw?.trim()
-          ? normalizeMcpConfig((() => {
-              try {
-                const p = JSON.parse(raw) as unknown;
-                return Array.isArray(p) ? { servers: p } : (typeof p === 'object' && p !== null ? p : {});
-              } catch {
-                return {};
-              }
-            })())
-          : [];
-        const next = servers.filter((s) => s.id !== id);
-        if (next.length === servers.length) throw new Error(`x.remove_mcp_server: 未找到 id "${id}"`);
-        const setResult = setConfig(userId, MCP_CONFIG_KEY, JSON.stringify(next));
-        if (setResult instanceof Promise) await setResult;
-        if (reloadMcp) await reloadMcp(userId);
-        return { ok: true, message: `已删除 MCP 服务器 ${id}，配置已重载` };
-      },
-    );
-
-    // 标记 X 主动消息为已读（用户看到后点击已读，或 X 在跟进处理后标记）
-    this.register(
-      {
-        name: 'x.mark_proactive_read',
-        displayName: '标记消息已读',
-        description: '将指定的一条或若干条「X 主动找用户」的消息标记为已读。用户看到通知后可自行点击已读，或你在跟进处理（如已配置 Key、已答复用户）后调用本工具标记，无需用户再操作。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'message_id', type: 'string', description: '单条消息 id（从 x.notify_user 返回或上下文可知）', required: false },
-          { name: 'message_ids', type: 'string', description: '多条消息 id，JSON 数组字符串，如 ["id1","id2"]；与 message_id 二选一', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('x.mark_proactive_read: 需要已登录用户');
-        let ids: string[] = [];
-        if (input.message_id && typeof input.message_id === 'string') ids = [input.message_id.trim()];
-        if (ids.length === 0 && input.message_ids) {
-          try {
-            const raw = typeof input.message_ids === 'string' ? input.message_ids : JSON.stringify(input.message_ids);
-            const arr = JSON.parse(raw);
-            ids = Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string').slice(0, 50) : [];
-          } catch {
-            throw new Error('x.mark_proactive_read: message_ids 须为 JSON 数组字符串');
-          }
-        }
-        for (const id of ids) if (id) markXProactiveRead(userId, id);
-        return { ok: true, marked: ids.length };
-      },
-    );
-
-    // ── 小程序/小游戏后端：KV 存储与队列（X 创建数据，前端通过 /api/x-apps/backend/* 读写） ─────────────────
-    const appBackendDb = this.db;
-    const requireUserId = (ctx: ExecutionContext | undefined, toolName: string): string => {
-      const uid = ctx?.userId;
-      if (!uid || uid === 'anonymous') throw new Error(`${toolName}: 需要已登录用户`);
-      return uid;
-    };
-
-    this.register(
-      {
-        name: 'backend.kv_set',
-        displayName: '写入键值',
-        description: '为指定小程序/小游戏写入一条键值数据（后端存储）。前端可通过 GET/PUT /api/x-apps/backend/kv/:appId?key=xxx 读写同一数据。用于排行榜、用户进度、配置等。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id（与 x.create_app 的 app_id 一致）', required: true },
-          { name: 'key', type: 'string', description: '键名', required: true },
-          { name: 'value', type: 'string', description: '值（字符串；存 JSON 时请先 JSON.stringify）', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.kv_set: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.kv_set');
-        const appId = String(input.app_id ?? '').trim();
-        const key = String(input.key ?? '').trim();
-        const value = String(input.value ?? '');
-        if (!appId || !key) throw new Error('backend.kv_set: app_id 与 key 必填');
-        appBackendDb.appBackendKvSet(userId, appId, key, value);
-        return { ok: true };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.kv_get',
-        displayName: '读取键值',
-        description: '读取指定小程序/小游戏的键值数据。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'key', type: 'string', description: '键名', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.kv_get: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.kv_get');
-        const appId = String(input.app_id ?? '').trim();
-        const key = String(input.key ?? '').trim();
-        if (!appId || !key) throw new Error('backend.kv_get: app_id 与 key 必填');
-        const value = appBackendDb.appBackendKvGet(userId, appId, key);
-        if (value === undefined) return { found: false };
-        return { found: true, value };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.kv_delete',
-        displayName: '删除键值',
-        description: '删除指定小程序/小游戏的一条键值数据。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'key', type: 'string', description: '键名', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.kv_delete: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.kv_delete');
-        const appId = String(input.app_id ?? '').trim();
-        const key = String(input.key ?? '').trim();
-        if (!appId || !key) throw new Error('backend.kv_delete: app_id 与 key 必填');
-        appBackendDb.appBackendKvDelete(userId, appId, key);
-        return { ok: true };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.kv_list',
-        displayName: '列出键',
-        description: '列出指定小程序/小游戏的键（可选 prefix 前缀过滤）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'prefix', type: 'string', description: '可选，只返回以此前缀开头的 key', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.kv_list: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.kv_list');
-        const appId = String(input.app_id ?? '').trim();
-        const prefix = (input.prefix as string)?.trim() || undefined;
-        if (!appId) throw new Error('backend.kv_list: app_id 必填');
-        const keys = appBackendDb.appBackendKvList(userId, appId, prefix);
-        return { keys };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.queue_push',
-        displayName: '队列推入',
-        description: '向指定小程序/小游戏的队列推入一条消息（FIFO）。前端可通过 POST /api/x-apps/backend/queue/:appId/:queueName/push 与 GET .../pop 读写同一队列。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'queue_name', type: 'string', description: '队列名', required: true },
-          { name: 'payload', type: 'string', description: '消息内容（字符串）', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.queue_push: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.queue_push');
-        const appId = String(input.app_id ?? '').trim();
-        const queueName = String(input.queue_name ?? '').trim();
-        const payload = String(input.payload ?? '');
-        if (!appId || !queueName) throw new Error('backend.queue_push: app_id 与 queue_name 必填');
-        appBackendDb.appBackendQueuePush(userId, appId, queueName, payload);
-        return { ok: true };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.queue_pop',
-        displayName: '队列弹出',
-        description: '从指定小程序/小游戏队列弹出一条消息（FIFO）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'queue_name', type: 'string', description: '队列名', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.queue_pop: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.queue_pop');
-        const appId = String(input.app_id ?? '').trim();
-        const queueName = String(input.queue_name ?? '').trim();
-        if (!appId || !queueName) throw new Error('backend.queue_pop: app_id 与 queue_name 必填');
-        const payload = appBackendDb.appBackendQueuePop(userId, appId, queueName);
-        if (payload === null) return { empty: true };
-        return { empty: false, payload };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.queue_len',
-        displayName: '队列长度',
-        description: '查询指定小程序/小游戏队列当前长度。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'queue_name', type: 'string', description: '队列名', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        if (!appBackendDb) throw new Error('backend.queue_len: 数据库不可用');
-        const userId = requireUserId(ctx, 'backend.queue_len');
-        const appId = String(input.app_id ?? '').trim();
-        const queueName = String(input.queue_name ?? '').trim();
-        if (!appId || !queueName) throw new Error('backend.queue_len: app_id 与 queue_name 必填');
-        const length = appBackendDb.appBackendQueueLen(userId, appId, queueName);
-        return { length };
-      },
-    );
-
-    this.register(
-      {
-        name: 'backend.broadcast_to_app',
-        displayName: '向小程序推送消息',
-        description: '向当前已打开该小程序的用户推送一条实时消息（WebSocket）。用户需已打开该应用窗口；消息会通过 app_channel 发到前端，小程序 iframe 内可用 window.addEventListener("message", e => e.data?.type === "x_app_channel" 处理)。用于游戏状态同步、通知、实时更新等。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'app_id', type: 'string', description: '小程序 id', required: true },
-          { name: 'message', type: 'string', description: '要推送的内容（建议 JSON 字符串，前端解析）', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = requireUserId(ctx, 'backend.broadcast_to_app');
-        const appId = String(input.app_id ?? '').trim();
-        const message = input.message != null ? String(input.message) : '';
-        if (!appId) throw new Error('backend.broadcast_to_app: app_id 必填');
-        broadcastToAppChannel(userId, appId, message);
-        return { ok: true };
-      },
-    );
-
-    // ── 浏览器控制：X 可实时操作桌面内置浏览器 ─────────────────
-    this.register(
-      {
-        name: 'browser.navigate',
-        displayName: '浏览器导航',
-        description:
-          '控制桌面内置浏览器：导航到指定 URL。用户需已打开浏览器窗口，或传入 open_if_needed: true 则未打开时自动打开。用于替用户浏览网页、查看资料、搜索信息。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'url', type: 'string', description: '要打开的网址，如 https://www.google.com', required: true },
-          { name: 'open_if_needed', type: 'boolean', description: '若浏览器未打开则自动打开，默认 true', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = requireUserId(ctx, 'browser.navigate');
-        const url = String(input.url ?? '').trim();
-        if (!url) throw new Error('browser.navigate: url 必填');
-        const openIfNeeded = input.open_if_needed !== false;
-        broadcastToAppChannel(userId, 'browser', { action: 'navigate', url, openIfNeeded });
-        return { ok: true, message: '已发送导航指令到浏览器' };
-      },
-    );
-
     // ── X 制作有界面的小程序（存于沙箱 apps/<id>/，可固定到桌面打开） ─────────────────
     this.register(
       {
@@ -3816,611 +2798,6 @@ export class ToolExecutor {
       },
     );
 
-    // ── X 创建与管理智能体（管理者创建，派发任务给智能体执行） ─────────────────────
-    this.register(
-      {
-        name: 'x.create_agent',
-        displayName: '创建智能体',
-        description:
-          '创建一个由 X 管理的智能体。你是管理者，智能体是执行者。可指定：name（名称）、system_prompt（该智能体的系统提示词：角色、能力、约束）、tool_names（该智能体可用的工具名列表，如 file.read,file.write,shell.run；空数组表示使用全部工具）、可选 role（角色标签，如写手、审核、数据分析师，便于组队）、goal_template、output_description。可选 llm_provider_id、llm_model_id 指定该智能体执行时使用的大模型（由 llm.* 工具管理）；未指定则使用用户默认模型。创建后可用 x.run_agent 派发任务或加入团队。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'name', type: 'string', description: '智能体名称', required: true },
-          { name: 'system_prompt', type: 'string', description: '该智能体的系统提示词（角色、能力、约束）', required: true },
-          { name: 'tool_names', type: 'array', description: '该智能体可调用的工具名列表，如 ["file.read","file.write"]；空则用全部', required: false },
-          { name: 'role', type: 'string', description: '角色标签（如写手、审核、数据分析师），便于组队与派活', required: false },
-          { name: 'goal_template', type: 'string', description: '目标描述模板或说明（派发时可作为 goal 填入）', required: false },
-          { name: 'output_description', type: 'string', description: '期望输出内容说明', required: false },
-          { name: 'llm_provider_id', type: 'string', description: '可选：该智能体使用的大模型提供商 ID（llm.list_providers 返回的 id）', required: false },
-          { name: 'llm_model_id', type: 'string', description: '可选：该智能体使用的大模型 ID（llm.list_models 返回的 id）', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写智能体配置' };
-        const name = String(input.name ?? '').trim();
-        const systemPrompt = String(input.system_prompt ?? '').trim();
-        if (!name || !systemPrompt) return { ok: false, error: 'name 与 system_prompt 必填' };
-        const rawTools = input.tool_names;
-        const toolNames = Array.isArray(rawTools)
-          ? rawTools.map((t) => String(t).trim()).filter(Boolean)
-          : [];
-        const role = input.role != null ? String(input.role).trim() : undefined;
-        const goalTemplate = input.goal_template != null ? String(input.goal_template).trim() : undefined;
-        const outputDescription = input.output_description != null ? String(input.output_description).trim() : undefined;
-        const llmProviderId = input.llm_provider_id != null ? String(input.llm_provider_id).trim() || undefined : undefined;
-        const llmModelId = input.llm_model_id != null ? String(input.llm_model_id).trim() || undefined : undefined;
-        const list = await loadAgents(getConfig, userId);
-        const id = `agent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const now = Date.now();
-        const agent: AgentDefinition = {
-          id,
-          name,
-          systemPrompt,
-          toolNames,
-          role: role || undefined,
-          goalTemplate: goalTemplate || undefined,
-          outputDescription: outputDescription || undefined,
-          llmProviderId: llmProviderId || undefined,
-          llmModelId: llmModelId || undefined,
-          createdAt: now,
-          updatedAt: now,
-        };
-        list.push(agent);
-        saveAgents(setConfig, userId, list);
-        return { ok: true, agentId: id, message: `已创建智能体「${name}」` };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.list_agents',
-        displayName: '列出智能体',
-        description: '列出当前用户下由 X 创建的所有智能体（id、name、toolNames、goal_template、output_description）。派发任务前可先查看可用智能体。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { agents: [], message: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) return { agents: [], message: '无法读取配置' };
-        const list = await loadAgents(getConfig, userId);
-        return { agents: list };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.run_agent',
-        displayName: '运行智能体',
-        description:
-          '派发任务给已创建的智能体执行。你是管理者，智能体是执行者。传入 agent_id（x.list_agents 返回的 id）、goal（本次要完成的目标或用户消息）。智能体会用自己的提示词和工具完成任务并返回结果。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'agent_id', type: 'string', description: '智能体 ID（从 x.list_agents 获取）', required: true },
-          { name: 'goal', type: 'string', description: '本次要完成的目标或交给智能体的用户消息', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户', content: '' };
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) return { ok: false, error: '无法读取配置', content: '' };
-        const agentId = String(input.agent_id ?? '').trim();
-        const goal = String(input.goal ?? '').trim();
-        if (!agentId || !goal) return { ok: false, error: 'agent_id 与 goal 必填', content: '' };
-        const list = await loadAgents(getConfig, userId);
-        const agent = list.find((a) => a.id === agentId);
-        if (!agent) return { ok: false, error: '未找到该智能体', content: '' };
-        const run = this.runCustomAgentLoop;
-        if (!run) return { ok: false, error: '服务未配置智能体执行', content: '' };
-        try {
-          const { content } = await run({ agentDef: agent, goal, userId });
-          return { ok: true, content };
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          return { ok: false, error: msg, content: '' };
-        }
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.update_agent',
-        displayName: '更新智能体',
-        description: '更新已创建的智能体。传入 agent_id 及要修改的字段（name、system_prompt、tool_names、role、goal_template、output_description、llm_provider_id、llm_model_id），未传的字段保持不变。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'agent_id', type: 'string', description: '智能体 ID', required: true },
-          { name: 'name', type: 'string', description: '新名称', required: false },
-          { name: 'system_prompt', type: 'string', description: '新系统提示词', required: false },
-          { name: 'tool_names', type: 'array', description: '新工具名列表', required: false },
-          { name: 'role', type: 'string', description: '角色标签（如写手、审核、数据分析师）', required: false },
-          { name: 'goal_template', type: 'string', description: '新目标模板', required: false },
-          { name: 'output_description', type: 'string', description: '新输出说明', required: false },
-          { name: 'llm_provider_id', type: 'string', description: '可选：该智能体使用的大模型提供商 ID', required: false },
-          { name: 'llm_model_id', type: 'string', description: '可选：该智能体使用的大模型 ID', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const agentId = String(input.agent_id ?? '').trim();
-        if (!agentId) return { ok: false, error: 'agent_id 必填' };
-        const list = await loadAgents(getConfig, userId);
-        const idx = list.findIndex((a) => a.id === agentId);
-        if (idx < 0) return { ok: false, error: '未找到该智能体' };
-        const now = Date.now();
-        const cur = list[idx]!;
-        if (input.name != null) cur.name = String(input.name).trim() || cur.name;
-        if (input.system_prompt != null) cur.systemPrompt = String(input.system_prompt).trim() || cur.systemPrompt;
-        if (input.tool_names !== undefined)
-          cur.toolNames = Array.isArray(input.tool_names) ? input.tool_names.map((t) => String(t).trim()).filter(Boolean) : cur.toolNames;
-        if (input.role != null) cur.role = String(input.role).trim() || undefined;
-        if (input.goal_template != null) cur.goalTemplate = String(input.goal_template).trim() || undefined;
-        if (input.output_description != null) cur.outputDescription = String(input.output_description).trim() || undefined;
-        if (input.llm_provider_id !== undefined) cur.llmProviderId = String(input.llm_provider_id).trim() || undefined;
-        if (input.llm_model_id !== undefined) cur.llmModelId = String(input.llm_model_id).trim() || undefined;
-        cur.updatedAt = now;
-        saveAgents(setConfig, userId, list);
-        return { ok: true, message: '已更新智能体' };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.remove_agent',
-        displayName: '删除智能体',
-        description: '删除一个已创建的智能体。传入 agent_id（从 x.list_agents 获取）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [{ name: 'agent_id', type: 'string', description: '要删除的智能体 ID', required: true }],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const agentId = String(input.agent_id ?? '').trim();
-        if (!agentId) return { ok: false, error: 'agent_id 必填' };
-        const original = await loadAgents(getConfig, userId);
-        const list = original.filter((a) => a.id !== agentId);
-        if (list.length === original.length) return { ok: false, error: '未找到该智能体' };
-        saveAgents(setConfig, userId, list);
-        return { ok: true, message: '已删除智能体' };
-      },
-    );
-
-    // ── X 智能体团队（流水线协作：按 agent 顺序依次执行，上一环节输出作为下一环节输入） ─────────────────
-    this.register(
-      {
-        name: 'x.create_team',
-        displayName: '创建团队',
-        description:
-          '创建一个智能体团队。团队由多个智能体按顺序组成流水线（如收集→撰写→审核）。传入 name（团队名称）、agent_ids（智能体 id 数组，顺序即执行顺序，从 x.list_agents 获取）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'name', type: 'string', description: '团队名称', required: true },
-          { name: 'agent_ids', type: 'array', description: '智能体 id 数组，顺序即执行顺序', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const name = String(input.name ?? '').trim();
-        if (!name) return { ok: false, error: 'name 必填' };
-        const agentIds = parseAgentIds(input.agent_ids);
-        if (agentIds.length === 0) return { ok: false, error: 'agent_ids 至少包含一个智能体 id' };
-        const teams = await loadTeams(getConfig, userId);
-        const id = `team-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const now = Date.now();
-        const team: AgentTeam = { id, name, agentIds, createdAt: now, updatedAt: now };
-        teams.push(team);
-        saveTeams(setConfig, userId, teams);
-        return { ok: true, teamId: id, message: `已创建团队「${name}」` };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.list_teams',
-        displayName: '列出团队',
-        description: '列出当前用户下所有智能体团队（id、name、agentIds）。用于 run_team 前查看或组队规划。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { teams: [], message: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) return { teams: [], message: '无法读取配置' };
-        const teams = await loadTeams(getConfig, userId);
-        return { teams };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.run_team',
-        displayName: '运行团队',
-        description:
-          '按团队顺序依次执行智能体（流水线）。传入 team_id（从 x.list_teams 获取）、goal（本次团队要完成的目标）。第一个智能体以 goal 执行；后续每个智能体会收到「上一环节输出」加本次 goal 作为目标，适合收集→撰写→审核等办公流程。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'team_id', type: 'string', description: '团队 ID（从 x.list_teams 获取）', required: true },
-          { name: 'goal', type: 'string', description: '本次团队要完成的目标', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户', content: '' };
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) return { ok: false, error: '无法读取配置', content: '' };
-        const teamId = String(input.team_id ?? '').trim();
-        const goal = String(input.goal ?? '').trim();
-        if (!teamId || !goal) return { ok: false, error: 'team_id 与 goal 必填', content: '' };
-        const teams = await loadTeams(getConfig, userId);
-        const team = teams.find((t) => t.id === teamId);
-        if (!team) return { ok: false, error: '未找到该团队', content: '' };
-        const agents = await loadAgents(getConfig, userId);
-        const run = this.runCustomAgentLoop;
-        if (!run) return { ok: false, error: '服务未配置智能体执行', content: '' };
-        let prevOutput = '';
-        const steps: string[] = [];
-        for (let i = 0; i < team.agentIds.length; i++) {
-          const agentId = team.agentIds[i]!;
-          const agent = agents.find((a) => a.id === agentId);
-          if (!agent) {
-            return { ok: false, error: `团队中的智能体 ${agentId} 不存在`, content: prevOutput || '' };
-          }
-          const stepGoal =
-            i === 0 ? goal : `上一环节输出：\n${prevOutput}\n\n本次目标：${goal}`;
-          try {
-            const { content } = await run({ agentDef: agent, goal: stepGoal, userId });
-            prevOutput = content;
-            steps.push(`[${agent.name}] ${content.slice(0, 200)}${content.length > 200 ? '…' : ''}`);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            return { ok: false, error: `团队执行到「${agent.name}」时失败：${msg}`, content: prevOutput || '' };
-          }
-        }
-        return { ok: true, content: prevOutput, steps };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.update_team',
-        displayName: '更新团队',
-        description: '更新团队。传入 team_id 及要修改的 name 或 agent_ids，未传的保持不变。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'team_id', type: 'string', description: '团队 ID', required: true },
-          { name: 'name', type: 'string', description: '新名称', required: false },
-          { name: 'agent_ids', type: 'array', description: '新的智能体 id 顺序', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const teamId = String(input.team_id ?? '').trim();
-        if (!teamId) return { ok: false, error: 'team_id 必填' };
-        const teams = await loadTeams(getConfig, userId);
-        const idx = teams.findIndex((t) => t.id === teamId);
-        if (idx < 0) return { ok: false, error: '未找到该团队' };
-        const cur = teams[idx]!;
-        if (input.name != null) cur.name = String(input.name).trim() || cur.name;
-        if (input.agent_ids !== undefined) {
-          const next = parseAgentIds(input.agent_ids);
-          cur.agentIds = next.length > 0 ? next : cur.agentIds;
-        }
-        cur.updatedAt = Date.now();
-        saveTeams(setConfig, userId, teams);
-        return { ok: true, message: '已更新团队' };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.remove_team',
-        displayName: '删除团队',
-        description: '删除一个智能体团队。传入 team_id（从 x.list_teams 获取）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [{ name: 'team_id', type: 'string', description: '要删除的团队 ID', required: true }],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const teamId = String(input.team_id ?? '').trim();
-        if (!teamId) return { ok: false, error: 'team_id 必填' };
-        const list = await loadTeams(getConfig, userId);
-        const next = list.filter((t) => t.id !== teamId);
-        if (next.length === list.length) return { ok: false, error: '未找到该团队' };
-        saveTeams(setConfig, userId, next);
-        return { ok: true, message: '已删除团队' };
-      },
-    );
-
-    // ── X 智能体群组（类似群聊：主脑建群、拉人、派发任务、收集结果） ─────────────────────────────
-    this.register(
-      {
-        name: 'x.create_group',
-        displayName: '创建群组',
-        description:
-          '创建一个智能体群组（类似群聊）。可指定 name；可选 agent_ids 直接加入成员，也可先建空群再用 x.add_agents_to_group 加人。用于把多个智能体放进一个群，再通过 x.run_group 派发任务并收集各人结果。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'name', type: 'string', description: '群组名称', required: true },
-          { name: 'agent_ids', type: 'array', description: '可选，初始成员智能体 id 列表', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const name = String(input.name ?? '').trim();
-        if (!name) return { ok: false, error: 'name 必填' };
-        const agentIds = parseAgentIds(input.agent_ids);
-        const groups = await loadGroups(getConfig, userId);
-        const id = `group-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-        const now = Date.now();
-        const group: AgentGroup = { id, name, agentIds, createdAt: now, updatedAt: now };
-        groups.push(group);
-        saveGroups(setConfig, userId, groups);
-        return { ok: true, groupId: id, message: `已创建群组「${name}」` };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.list_groups',
-        displayName: '列出群组',
-        description: '列出当前用户下所有智能体群组（id、name、agentIds）。用于 run_group 或管理成员前查看。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [],
-        requiredPermissions: [],
-      },
-      async (_input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { groups: [], message: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) return { groups: [], message: '无法读取配置' };
-        const groups = await loadGroups(getConfig, userId);
-        return { groups };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.add_agents_to_group',
-        displayName: '添加成员到群组',
-        description: '把已有智能体加入群组。传入 group_id（从 x.list_groups 获取）、agent_ids（要加入的智能体 id 列表）。可多次调用以陆续加人。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'group_id', type: 'string', description: '群组 ID', required: true },
-          { name: 'agent_ids', type: 'array', description: '要加入的智能体 id 列表', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const groupId = String(input.group_id ?? '').trim();
-        if (!groupId) return { ok: false, error: 'group_id 必填' };
-        const toAdd = parseAgentIds(input.agent_ids);
-        if (toAdd.length === 0) return { ok: false, error: 'agent_ids 至少包含一个 id' };
-        const groups = await loadGroups(getConfig, userId);
-        const g = groups.find((x) => x.id === groupId);
-        if (!g) return { ok: false, error: '未找到该群组' };
-        const existing = new Set(g.agentIds);
-        for (const id of toAdd) {
-          if (!existing.has(id)) {
-            g.agentIds.push(id);
-            existing.add(id);
-          }
-        }
-        g.updatedAt = Date.now();
-        saveGroups(setConfig, userId, groups);
-        return { ok: true, message: `已向群组加入 ${toAdd.length} 个智能体` };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.remove_agents_from_group',
-        displayName: '从群组移除成员',
-        description: '从群组中移除部分智能体。传入 group_id、agent_ids（要移除的智能体 id 列表）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'group_id', type: 'string', description: '群组 ID', required: true },
-          { name: 'agent_ids', type: 'array', description: '要移除的智能体 id 列表', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const groupId = String(input.group_id ?? '').trim();
-        if (!groupId) return { ok: false, error: 'group_id 必填' };
-        const toRemove = parseAgentIds(input.agent_ids);
-        const groups = await loadGroups(getConfig, userId);
-        const g = groups.find((x) => x.id === groupId);
-        if (!g) return { ok: false, error: '未找到该群组' };
-        const set = new Set(toRemove);
-        g.agentIds = g.agentIds.filter((id) => !set.has(id));
-        g.updatedAt = Date.now();
-        saveGroups(setConfig, userId, groups);
-        return { ok: true, message: '已从群组移除指定智能体' };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.run_group',
-        displayName: '运行群组',
-        description:
-          '向群组派发任务并收集结果。传入 group_id、goal（本次要大家完成的目标或话题）。群内每个智能体会用同一 goal 执行一轮，你作为主脑会收到所有人的输出列表（results），可据此汇总或再引导。适合头脑风暴、多角色分别贡献、分工收集后由你汇总。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'group_id', type: 'string', description: '群组 ID（从 x.list_groups 获取）', required: true },
-          { name: 'goal', type: 'string', description: '本次派发给群组的目标或话题', required: true },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户', results: [] };
-        const getConfig = ctx?.getConfig;
-        if (!getConfig) return { ok: false, error: '无法读取配置', results: [] };
-        const groupId = String(input.group_id ?? '').trim();
-        const goal = String(input.goal ?? '').trim();
-        if (!groupId || !goal) return { ok: false, error: 'group_id 与 goal 必填', results: [] };
-        const groups = await loadGroups(getConfig, userId);
-        const group = groups.find((g) => g.id === groupId);
-        if (!group) return { ok: false, error: '未找到该群组', results: [] };
-        if (group.agentIds.length === 0) return { ok: false, error: '群组内暂无成员，请先用 x.add_agents_to_group 加人', results: [] };
-        const agents = await loadAgents(getConfig, userId);
-        const run = this.runCustomAgentLoop;
-        if (!run) return { ok: false, error: '服务未配置智能体执行', results: [] };
-        if (ctx?.clearGroupRunCancel && userId) ctx.clearGroupRunCancel(userId);
-        const results: Array<{ agentId: string; agentName: string; content: string }> = [];
-        const total = group.agentIds.length;
-        for (let i = 0; i < total; i++) {
-          if (ctx?.isGroupRunCancelRequested?.(userId)) {
-            if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, done: true, cancelled: true });
-            if (ctx?.setConfig && ctx?.getConfig) void appendGroupRunHistory(ctx.getConfig, ctx.setConfig, userId, { groupId, groupName: group.name, goal, results, cancelled: true });
-            return { ok: true, cancelled: true, results };
-          }
-          const agentId = group.agentIds[i]!;
-          const agent = agents.find((a) => a.id === agentId);
-          const nextAgent = i + 1 < total ? agents.find((a) => a.id === group.agentIds[i + 1]) : undefined;
-          if (!agent) {
-            results.push({ agentId, agentName: '(未知)', content: `[未找到智能体 ${agentId}]` });
-            if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, currentAgentName: nextAgent?.name, done: false });
-            continue;
-          }
-          try {
-            const { content } = await run({ agentDef: agent, goal, userId });
-            results.push({ agentId: agent.id, agentName: agent.name, content });
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            results.push({ agentId: agent.id, agentName: agent.name, content: `[执行失败: ${msg}]` });
-          }
-          if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, currentAgentName: nextAgent?.name, done: i === total - 1 });
-        }
-        if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, done: true });
-        if (ctx?.setConfig && ctx?.getConfig) void appendGroupRunHistory(ctx.getConfig, ctx.setConfig, userId, { groupId, groupName: group.name, goal, results });
-        return { ok: true, results };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.update_group',
-        displayName: '更新群组',
-        description: '更新群组。传入 group_id 及要修改的 name，未传的保持不变。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [
-          { name: 'group_id', type: 'string', description: '群组 ID', required: true },
-          { name: 'name', type: 'string', description: '新名称', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const groupId = String(input.group_id ?? '').trim();
-        if (!groupId) return { ok: false, error: 'group_id 必填' };
-        const groups = await loadGroups(getConfig, userId);
-        const idx = groups.findIndex((g) => g.id === groupId);
-        if (idx < 0) return { ok: false, error: '未找到该群组' };
-        const cur = groups[idx]!;
-        if (input.name != null) cur.name = String(input.name).trim() || cur.name;
-        cur.updatedAt = Date.now();
-        saveGroups(setConfig, userId, groups);
-        return { ok: true, message: '已更新群组' };
-      },
-    );
-
-    this.register(
-      {
-        name: 'x.remove_group',
-        displayName: '删除群组',
-        description: '删除一个智能体群组。传入 group_id（从 x.list_groups 获取）。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'low',
-        parameters: [{ name: 'group_id', type: 'string', description: '要删除的群组 ID', required: true }],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户' };
-        const getConfig = ctx?.getConfig;
-        const setConfig = ctx?.setConfig;
-        if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
-        const groupId = String(input.group_id ?? '').trim();
-        if (!groupId) return { ok: false, error: 'group_id 必填' };
-        const list = await loadGroups(getConfig, userId);
-        const next = list.filter((g) => g.id !== groupId);
-        if (next.length === list.length) return { ok: false, error: '未找到该群组' };
-        saveGroups(setConfig, userId, next);
-        return { ok: true, message: '已删除群组' };
-      },
-    );
 
     // Skill 对应工具：发现到的 Skill 若在 skillTools 登记，则动态加入 function call，供 AI 直接调用
     for (const { definition, handler } of getSkillToolsToRegister()) {

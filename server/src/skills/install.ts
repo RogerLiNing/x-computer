@@ -310,8 +310,38 @@ export async function installFromSkillHub(slug: string, targetRoot?: string): Pr
     }
   }
 
+  // 兜底：若本机已存在同名 Skill（~/.claude/skills），优先直接复制，避免再次依赖 GitHub 网络
+  const cached = findInstalledSkillInDefaultDir(fullSlug, skillName);
+  if (cached) {
+    const copied = copySkillDirToTarget(cached.dir, skillsRoot, cached.actualSkillName, fullSlug);
+    if (copied.ok) return copied;
+  }
+
   // 使用 npx skillhub install 安装到临时目录，然后复制到目标目录
   const TIMEOUT_MS = 120000; // 2分钟超时
+  const cleanCliOutput = (s: string) => (s || '').replace(/\x1b\[[0-9;]*m/g, '').trim();
+  const mapSkillhubInstallError = (rawErr: string) => {
+    const e = cleanCliOutput(rawErr);
+    if (!e) return 'skillhub install 失败（无错误输出）';
+
+    // SkillHub CLI 偶发会给出 docs.github.com 的 “Not Found” 链接，这通常意味着它没能访问 GitHub API（网络/代理/鉴权）。
+    const isGithubConnect =
+      /failed to connect to github/i.test(e) ||
+      /not found\s*-\s*https:\/\/docs\.github\.com\/rest\/repos\/repos#get-a-repository/i.test(e);
+    if (isGithubConnect) {
+      return (
+        `skillhub install 失败：无法连接到 GitHub。\n` +
+        `可能原因：网络/代理无法访问 github.com 或 api.github.com；或缺少 GitHub Token（被限流）。\n` +
+        `建议：\n` +
+        `- 确认本机可访问 GitHub（含 API）。\n` +
+        `- 若你使用 GitHub Token：在启动 server 的环境里设置 GH_TOKEN 或 GITHUB_TOKEN 后重启。\n` +
+        `- 或在终端执行一次 \`gh auth login\`（若已安装 gh）。\n\n` +
+        `原始错误：${e.slice(0, 800)}`
+      );
+    }
+
+    return `skillhub install 失败: ${e.slice(0, 800)}`;
+  };
 
   return new Promise((resolve) => {
     // 先安装到临时目录
@@ -341,14 +371,20 @@ export async function installFromSkillHub(slug: string, targetRoot?: string): Pr
       if (timedOut) return;
 
       if (code !== 0) {
-        const err = stderr.trim() || stdout.trim() || `exit ${code ?? signal}`;
+        const err = cleanCliOutput(stderr) || cleanCliOutput(stdout) || `exit ${code ?? signal}`;
         // 如果是 "already installed" 错误，也算成功
         if (err.toLowerCase().includes('already installed') || err.toLowerCase().includes('already exists')) {
           // 已经安装过了，尝试查找并复制
           resolve(moveInstalledSkill(tempDir, skillsRoot, skillName, fullSlug));
           return;
         }
-        resolve({ ok: false, message: `skillhub install 失败: ${err.slice(0, 300)}`, skillName: slug, dirName: slug });
+        // 安装失败时再尝试一次本地缓存兜底（CLI 失败但本地已存在时仍可成功）
+        const fallback = findInstalledSkillInDefaultDir(fullSlug, skillName);
+        if (fallback) {
+          resolve(copySkillDirToTarget(fallback.dir, skillsRoot, fallback.actualSkillName, fullSlug));
+          return;
+        }
+        resolve({ ok: false, message: mapSkillhubInstallError(err), skillName: slug, dirName: slug });
         return;
       }
 
@@ -361,6 +397,57 @@ export async function installFromSkillHub(slug: string, targetRoot?: string): Pr
       resolve({ ok: false, message: `skillhub install 执行失败: ${err.message}`, skillName: slug, dirName: slug });
     });
   });
+}
+
+function findInstalledSkillInDefaultDir(slug: string, skillName: string): { dir: string; actualSkillName: string } | null {
+  try {
+    const defaultSkillHubDir = path.join(os.homedir(), '.claude', 'skills');
+    if (!fs.existsSync(defaultSkillHubDir)) return null;
+    const dirs = fs.readdirSync(defaultSkillHubDir, { withFileTypes: true });
+    for (const dir of dirs) {
+      if (!dir.isDirectory()) continue;
+      const candidate = path.join(defaultSkillHubDir, dir.name);
+      const skillPath = path.join(candidate, 'SKILL.md');
+      if (!fs.existsSync(skillPath)) continue;
+      const metaPath = path.join(candidate, '.skillhub.json');
+      if (fs.existsSync(metaPath)) {
+        try {
+          const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { skillId?: string };
+          if (meta.skillId === slug || meta.skillId?.endsWith(`/${skillName}`)) {
+            return { dir: candidate, actualSkillName: dir.name };
+          }
+        } catch {
+          // ignore invalid metadata
+        }
+      }
+      if (dir.name.toLowerCase().includes(skillName.toLowerCase())) {
+        return { dir: candidate, actualSkillName: dir.name };
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function copySkillDirToTarget(sourceDir: string, skillsRoot: string, actualSkillName: string, slug: string): SkillInstallResult {
+  try {
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    const targetDir = path.join(skillsRoot, actualSkillName);
+    if (fs.existsSync(targetDir)) {
+      fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+    fs.cpSync(sourceDir, targetDir, { recursive: true });
+    return {
+      ok: true,
+      message: `已安装 Skill: ${slug}（本地缓存）`,
+      skillName: actualSkillName,
+      dirName: actualSkillName,
+    };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, message: `复制本地 Skill 失败: ${msg}`, skillName: slug, dirName: slug };
+  }
 }
 
 /**

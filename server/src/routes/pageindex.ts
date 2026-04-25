@@ -27,8 +27,8 @@ class LLMProviderAdapter {
 
   async generate(prompt: string, options?: { maxTokens?: number; temperature?: number }): Promise<string> {
     const creds = await resolveLLMCredentials(this.userId, this.db, this.subscriptionService, {
-      providerId: 'openai',
-      modelId: 'gpt-4',
+      providerId: 'Minimax',
+      modelId: 'MiniMax-M2.7-highspeed',
     })
 
     if (!creds) {
@@ -53,8 +53,8 @@ class LLMProviderAdapter {
 
   async chat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, options?: { maxTokens?: number; temperature?: number }): Promise<string> {
     const creds = await resolveLLMCredentials(this.userId, this.db, this.subscriptionService, {
-      providerId: 'openai',
-      modelId: 'gpt-4',
+      providerId: 'Minimax',
+      modelId: 'MiniMax-M2.7-highspeed',
     })
 
     if (!creds) {

@@ -22,8 +22,8 @@ CREATE TABLE IF NOT EXISTS plans (
   updated_at BIGINT NOT NULL
 );
 
--- 插入默认套餐
-INSERT INTO plans (id, name, display_name_en, display_name_zh, description_en, description_zh, price_monthly, price_yearly, ai_calls_limit, storage_limit, concurrent_tasks_limit, features, is_active, created_at, updated_at) VALUES
+-- 插入默认套餐（INSERT IGNORE 安全幂等）
+INSERT IGNORE INTO plans (id, name, display_name_en, display_name_zh, description_en, description_zh, price_monthly, price_yearly, ai_calls_limit, storage_limit, concurrent_tasks_limit, features, is_active, created_at, updated_at) VALUES
 ('trial', 'trial', 'Free Trial', '免费试用', 'Try X-Computer for free', '免费体验 X-Computer', 0, 0, 100, 104857600, 1, '["basic_features"]', 1, UNIX_TIMESTAMP() * 1000, UNIX_TIMESTAMP() * 1000),
 ('personal', 'personal', 'Personal', '个人版', 'Perfect for individual users', '适合个人用户', 999, 9990, 1000, 1073741824, 3, '["all_features","priority_support"]', 1, UNIX_TIMESTAMP() * 1000, UNIX_TIMESTAMP() * 1000),
 ('pro', 'pro', 'Professional', '专业版', 'For power users and small teams', '适合高级用户和小团队', 2999, 29990, 5000, 10737418240, 10, '["all_features","priority_support","advanced_tools"]', 1, UNIX_TIMESTAMP() * 1000, UNIX_TIMESTAMP() * 1000),
@@ -44,15 +44,8 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   stripe_customer_id VARCHAR(255),
   stripe_price_id VARCHAR(255),
   created_at BIGINT NOT NULL,
-  updated_at BIGINT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (plan_id) REFERENCES plans(id)
+  updated_at BIGINT NOT NULL
 );
-
-CREATE INDEX idx_subscriptions_user_id ON subscriptions(user_id);
-CREATE INDEX idx_subscriptions_status ON subscriptions(status);
-CREATE INDEX idx_subscriptions_stripe_customer ON subscriptions(stripe_customer_id);
-CREATE INDEX idx_subscriptions_stripe_subscription ON subscriptions(stripe_subscription_id);
 
 -- 配额使用记录表
 CREATE TABLE IF NOT EXISTS usage_records (
@@ -63,13 +56,8 @@ CREATE TABLE IF NOT EXISTS usage_records (
   period_start BIGINT NOT NULL,
   period_end BIGINT NOT NULL,
   metadata TEXT,
-  created_at BIGINT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  created_at BIGINT NOT NULL
 );
-
-CREATE INDEX idx_usage_records_user_period ON usage_records(user_id, period_start, period_end);
-CREATE INDEX idx_usage_records_resource_type ON usage_records(resource_type);
-CREATE INDEX idx_usage_records_created_at ON usage_records(created_at);
 
 -- 支付历史表
 CREATE TABLE IF NOT EXISTS payment_history (
@@ -83,18 +71,12 @@ CREATE TABLE IF NOT EXISTS payment_history (
   stripe_invoice_id VARCHAR(255),
   description TEXT,
   created_at BIGINT NOT NULL,
-  updated_at BIGINT NOT NULL,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE SET NULL
+  updated_at BIGINT NOT NULL
 );
 
-CREATE INDEX idx_payment_history_user_id ON payment_history(user_id);
-CREATE INDEX idx_payment_history_status ON payment_history(status);
-CREATE INDEX idx_payment_history_stripe_payment_intent ON payment_history(stripe_payment_intent_id);
-
--- 为所有用户创建默认试用订阅
+-- 为所有用户创建默认试用订阅（幂等：WHERE NOT EXISTS）
 INSERT INTO subscriptions (id, user_id, plan_id, status, billing_cycle, current_period_start, current_period_end, trial_end, created_at, updated_at)
-SELECT 
+SELECT
   CONCAT('sub-trial-', u.id, '-', UNIX_TIMESTAMP()),
   u.id,
   'trial',

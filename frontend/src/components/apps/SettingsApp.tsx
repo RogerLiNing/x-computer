@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1562,6 +1562,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'hooks', labelKey: 'settings.lifecycleHooks', icon: Link },
     { id: 'council', labelKey: 'settings.llmCouncil', icon: Users },
     { id: 'auditlog', labelKey: 'settings.auditLog', icon: ShieldAlert },
+    { id: 'templates', labelKey: 'settings.promptTemplates', icon: FileText },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1776,7 +1777,318 @@ export function SettingsApp({ windowId }: Props) {
         {tab === 'auditlog' && (
           <AuditLogSettings />
         )}
+
+        {tab === 'templates' && (
+          <PromptTemplatesSettings />
+        )}
       </div>
+    </div>
+  );
+}
+
+// ── 提示词模板 ────────────────────────────────────────────────
+
+function PromptTemplatesSettings() {
+  const { t } = useTranslation();
+  const [templates, setTemplates] = useState<Array<{
+    id: string; userId: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string[] | null;
+    createdAt: number; updatedAt: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState({ name: '', content: '', category: '', description: '', variables: '' });
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [filterCategory, setFilterCategory] = useState('');
+
+  const fetchTemplates = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.promptTemplatesList(filterCategory ? { category: filterCategory } : undefined);
+      setTemplates(data);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, [filterCategory]);
+
+  useEffect(() => { fetchTemplates(); }, [fetchTemplates]);
+
+  const categories = useMemo(() => {
+    const cats = new Set(templates.map((t) => t.category).filter(Boolean) as string[]);
+    return Array.from(cats).sort();
+  }, [templates]);
+
+  const handleCreate = async () => {
+    if (!form.name || !form.content) return;
+    setSaving(true);
+    try {
+      const vars = form.variables ? form.variables.split(',').map((v) => v.trim()).filter(Boolean) : undefined;
+      const result = await api.promptTemplatesCreate({
+        name: form.name,
+        content: form.content,
+        category: form.category || undefined,
+        description: form.description || undefined,
+        variables: vars,
+      });
+      setTemplates((prev) => [result, ...prev]);
+      setShowCreate(false);
+      setForm({ name: '', content: '', category: '', description: '', variables: '' });
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  const handleUpdate = async (id: string) => {
+    if (!form.name || !form.content) return;
+    setSaving(true);
+    try {
+      const vars = form.variables ? form.variables.split(',').map((v) => v.trim()).filter(Boolean) : undefined;
+      const result = await api.promptTemplatesUpdate(id, {
+        name: form.name,
+        content: form.content,
+        category: form.category || null,
+        description: form.description || null,
+        variables: vars || null,
+      });
+      setTemplates((prev) => prev.map((t) => t.id === id ? result : t));
+      setEditingId(null);
+      setForm({ name: '', content: '', category: '', description: '', variables: '' });
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm(t('settings.confirmDeleteTemplate', '确定删除此模板？'))) return;
+    setDeleting(id);
+    try {
+      await api.promptTemplatesDelete(id);
+      setTemplates((prev) => prev.filter((t) => t.id !== id));
+    } catch { /* ignore */ }
+    finally { setDeleting(null); }
+  };
+
+  const startEdit = (tpl: typeof templates[0]) => {
+    setEditingId(tpl.id);
+    setForm({
+      name: tpl.name,
+      content: tpl.content,
+      category: tpl.category || '',
+      description: tpl.description || '',
+      variables: tpl.variables?.join(', ') || '',
+    });
+  };
+
+  const startCreate = () => {
+    setEditingId(null);
+    setForm({ name: '', content: '', category: '', description: '', variables: '' });
+    setShowCreate(true);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).catch(() => {});
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.promptTemplates', '提示词模板')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-0.5">
+            {t('settings.promptTemplatesDesc', '保存和复用常用提示词，支持变量替换')}
+          </p>
+        </div>
+        <button
+          onClick={startCreate}
+          className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-xs text-desktop-text transition-colors flex items-center gap-1"
+        >
+          <Plus size={12} /> {t('settings.add', '添加')}
+        </button>
+      </div>
+
+      {categories.length > 0 && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] text-desktop-muted">{t('settings.filterByCategory', '分类筛选')}:</span>
+          <button
+            onClick={() => setFilterCategory('')}
+            className={`px-2 py-0.5 rounded text-[10px] transition-colors ${!filterCategory ? 'bg-desktop-accent/40 text-desktop-text' : 'bg-white/5 text-desktop-muted hover:bg-white/10'}`}
+          >
+            {t('settings.all', '全部')}
+          </button>
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setFilterCategory(cat)}
+              className={`px-2 py-0.5 rounded text-[10px] transition-colors ${filterCategory === cat ? 'bg-desktop-accent/40 text-desktop-text' : 'bg-white/5 text-desktop-muted hover:bg-white/10'}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 创建表单 */}
+      {showCreate && (
+        <div className="bg-white/[0.03] rounded-xl p-4 border border-desktop-accent/30 space-y-3">
+          <h4 className="text-xs font-medium text-desktop-text">{t('settings.createTemplate', '创建模板')}</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              placeholder={t('settings.templateName', '模板名称')}
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            />
+            <input
+              type="text"
+              placeholder={t('settings.templateCategoryOptional', '分类（可选）')}
+              value={form.category}
+              onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            />
+          </div>
+          <textarea
+            placeholder={t('settings.templateContent', '提示词内容')}
+            value={form.content}
+            onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none resize-none h-24"
+          />
+          <input
+            type="text"
+            placeholder={t('settings.templateVariablesHint', '变量（逗号分隔，可选）如 {{topic}}, {{format}}')}
+            value={form.variables}
+            onChange={(e) => setForm((f) => ({ ...f, variables: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+          />
+          <input
+            type="text"
+            placeholder={t('settings.templateDescriptionOptional', '描述（可选）')}
+            value={form.description}
+            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={handleCreate}
+              disabled={saving || !form.name || !form.content}
+              className="px-3 py-1.5 rounded-lg bg-desktop-accent/50 hover:bg-desktop-accent/70 disabled:opacity-40 text-xs text-desktop-text transition-colors"
+            >
+              {saving ? t('settings.saving', '保存中…') : t('settings.create', '创建')}
+            </button>
+            <button
+              onClick={() => { setShowCreate(false); setForm({ name: '', content: '', category: '', description: '', variables: '' }); }}
+              className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+            >
+              {t('settings.cancel', '取消')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 模板列表 */}
+      {loading ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', '加载中…')}</div>
+      ) : templates.length === 0 ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">
+          {t('settings.noTemplates', '暂无模板')}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {templates.map((tpl) => (
+            <div key={tpl.id} className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
+              {editingId === tpl.id ? (
+                <div className="p-3 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      value={form.name}
+                      onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={form.category}
+                      onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
+                      className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+                    />
+                  </div>
+                  <textarea
+                    value={form.content}
+                    onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none resize-none h-20"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleUpdate(tpl.id)}
+                      disabled={saving}
+                      className="px-3 py-1 rounded bg-desktop-accent/50 hover:bg-desktop-accent/70 text-xs text-desktop-text"
+                    >
+                      {saving ? t('settings.saving', '保存中…') : t('settings.save', '保存')}
+                    </button>
+                    <button
+                      onClick={() => { setEditingId(null); setForm({ name: '', content: '', category: '', description: '', variables: '' }); }}
+                      className="px-3 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-desktop-muted"
+                    >
+                      {t('settings.cancel', '取消')}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="px-3 py-2.5">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-desktop-text font-medium">{tpl.name}</span>
+                        {tpl.category && (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-desktop-accent/15 text-desktop-muted">
+                            {tpl.category}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-desktop-muted/60 mt-0.5 line-clamp-2">{tpl.content}</div>
+                      {tpl.variables && tpl.variables.length > 0 && (
+                        <div className="flex gap-1 mt-1">
+                          {tpl.variables.map((v) => (
+                            <span key={v} className="text-[9px] px-1 py-0.5 rounded bg-yellow-500/10 text-yellow-400/60 font-mono">
+                              {v}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <div className="text-[9px] text-desktop-muted/30 mt-1">
+                        {new Date(tpl.updatedAt).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => copyToClipboard(tpl.content)}
+                        className="p-1 rounded hover:bg-white/10 text-desktop-muted/40 hover:text-desktop-muted transition-colors"
+                        title={t('settings.copy', '复制')}
+                      >
+                        <Copy size={13} />
+                      </button>
+                      <button
+                        onClick={() => startEdit(tpl)}
+                        className="p-1 rounded hover:bg-white/10 text-desktop-muted/40 hover:text-desktop-muted transition-colors"
+                        title={t('settings.edit', '编辑')}
+                      >
+                        <Edit size={13} />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(tpl.id)}
+                        disabled={deleting === tpl.id}
+                        className="p-1 rounded hover:bg-red-500/10 text-desktop-muted/40 hover:text-red-400 transition-colors"
+                        title={t('settings.delete', '删除')}
+                      >
+                        {deleting === tpl.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

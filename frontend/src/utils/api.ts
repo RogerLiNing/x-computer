@@ -528,6 +528,38 @@ export const api = {
   scheduledJobsToggle: (id: string) =>
     request<{ id: string; enabled: boolean }>(`/scheduled-jobs/${encodeURIComponent(id)}/toggle`, { method: 'POST' }),
 
+  // ── 提示词模板 ────────────────────────────────────────────────
+
+  promptTemplatesList: (params?: { category?: string }) => {
+    const qs = params?.category ? `?category=${encodeURIComponent(params.category)}` : '';
+    return request<Array<{
+      id: string; userId: string; name: string; content: string;
+      category: string | null; description: string | null; variables: string[] | null;
+      createdAt: number; updatedAt: number;
+    }>>(`/prompt-templates${qs}`);
+  },
+
+  promptTemplatesCreate: (params: {
+    name: string; content: string; category?: string; description?: string; variables?: string[];
+  }) =>
+    request<{
+      id: string; userId: string; name: string; content: string;
+      category: string | null; description: string | null; variables: string[] | null;
+      createdAt: number; updatedAt: number;
+    }>(`/prompt-templates`, { method: 'POST', body: JSON.stringify(params) }),
+
+  promptTemplatesUpdate: (id: string, fields: {
+    name?: string; content?: string; category?: string | null; description?: string | null; variables?: string[] | null;
+  }) =>
+    request<{
+      id: string; userId: string; name: string; content: string;
+      category: string | null; description: string | null; variables: string[] | null;
+      createdAt: number; updatedAt: number;
+    }>(`/prompt-templates/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(fields) }),
+
+  promptTemplatesDelete: (id: string) =>
+    request<{ success: boolean }>(`/prompt-templates/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   // ── 通知偏好设置 ────────────────────────────────────────────────
 
   /** 获取当前用户通知偏好 */

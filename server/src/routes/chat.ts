@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { callLLM, callLLMStream, callLLMWithTools, callLLMGenerateImage, type LLMToolDef, type ChatMessage } from '../chat/chatService.js';
+import { chatRateLimit } from '../middleware/chatRateLimit.js';
 import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE } from '../prompts/systemCore.js';
 import { listAllCapabilities } from '../capabilities/CapabilityRegistry.js';
 import { getDiscoveredSkills } from '../skills/discovery.js';
@@ -193,6 +194,9 @@ export function createChatRouter(
   subscriptionService?: SubscriptionService,
 ): Router {
   const router = Router();
+
+  // Rate limit all chat routes: 1 request per 2 seconds per user (spam prevention)
+  router.use(chatRateLimit);
 
   const vectorStore = new VectorStore(sandboxFS);
   const defaultMemoryService = new MemoryService(sandboxFS, vectorStore);
@@ -929,7 +933,7 @@ export function createChatRouter(
   });
 
   /** 写作意图分类：使用主脑 intent_classify 场景，返回 intent 与可选的 suggestedPath */
-  router.post('/chat/classify-writing-intent', async (req, res) => {
+  router.post('/chat/classify-writing-intent', aiQuota, async (req, res) => {
     try {
       const { userMessage, hasOpenAiDocument, providerId, modelId } = req.body as {
         userMessage?: string;
@@ -960,6 +964,7 @@ export function createChatRouter(
           modelId: creds.modelId,
           baseUrl: creds.baseUrl,
           apiKey: creds.apiKey,
+          apiType: creds.apiType,
         });
       } catch (llmErr: any) {
         const msg = llmErr?.message || '';
@@ -1001,7 +1006,7 @@ export function createChatRouter(
   /** 建议追问：根据最近一轮用户问题与 AI 回复，生成 2～4 个用户可能想问的追问。用于 AI 助手回复后展示可点击的追问建议。 */
   const FOLLOW_UP_SYSTEM_PROMPT = `你是一个助手。根据下面的「用户问题」和「AI 回复」，列出 2～4 个用户可能会追问的简短问题。
 要求：每行只输出一个问题，不要编号、不要引号、不要其他解释。问题要具体、可操作，长度尽量控制在一行内。`;
-  router.post('/chat/suggest-follow-ups', async (req, res) => {
+  router.post('/chat/suggest-follow-ups', aiQuota, async (req, res) => {
     try {
       const { userMessage, assistantReply, providerId, modelId } = req.body as {
         userMessage?: string;
@@ -1031,6 +1036,7 @@ export function createChatRouter(
         modelId: creds.modelId,
         baseUrl: creds.baseUrl,
         apiKey: creds.apiKey,
+        apiType: creds.apiType,
       });
       const lines = (raw ?? '')
         .split(/\n/)
@@ -1052,7 +1058,7 @@ export function createChatRouter(
 2. 简要总结根据结果做了什么（或失败原因）
 3. 语气友好，控制在 2～4 句话内
 4. 不要重复用户原话，直接给出结论`;
-  router.post('/chat/task-completion-reply', async (req, res) => {
+  router.post('/chat/task-completion-reply', aiQuota, async (req, res) => {
     try {
       const { sessionId, taskId, userMessage, task } = req.body as {
         sessionId?: string;
@@ -1149,6 +1155,7 @@ export function createChatRouter(
         modelId: creds.modelId,
         baseUrl: creds.baseUrl,
         apiKey: creds.apiKey,
+        apiType: creds.apiType,
       });
       res.json({ content: result.content, images: result.images });
     } catch (err: any) {

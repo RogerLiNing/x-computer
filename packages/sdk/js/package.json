@@ -1,0 +1,46 @@
+{
+  "name": "@x-computer/sdk",
+  "version": "1.0.0",
+  "description": "X-Computer JavaScript/TypeScript SDK",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "test": "vitest",
+    "lint": "eslint src --ext .ts,.tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "x-computer",
+    "sdk",
+    "ai",
+    "automation",
+    "assistant"
+  ],
+  "dependencies": {
+    "@x-computer/core": "file:../../core"
+  },
+  "author": "X-Computer Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.19.39",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^1.6.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

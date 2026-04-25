@@ -310,7 +310,24 @@
     "featureFlags": "功能开关",
     "lifecycleHooks": "生命周期 Hook",
     "llmCouncil": "LLM 议会",
-    "auditLog": "审计日志"
+    "auditLog": "审计日志",
+    "promptTemplates": "提示词模板",
+    "promptTemplatesDesc": "保存和复用常用提示词，支持变量替换",
+    "createTemplate": "创建模板",
+    "templateName": "模板名称",
+    "templateCategoryOptional": "分类（可选）",
+    "templateContent": "提示词内容",
+    "templateVariablesHint": "变量（逗号分隔，可选）如 {{topic}}, {{format}}",
+    "templateDescriptionOptional": "描述（可选）",
+    "noTemplates": "暂无模板",
+    "filterByCategory": "按分类筛选",
+    "all": "全部",
+    "saving": "保存中…",
+    "save": "保存",
+    "copy": "复制",
+    "edit": "编辑",
+    "delete": "删除",
+    "confirmDeleteTemplate": "确定删除此模板？"
   },
 
   "onboarding": {

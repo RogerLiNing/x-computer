@@ -393,7 +393,6 @@ x-computer/
   - `reject_step`: `{ type: 'reject_step', data: { taskId, stepId } }`
   - `set_computer_context`: `{ type: 'set_computer_context', data: ComputerContext }`（前端上报整机状态供总 AI 感知）
 - **服务端推送（小程序通道）**：`app_channel`: `{ type: 'app_channel', data: { appId, message } }` — X 调用 **backend.broadcast_to_app** 时向已订阅该 appId 的客户端推送；前端将 message 通过 postMessage 传给小程序 iframe（`x_app_channel`），见 MINIAPP_BACKEND.md
-- **浏览器控制**：X 可调用 **browser.navigate** 工具，服务端向已订阅 `appId: 'browser'` 的客户端推送 `{ action: 'navigate', url, openIfNeeded }`；Desktop 与 BrowserApp 均订阅，未打开时若 openIfNeeded 则自动打开并导航
 
 ---
 
@@ -441,7 +440,7 @@ x-computer/
 - **持久化**：任务、审计、用户配置、聊天会话、定时任务、X 待办等已持久化（默认 SQLite，见 INFRASTRUCTURE_MULTIUSER_CLOUD.md）；重启后保留。**数据库可配置**：`DATABASE_TYPE=sqlite`（默认）或 `mysql`；MySQL 支持开发中（R050），`database-mysql.ts` 已实现，完整接入需将 routes/orchestrator 等改为 async。
 - **真实 LLM**：ToolExecutor 中任务步骤工具仍多为模拟；**AI 助手与 X 主脑对话已接入真实 LLM**（POST /api/chat、run-now/定时，使用设置中的大模型配置或环境变量）。
 - **身份与多租户**：多用户隔离已实现（X-User-Id / 路径式小程序从 URL 提取）；Mac 风格登录页（R029），默认须登录，X_COMPUTER_REQUIRE_LOGIN=false 可关闭。
-- **浏览器应用**：内置浏览器使用 iframe 加载真实网页；X 可通过 **browser.navigate** 工具实时控制导航（打开/跳转），支持 openIfNeeded 自动打开窗口。受同源策略限制，无法对跨域页面进行点击/填表等 DOM 级操作。
+- **浏览器应用**：内置浏览器使用 iframe 加载真实网页，由用户在应用内输入地址与书签导航。受同源策略限制，无法对跨域页面进行点击/填表等 DOM 级操作；不提供 LLM 侧 `browser.*` 工具。
 - **邮件/日历/表格**：数据为前端 Mock，未对接后端存储或第三方 API。
 - **审计导出**：无导出为文件或对接外部日志系统。
 - **可访问性**：未系统做 a11y 与键盘焦点管理。

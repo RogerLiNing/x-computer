@@ -2,11 +2,19 @@
  * 认证流程集成测试：验证码、注册、登录、限流、匿名数据同步
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 import path from 'path';
 import os from 'os';
 import { createApp } from '../app.js';
+import { resetRateLimitState } from '../middleware/chatRateLimit.js';
+
+// Mock loadDefaultConfig so allowRegister is true in tests
+vi.mock('../config/defaultConfig.js', () => ({
+  loadDefaultConfig: () => ({ auth: { allowRegister: true, allowAnonymous: false } }),
+  getToolLoadingMode: () => 'all',
+  clearDefaultConfigCache: () => {},
+}));
 
 function getCaptchaAnswer(question: string): string {
   const match = (question || '').match(/(\d+) \+ (\d+)/);
@@ -48,6 +56,10 @@ async function loginWithCaptcha(
 }
 
 describe('认证流程集成测试', () => {
+  beforeEach(() => {
+    resetRateLimitState();
+  });
+
   const workspaceRoot = path.join(os.tmpdir(), `x-computer-auth-test-${Date.now()}`);
   let app: any, sandboxFS: any, db: any, userSandboxManager: any;
 

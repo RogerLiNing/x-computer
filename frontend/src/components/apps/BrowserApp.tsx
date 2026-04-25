@@ -35,6 +35,13 @@ function isValidHttpUrl(s: string): boolean {
   return s.startsWith('http://') || s.startsWith('https://');
 }
 
+/** Returns a CSS class for the security lock icon based on URL protocol */
+function securityClass(u: string): string {
+  if (u.startsWith('https://')) return 'text-green-400/60';
+  if (u.startsWith('http://')) return 'text-amber-400/60';
+  return 'text-red-400/60';
+}
+
 function normalizeUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return 'https://www.google.com';
@@ -90,6 +97,11 @@ export function BrowserApp({ windowId, metadata }: Props) {
     setLoading(false);
   };
 
+  const handleOpenInNewTab = () => {
+    window.open(url, '_blank', 'noopener');
+  };
+
+  // Listen for navigate commands from the server (sent via backend.broadcast_to_app)
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
   useEffect(() => {
@@ -107,10 +119,6 @@ export function BrowserApp({ windowId, metadata }: Props) {
     };
   }, []);
 
-  const handleOpenInNewTab = () => {
-    window.open(url, '_blank', 'noopener');
-  };
-
   return (
     <div className="h-full flex flex-col text-sm min-h-0">
       {/* Navigation bar */}
@@ -127,7 +135,7 @@ export function BrowserApp({ windowId, metadata }: Props) {
 
         {/* URL bar */}
         <div className="flex-1 min-w-0 flex items-center bg-white/5 rounded-lg px-3 py-1.5 border border-white/10 focus-within:border-desktop-highlight/40 transition-colors">
-          <Lock size={11} className="text-green-400/60 mr-2 shrink-0" />
+          <Lock size={11} className={`${securityClass(url)} mr-2 shrink-0`} />
           <input
             type="text"
             value={inputUrl}

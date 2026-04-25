@@ -1,3 +1,25 @@
+/** 通用配置解析：支持 async getConfig */
+export async function resolveGetConfig(
+  getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>,
+  userId: string,
+  key: string,
+): Promise<string | undefined> {
+  const raw = getConfig(userId, key);
+  return raw instanceof Promise ? await raw : raw;
+}
+
+/** 从 ExecutionContext 安全读取配置（支持 async getConfig） */
+export async function getConfigValue(
+  getConfig: ((userId: string, key: string) => string | undefined | Promise<string | undefined>) | undefined,
+  userId: string,
+  key: string,
+): Promise<string | undefined> {
+  if (!getConfig) return undefined;
+  const r = getConfig(userId, key);
+  const resolved = r instanceof Promise ? await r : r;
+  return resolved ?? undefined;
+}
+
 /** 将普通字符串转成正则字面量（grep 关键词用） */
 export function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

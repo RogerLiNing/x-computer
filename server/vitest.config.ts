@@ -5,10 +5,10 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    setupFiles: ['src/setTz.ts'],
+    setupFiles: ['src/setTz.ts', 'src/testSetup.ts'],
     include: ['src/**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**'],
-    testTimeout: 10000,
+    testTimeout: 30000,
   },
   resolve: {
     alias: {

@@ -301,6 +301,20 @@ export class MysqlDatabase {
     )`, [], true);
     await this.ensureIndex('channel_messages', 'idx_channel_messages_user', 'CREATE INDEX idx_channel_messages_user ON channel_messages(user_id, channel)', true);
     await this.ensureIndex('channel_messages', 'idx_channel_messages_user_time', 'CREATE INDEX idx_channel_messages_user_time ON channel_messages(user_id, channel, timestamp)', true);
+
+    await this._run(`CREATE TABLE IF NOT EXISTS prompt_templates (
+      id VARCHAR(255) PRIMARY KEY,
+      user_id VARCHAR(255) NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      content TEXT NOT NULL,
+      category VARCHAR(100),
+      description TEXT,
+      variables TEXT,
+      created_at BIGINT NOT NULL,
+      updated_at BIGINT NOT NULL
+    )`, [], true);
+    await this.ensureIndex('prompt_templates', 'idx_prompt_templates_user', 'CREATE INDEX idx_prompt_templates_user ON prompt_templates(user_id)', true);
+    await this.ensureIndex('prompt_templates', 'idx_prompt_templates_category', 'CREATE INDEX idx_prompt_templates_category ON prompt_templates(user_id, category)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1214,6 +1228,57 @@ export class MysqlDatabase {
 
   async deleteBoardItem(id: string): Promise<void> {
     await this._run('DELETE FROM x_board_items WHERE id = ?', [id]);
+  }
+
+  // ── Prompt Templates ────────────────────────────────────────
+
+  async insertPromptTemplate(template: {
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  }): Promise<void> {
+    await this._run(
+      'INSERT INTO prompt_templates (id, user_id, name, content, category, description, variables, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [template.id, template.user_id, template.name, template.content, template.category, template.description, template.variables, template.created_at, template.updated_at],
+    );
+  }
+
+  async listPromptTemplatesByUser(userId: string): Promise<{
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  }[]> {
+    return await this._query(
+      'SELECT * FROM prompt_templates WHERE user_id = ? ORDER BY updated_at DESC',
+      [userId],
+    );
+  }
+
+  async getPromptTemplate(id: string, userId: string): Promise<{
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  } | undefined> {
+    const rows = await this._query(
+      'SELECT * FROM prompt_templates WHERE id = ? AND user_id = ?',
+      [id, userId],
+    );
+    return rows[0] as any;
+  }
+
+  async updatePromptTemplate(id: string, userId: string, fields: {
+    name?: string; content?: string; category?: string | null; description?: string | null; variables?: string | null;
+  }): Promise<void> {
+    const sets: string[] = ['updated_at = ?'];
+    const params: (string | number | null)[] = [Date.now()];
+    if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
+    if (fields.content !== undefined) { sets.push('content = ?'); params.push(fields.content); }
+    if (fields.category !== undefined) { sets.push('category = ?'); params.push(fields.category ?? null); }
+    if (fields.description !== undefined) { sets.push('description = ?'); params.push(fields.description ?? null); }
+    if (fields.variables !== undefined) { sets.push('variables = ?'); params.push(fields.variables ?? null); }
+    params.push(id, userId);
+    await this._run(`UPDATE prompt_templates SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, params);
+  }
+
+  async deletePromptTemplate(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM prompt_templates WHERE id = ? AND user_id = ?', [id, userId]);
   }
 
   close(): void {

@@ -24,7 +24,7 @@ declare global {
 }
 
 /** 无需 X-User-Id 即可访问的路径（登录/注册/验证码等） */
-const AUTH_PUBLIC_PATHS = ['/api/auth/login', '/api/auth/register', '/api/auth/captcha', '/api/auth/settings', '/api/workflow/execute-task'];
+const AUTH_PUBLIC_PATHS = ['/api/auth/login', '/api/auth/register', '/api/auth/captcha', '/api/auth/settings', '/api/workflow/execute-task', '/api/llm/config', '/api/health'];
 
 /** 路径式小程序资源：/api/apps/sandbox/:userId/apps/...，userId 在 URL 中，iframe 加载无法带 Header */
 const SANDBOX_PATH_PREFIX = '/api/apps/sandbox/';

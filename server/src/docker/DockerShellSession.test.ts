@@ -15,7 +15,7 @@ describe('DockerShellSession', () => {
 
     // 创建测试容器
     const container = await docker.createContainer({
-      Image: 'node:20-alpine',
+      Image: 'alpine:latest',
       Cmd: ['sleep', '300'],
       Tty: true,
       WorkingDir: '/workspace',
@@ -144,7 +144,7 @@ describe('DockerShellSessionManager', () => {
 
     // 创建测试容器
     const container = await docker.createContainer({
-      Image: 'node:20-alpine',
+      Image: 'alpine:latest',
       Cmd: ['sleep', '300'],
       Tty: true,
       WorkingDir: '/workspace',
@@ -159,7 +159,9 @@ describe('DockerShellSessionManager', () => {
   });
 
   afterAll(async () => {
-    await manager.closeAll();
+    if (manager) {
+      await manager.closeAll();
+    }
 
     if (containerId) {
       const container = docker.getContainer(containerId);

@@ -29,6 +29,7 @@ import { getCurrentAwareness } from '../prompts/systemCore.js';
 import { broadcastToAppChannel } from '../wsBroadcast.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 import { filterToolsByPlan } from '../subscription/planToolFilter.js';
+import { getToolLoadingMode } from '../config/defaultConfig.js';
 
 /** 工具事件类型，用于流式推送到前端展示 */
 export type ChatToolEvent =
@@ -767,7 +768,10 @@ export class AgentOrchestrator extends EventEmitter {
       }
       // 每次工具执行后重新获取工具列表，确保新添加的 MCP 工具（如 x.add_mcp_server 后）能立即使用
       const allFiltered = await this.getLLMToolDefsFiltered(userId);
-      if (effectiveAllowed?.length) {
+      if (onDemand) {
+        const set = new Set(resolveToolNames());
+        tools = allFiltered.filter((t) => set.has(t.name));
+      } else if (effectiveAllowed?.length) {
         const set = new Set(effectiveAllowed);
         tools = allFiltered.filter((t) => set.has(t.name));
       } else {
@@ -1162,10 +1166,18 @@ export class AgentOrchestrator extends EventEmitter {
       return;
     }
 
-    let tools = await this.getLLMToolDefsFiltered(taskUserId);
     const allowedToolNames = meta?.allowedToolNames;
+    /** 与 runChatAgentLoop 一致：限定工具名的子智能体不走按需，避免与 capability.load 语义冲突 */
+    const onDemand = getToolLoadingMode() === 'on_demand' && !allowedToolNames?.length;
+    const loadedToolNames = new Set<string>();
+    const resolveOnDemandAllowed = (): string[] => [...AgentOrchestrator.ON_DEMAND_BASE_TOOLS, ...loadedToolNames];
+
+    let tools = await this.getLLMToolDefsFiltered(taskUserId);
     if (allowedToolNames?.length) {
       const set = new Set(allowedToolNames);
+      tools = tools.filter((t) => set.has(t.name));
+    } else if (onDemand) {
+      const set = new Set(resolveOnDemandAllowed());
       tools = tools.filter((t) => set.has(t.name));
     }
     const awareness = getCurrentAwareness();
@@ -1320,6 +1332,14 @@ export class AgentOrchestrator extends EventEmitter {
             timestamp: Date.now(),
           });
 
+          if (!call.error && onDemand && tc.name === 'capability.load' && tc.arguments?.names) {
+            const raw = tc.arguments.names;
+            const names = Array.isArray(raw)
+              ? raw.filter((n): n is string => typeof n === 'string').map((n) => String(n).trim()).filter(Boolean)
+              : [];
+            for (const n of names) loadedToolNames.add(n);
+          }
+
           if (call.error) {
             task.status = 'failed';
             const prevSteps = task.steps.slice(0, task.steps.length - stepsCreated.length);
@@ -1336,6 +1356,16 @@ export class AgentOrchestrator extends EventEmitter {
             fireHook('task_complete', { taskId: task.id, data: task.result });
             return;
           }
+        }
+        const allFiltered = await this.getLLMToolDefsFiltered(taskUserId);
+        if (allowedToolNames?.length) {
+          const allowed = new Set(allowedToolNames);
+          tools = allFiltered.filter((t) => allowed.has(t.name));
+        } else if (onDemand) {
+          const allowed = new Set(resolveOnDemandAllowed());
+          tools = allFiltered.filter((t) => allowed.has(t.name));
+        } else {
+          tools = allFiltered;
         }
         await this.persistTask(task);
       }

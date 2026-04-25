@@ -27,18 +27,18 @@ function ThinkBlock({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="border border-desktop-accent/30 rounded-lg overflow-hidden bg-desktop-accent/5 my-2">
+    <div className="border border-white/10 rounded-lg overflow-hidden bg-white/5 my-2">
       <button
         type="button"
-        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-desktop-accent hover:bg-desktop-accent/10 transition-colors"
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-desktop-text/90 hover:bg-white/5 transition-colors"
         onClick={() => setExpanded((e) => !e)}
       >
-        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        <Sparkles size={11} />
+        {expanded ? <ChevronDown size={12} className="text-desktop-muted" /> : <ChevronRight size={12} className="text-desktop-muted" />}
+        <Sparkles size={11} className="text-desktop-highlight/90" />
         <span>思考过程</span>
       </button>
       {expanded && (
-        <div className="px-3 pb-2 text-[11px] text-desktop-muted leading-relaxed whitespace-pre-wrap">
+        <div className="px-3 pb-2 text-[11px] text-desktop-text/80 leading-relaxed whitespace-pre-wrap">
           {content}
         </div>
       )}

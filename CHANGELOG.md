@@ -1,5 +1,116 @@
 # 更新日志
 
+## [Unreleased] — 2026-04-08
+
+### P2 任务完成：用户仪表板与管理后台
+
+#### R058: 用户仪表板 ✅
+
+**订阅管理界面**
+- ✅ 当前订阅状态展示（套餐、计费周期、到期时间）
+- ✅ 实时使用量监控（AI 调用次数、存储空间、并发任务）
+- ✅ 配额进度条（超过 80% 显示黄色警告）
+- ✅ 月付/年付切换
+- ✅ 升级、取消、重新激活订阅
+- ✅ 账单历史列表
+
+**账户设置**
+- ✅ 登录/注册表单（验证码防护）
+- ✅ 邮箱验证
+- ✅ 密码重置
+- ✅ 登出功能
+- ✅ 订阅摘要卡片
+
+#### R059: 管理后台 ✅
+
+**用户管理**
+- ✅ 用户列表（分页、搜索）
+- ✅ 用户信息展示（ID、邮箱、昵称、套餐、使用量）
+- ✅ 封禁/解封用户
+- ✅ 修改用户订阅套餐
+- ✅ 使用量统计（AI 调用、存储）
+
+**系统监控**
+- ✅ 总用户数
+- ✅ 总任务数
+- ✅ 活跃用户统计
+
+**内容管理系统** (新增)
+- ✅ 公告管理（CRUD）
+  - 支持中英文
+  - 定时显示（开始/结束时间）
+  - 目标用户群（all/free/paid/pro/enterprise）
+  - 优先级排序
+  - 类型分类（info/warning/success/error）
+- ✅ 邮件模板管理（CRUD）
+  - 内置 5 个默认模板（welcome、password_reset、email_verification、subscription_created、subscription_canceled）
+  - Markdown 格式
+  - 变量占位符
+
+#### 性能优化 ✅
+
+**数据库索引**
+- ✅ 订阅表索引优化（user_id, status, stripe_customer_id, stripe_subscription_id）
+- ✅ 使用记录索引优化（复合索引 user_period, resource_type, created_at）
+- ✅ 支付历史索引优化（user_id, status, stripe_payment_intent）
+- ✅ 公告表索引优化（is_active, start_end, priority）
+- ✅ 邮件模板索引优化（name, is_active）
+
+**SQLite 性能配置**
+- ✅ WAL 模式（提升并发读写）
+- ✅ 64MB 缓存
+- ✅ 内存映射（256MB）
+- ✅ 内存临时表
+
+#### SEO 优化 ✅
+
+- ✅ Sitemap.xml（网站地图）
+- ✅ Robots.txt（搜索引擎配置）
+- ✅ 国际化路由支持
+
+### 数据库变更
+
+#### 新增表
+
+- `announcements`: 系统公告表
+  - 支持中英文内容、定时发布、目标用户过滤、优先级
+  
+- `email_templates`: 邮件模板表
+  - 内置 5 个默认模板、Markdown 格式、变量占位符
+
+### API 新增
+
+#### 内容管理 API
+
+```
+# 公告管理
+GET  /api/announcements/active                  # 用户端获取活跃公告
+GET  /api/admin/content/announcements           # 管理端列表
+POST /api/admin/content/announcements           # 创建公告
+PUT  /api/admin/content/announcements/:id       # 更新公告
+DELETE /api/admin/content/announcements/:id     # 删除公告
+
+# 邮件模板
+GET  /api/admin/content/email-templates         # 模板列表
+GET  /api/admin/content/email-templates/:id     # 模板详情
+PUT  /api/admin/content/email-templates/:id     # 更新模板
+```
+
+### 新增文件
+
+#### 后端
+- `server/src/routes/contentManagement.ts` - 内容管理 API
+- `server/migrations/002_content_management.sql` - 数据库迁移
+
+#### SEO
+- `marketing/public/sitemap.xml` - 网站地图
+- `marketing/public/robots.txt` - 搜索引擎配置
+
+### 文档更新
+
+- ✅ 创建 `docs/P2_COMPLETION_SUMMARY.md` - P2 阶段完成总结
+- ✅ 更新 `docs/PRODUCTION_READINESS.md` - 生产就绪状态
+
 ## [Unreleased] — 2026-04-04
 
 ### 容器空闲超时

@@ -362,6 +362,8 @@ export interface LLMProviderConfig {
   baseUrl?: string;
   /** 是否已配置 API Key（不传输实际密钥） */
   apiKeyConfigured?: boolean;
+  /** API 类型：'openai' 使用 OpenAI 兼容接口，'anthropic' 使用 Anthropic 接口 */
+  apiType?: 'openai' | 'anthropic';
 }
 
 /** 系统级大模型配置：提供商列表 + 各模态默认模型 */

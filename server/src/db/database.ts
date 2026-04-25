@@ -342,6 +342,22 @@ export class SqliteAppDatabase {
     } catch {
       /* 忽略 */
     }
+    // prompt_templates 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS prompt_templates (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        content TEXT NOT NULL,
+        category TEXT,
+        description TEXT,
+        variables TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_prompt_templates_user ON prompt_templates(user_id);
+      CREATE INDEX IF NOT EXISTS idx_prompt_templates_category ON prompt_templates(user_id, category);
+    `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -1157,7 +1173,52 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM x_board_items WHERE id = ?').run(id);
   }
 
-  // ── Cleanup ────────────────────────────────────────────────
+  // ── Prompt Templates ────────────────────────────────────────
+
+  insertPromptTemplate(template: {
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  }): void {
+    this.db.prepare(
+      'INSERT INTO prompt_templates (id, user_id, name, content, category, description, variables, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(template.id, template.user_id, template.name, template.content, template.category, template.description, template.variables, template.created_at, template.updated_at);
+  }
+
+  listPromptTemplatesByUser(userId: string): {
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  }[] {
+    return this.db
+      .prepare('SELECT * FROM prompt_templates WHERE user_id = ? ORDER BY updated_at DESC')
+      .all(userId) as any;
+  }
+
+  getPromptTemplate(id: string, userId: string): {
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  } | undefined {
+    return this.db
+      .prepare('SELECT * FROM prompt_templates WHERE id = ? AND user_id = ?')
+      .get(id, userId) as any;
+  }
+
+  updatePromptTemplate(id: string, userId: string, fields: {
+    name?: string; content?: string; category?: string | null; description?: string | null; variables?: string | null;
+  }): void {
+    const sets: string[] = ['updated_at = ?'];
+    const params: (string | number | null)[] = [Date.now()];
+    if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
+    if (fields.content !== undefined) { sets.push('content = ?'); params.push(fields.content); }
+    if (fields.category !== undefined) { sets.push('category = ?'); params.push(fields.category ?? null); }
+    if (fields.description !== undefined) { sets.push('description = ?'); params.push(fields.description ?? null); }
+    if (fields.variables !== undefined) { sets.push('variables = ?'); params.push(fields.variables ?? null); }
+    params.push(id, userId);
+    this.db.prepare(`UPDATE prompt_templates SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...params);
+  }
+
+  deletePromptTemplate(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM prompt_templates WHERE id = ? AND user_id = ?').run(id, userId);
+  }
 
   close(): void {
     this.db.close();
@@ -1496,6 +1557,35 @@ export class SqliteDatabaseAdapter {
   }
   deleteBoardItem(id: string): Promise<void> {
     this.db.deleteBoardItem(id);
+    return Promise.resolve();
+  }
+  insertPromptTemplate(template: {
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  }): Promise<void> {
+    this.db.insertPromptTemplate(template);
+    return Promise.resolve();
+  }
+  listPromptTemplatesByUser(userId: string): Promise<{
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  }[]> {
+    return Promise.resolve(this.db.listPromptTemplatesByUser(userId));
+  }
+  getPromptTemplate(id: string, userId: string): Promise<{
+    id: string; user_id: string; name: string; content: string;
+    category: string | null; description: string | null; variables: string | null; created_at: number; updated_at: number;
+  } | undefined> {
+    return Promise.resolve(this.db.getPromptTemplate(id, userId));
+  }
+  updatePromptTemplate(id: string, userId: string, fields: {
+    name?: string; content?: string; category?: string | null; description?: string | null; variables?: string | null;
+  }): Promise<void> {
+    this.db.updatePromptTemplate(id, userId, fields);
+    return Promise.resolve();
+  }
+  deletePromptTemplate(id: string, userId: string): Promise<void> {
+    this.db.deletePromptTemplate(id, userId);
     return Promise.resolve();
   }
   close(): void {
