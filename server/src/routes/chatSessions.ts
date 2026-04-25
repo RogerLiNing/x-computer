@@ -23,21 +23,26 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
   const { onMessageAdded } = options;
   const router = Router();
 
-  /** GET /api/chat/sessions - 会话列表；query.scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手） */
+  /** GET /api/chat/sessions - 会话列表；query.scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手）；query.search 搜索标题 */
   router.get('/', async (req, res) => {
     const userId = req.userId;
     await db.ensureUser(userId);
     const limit = parseInt(req.query.limit as string) || 50;
     const scene = typeof req.query.scene === 'string' ? req.query.scene : undefined;
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : undefined;
     const sessions = await db.listSessions(userId, limit, scene);
-    res.json(
-      sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string }) => ({
-        id: s.id,
-        title: s.title,
-        createdAt: s.created_at,
-        updatedAt: s.updated_at,
-      })),
-    );
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string }) => ({
+      id: s.id,
+      title: s.title,
+      createdAt: s.created_at,
+      updatedAt: s.updated_at,
+    }));
+    if (search) {
+      const q = search.toLowerCase();
+      res.json(mapped.filter((s) => (s.title ?? '').toLowerCase().includes(q)));
+    } else {
+      res.json(mapped);
+    }
   });
 
   /** POST /api/chat/sessions - 创建会话；body.scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */

@@ -27,7 +27,6 @@
     "language": "语言",
     "noDescription": "无描述"
   },
-  
   "apps": {
     "file-manager": "文件管理器",
     "terminal": "终端",
@@ -52,7 +51,6 @@
     "mcp": "MCP 扩展",
     "channels": "渠道管理"
   },
-
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
     "terminal": "在沙箱中执行命令",
@@ -78,7 +76,6 @@
     "channels": "管理邮件、WhatsApp、QQ 等通信渠道",
     "miniapp": "X 制作的应用"
   },
-  
   "desktop": {
     "searchPlaceholder": "搜索应用...",
     "noResults": "未找到应用",
@@ -87,14 +84,12 @@
     "demo": "演示",
     "comingSoon": "即将推出"
   },
-  
   "window": {
     "minimize": "最小化",
     "maximize": "最大化",
     "restore": "还原",
     "close": "关闭"
   },
-  
   "fileManager": {
     "name": "名称",
     "size": "大小",
@@ -114,7 +109,6 @@
     "workspacePath": "工作区路径",
     "copyPathSuccess": "路径已复制到剪贴板"
   },
-  
   "terminal": {
     "placeholder": "输入命令...",
     "clear": "清空",
@@ -138,7 +132,6 @@
     "helpCtrlL": "  Ctrl+L       清屏",
     "helpCtrlC": "  Ctrl+C       取消输入"
   },
-  
   "chat": {
     "placeholder": "输入消息...",
     "send": "发送",
@@ -157,7 +150,6 @@
     "exampleExplainCode": "解释这段代码",
     "exampleSearchWeb": "搜索一下关于 AI 的最新资讯"
   },
-
   "templates": {
     "quickTasks": "快捷任务",
     "categoryStudent": "学生",
@@ -195,12 +187,11 @@
     "devApiDoc": "API 文档生成",
     "devApiDocText": "根据接口定义生成 API 文档（参数、返回值、示例）"
   },
-  
   "settings": {
     "title": "设置",
     "general": "通用",
     "ai": "AI 配置",
-    "mcp": "MCP 服务器",
+    "mcp": "MCP 扩展",
     "skills": "技能",
     "tools": "工具",
     "searchTools": "搜索工具...",
@@ -209,41 +200,33 @@
     "storage": "存储",
     "about": "关于",
     "subscription": "订阅",
-    
     "language": "语言",
     "theme": "主题",
     "autoSave": "自动保存",
-    
     "llmProvider": "LLM 提供商",
     "apiKey": "API 密钥",
     "model": "模型",
     "temperature": "温度",
     "maxTokens": "最大令牌数",
-    
     "mcpServers": "MCP 服务器",
     "addServer": "添加服务器",
     "serverName": "服务器名称",
     "serverUrl": "服务器地址",
     "serverEnabled": "已启用",
-    
     "installedSkills": "已安装技能",
     "availableSkills": "可用技能",
     "installSkill": "安装",
     "uninstallSkill": "卸载",
-    
     "emailNotifications": "邮件通知",
     "smtpHost": "SMTP 主机",
     "smtpPort": "SMTP 端口",
     "smtpUser": "SMTP 用户名",
     "smtpPassword": "SMTP 密码",
-    
     "usedStorage": "已用存储",
     "totalStorage": "总存储",
     "clearCache": "清除缓存",
-    
     "version": "版本",
     "checkUpdates": "检查更新",
-    
     "currentPlan": "当前套餐",
     "usage": "使用情况",
     "upgrade": "升级",
@@ -251,7 +234,6 @@
     "account": "账号",
     "apps": "应用管理",
     "models": "大模型配置",
-    "mcp": "MCP 扩展",
     "media": "多媒体",
     "notify": "通知/邮件",
     "channels": "渠道",
@@ -262,7 +244,6 @@
     "themeDark": "深色（默认）",
     "themeLight": "浅色",
     "themeSystem": "跟随系统",
-    "theme": "主题",
     "themeDescription": "选择系统界面主题",
     "languageDescription": "系统界面语言",
     "notifications": "通知",
@@ -310,7 +291,6 @@
     "featureFlags": "功能开关",
     "lifecycleHooks": "生命周期 Hook",
     "llmCouncil": "LLM 议会",
-    "auditLog": "审计日志",
     "promptTemplates": "提示词模板",
     "promptTemplatesDesc": "保存和复用常用提示词，支持变量替换",
     "createTemplate": "创建模板",
@@ -321,7 +301,6 @@
     "templateDescriptionOptional": "描述（可选）",
     "noTemplates": "暂无模板",
     "filterByCategory": "按分类筛选",
-    "all": "全部",
     "saving": "保存中…",
     "save": "保存",
     "copy": "复制",
@@ -348,9 +327,39 @@
     "systemPrompts": "系统提示词",
     "systemPromptsDesc": "按模式自定义 AI 行为",
     "enterSystemPrompt": "在此输入系统提示词...",
-    "enabled": "已启用"
+    "enabled": "已启用",
+    "shortcuts": "键盘快捷键",
+    "shortcutsDesc": "自定义键盘快捷键，更快导航",
+    "shortcutAction": "操作",
+    "shortcutKeys": "快捷键",
+    "shortcutDefault": "默认",
+    "shortcutCustom": "自定义",
+    "shortcutReset": "重置",
+    "shortcutResetAll": "全部重置为默认",
+    "shortcutSaved": "快捷键已保存",
+    "shortcutRecord": "请按下组合键…",
+    "shortcutConflict": "已被占用",
+    "shortcutClear": "清除",
+    "shortcutSearchLauncher": "打开搜索启动器",
+    "shortcutLockScreen": "锁定屏幕",
+    "shortcutCloseWindow": "关闭当前窗口",
+    "shortcutMinimizeWindow": "最小化当前窗口",
+    "shortcutMaximizeWindow": "最大化/还原窗口",
+    "shortcutFocusWindow1": "聚焦第1个窗口",
+    "shortcutFocusWindow2": "聚焦第2个窗口",
+    "shortcutFocusWindow3": "聚焦第3个窗口",
+    "shortcutFocusWindow4": "聚焦第4个窗口",
+    "shortcutFocusWindow5": "聚焦第5个窗口",
+    "shortcutFocusWindow6": "聚焦第6个窗口",
+    "shortcutFocusWindow7": "聚焦第7个窗口",
+    "shortcutFocusWindow8": "聚焦第8个窗口",
+    "shortcutFocusWindow9": "聚焦第9个窗口",
+    "shortcutOpenTerminal": "打开终端",
+    "shortcutOpenChat": "打开聊天",
+    "shortcutNewChat": "新建聊天消息",
+    "shortcutStopGenerating": "停止 AI 生成",
+    "shortcutToggleSidebar": "切换聊天侧边栏"
   },
-
   "onboarding": {
     "welcome": "欢迎使用 X-Computer",
     "step1Title": "打开 AI 助手",
@@ -363,7 +372,6 @@
     "done": "开始使用",
     "skip": "跳过"
   },
-  
   "taskTimeline": {
     "title": "任务时间线",
     "pending": "等待中",
@@ -420,7 +428,6 @@
     "retryFromFailure": "从失败步骤起重新执行",
     "retryFromStart": "任务已从头重新执行"
   },
-  
   "auth": {
     "login": "登录",
     "register": "注册",
@@ -462,7 +469,6 @@
     "processing": "处理中…",
     "systemTagline": "X-Computer AI 自主电脑系统"
   },
-  
   "subscription": {
     "title": "订阅管理",
     "freePlan": "免费版",
@@ -509,7 +515,6 @@
     "features": "功能特性",
     "popular": "最受欢迎"
   },
-  
   "account": {
     "title": "账户",
     "profile": "个人资料",
@@ -528,7 +533,6 @@
     "usageThisMonth": "本月使用量",
     "usageHistory": "使用历史"
   },
-  
   "errors": {
     "networkError": "网络错误，请检查网络连接",
     "serverError": "服务器错误，请稍后重试",
@@ -542,7 +546,6 @@
     "paymentRequired": "需要付费",
     "unknown": "发生未知错误"
   },
-  
   "landing": {
     "nav": {
       "features": "功能特性",
@@ -562,36 +565,97 @@
     "features": {
       "title": "强大功能",
       "subtitle": "一个系统满足所有需求",
-      "codeGeneration": { "title": "代码生成", "description": "在 AI 辅助下编写、编辑和调试任何语言的代码" },
-      "webBrowsing": { "title": "网页浏览", "description": "浏览网页、提取数据、自动化网页任务" },
-      "taskAutomation": { "title": "任务自动化", "description": "通过智能任务规划自动化复杂工作流" },
-      "secureSandbox": { "title": "安全沙箱", "description": "所有操作在安全、隔离的环境中运行" },
-      "selfLearning": { "title": "自我学习", "description": "从每次交互中持续学习和改进" },
-      "multiModal": { "title": "多模态 AI", "description": "生成图片、音乐和创意内容" }
+      "codeGeneration": {
+        "title": "代码生成",
+        "description": "在 AI 辅助下编写、编辑和调试任何语言的代码"
+      },
+      "webBrowsing": {
+        "title": "网页浏览",
+        "description": "浏览网页、提取数据、自动化网页任务"
+      },
+      "taskAutomation": {
+        "title": "任务自动化",
+        "description": "通过智能任务规划自动化复杂工作流"
+      },
+      "secureSandbox": {
+        "title": "安全沙箱",
+        "description": "所有操作在安全、隔离的环境中运行"
+      },
+      "selfLearning": {
+        "title": "自我学习",
+        "description": "从每次交互中持续学习和改进"
+      },
+      "multiModal": {
+        "title": "多模态 AI",
+        "description": "生成图片、音乐和创意内容"
+      }
     },
     "pricing": {
       "title": "简单透明的定价",
       "subtitle": "选择适合你的方案",
-      "trial": { "name": "免费试用", "price": "¥0", "period": "7 天", "cta": "开始免费试用" },
-      "personal": { "name": "个人版", "price": "¥68", "period": "每月", "cta": "立即开始" },
-      "pro": { "name": "专业版", "price": "¥198", "period": "每月", "cta": "立即开始" },
+      "trial": {
+        "name": "免费试用",
+        "price": "¥0",
+        "period": "7 天",
+        "cta": "开始免费试用"
+      },
+      "personal": {
+        "name": "个人版",
+        "price": "¥68",
+        "period": "每月",
+        "cta": "立即开始"
+      },
+      "pro": {
+        "name": "专业版",
+        "price": "¥198",
+        "period": "每月",
+        "cta": "立即开始"
+      },
       "features": {
-        "trial": ["100 次 AI 调用", "100MB 存储空间", "1 个并发任务", "基础功能"],
-        "personal": ["1,000 次 AI 调用", "1GB 存储空间", "3 个并发任务", "全部功能", "优先支持"],
-        "pro": ["5,000 次 AI 调用", "10GB 存储空间", "10 个并发任务", "全部功能", "优先支持", "高级工具"]
+        "trial": [
+          "100 次 AI 调用",
+          "100MB 存储空间",
+          "1 个并发任务",
+          "基础功能"
+        ],
+        "personal": [
+          "1,000 次 AI 调用",
+          "1GB 存储空间",
+          "3 个并发任务",
+          "全部功能",
+          "优先支持"
+        ],
+        "pro": [
+          "5,000 次 AI 调用",
+          "10GB 存储空间",
+          "10 个并发任务",
+          "全部功能",
+          "优先支持",
+          "高级工具"
+        ]
       }
     },
-    "cta": { "title": "准备好开始了吗？", "subtitle": "加入数千名已经在使用 X-Computer 自动化工作的用户", "button": "开始免费试用" },
+    "cta": {
+      "title": "准备好开始了吗？",
+      "subtitle": "加入数千名已经在使用 X-Computer 自动化工作的用户",
+      "button": "开始免费试用"
+    },
     "footer": {
       "description": "面向未来的 AI 驱动自主电脑系统",
-      "product": "产品", "company": "公司", "legal": "法律",
-      "features": "功能特性", "pricing": "价格方案", "docs": "文档",
-      "about": "关于我们", "blog": "博客", "contact": "联系我们",
-      "privacy": "隐私政策", "terms": "服务条款",
+      "product": "产品",
+      "company": "公司",
+      "legal": "法律",
+      "features": "功能特性",
+      "pricing": "价格方案",
+      "docs": "文档",
+      "about": "关于我们",
+      "blog": "博客",
+      "contact": "联系我们",
+      "privacy": "隐私政策",
+      "terms": "服务条款",
       "copyright": "© 2026 X-Computer. 保留所有权利。"
     }
   },
-
   "admin": {
     "title": "管理后台",
     "totalUsers": "总用户数",
@@ -613,7 +677,6 @@
     "changePlan": "调整套餐",
     "pageInfo": "第 {{from}}-{{to}} 条，共 {{total}} 条"
   },
-
   "notifications": {
     "title": "通知",
     "markAllRead": "全部标为已读",

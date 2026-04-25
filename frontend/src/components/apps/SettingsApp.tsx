@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -374,6 +374,229 @@ function HeartbeatSettings() {
       >
         {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
       </button>
+    </div>
+  );
+}
+
+function ShortcutsSettings() {
+  const { t } = useTranslation();
+  const [shortcuts, setShortcuts] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [recordingAction, setRecordingAction] = useState<string | null>(null);
+  const [conflict, setConflict] = useState<string | null>(null);
+
+  const SHORTCUTS_STORAGE_KEY = 'x-computer-shortcuts';
+
+  useEffect(() => {
+    api.getUserConfig().then((cfg) => {
+      const sc = cfg['shortcuts'];
+      if (sc && typeof sc === 'object') {
+        setShortcuts(sc as Record<string, string>);
+      }
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const DEFAULTS: Record<string, string> = {
+    searchLauncher: '⌘K',
+    lockScreen: '⌘L',
+    closeWindow: '⌘W',
+    minimizeWindow: '⌘M',
+    maximizeWindow: '⌘⇧F',
+    focusWindow1: '⌘1',
+    focusWindow2: '⌘2',
+    focusWindow3: '⌘3',
+    focusWindow4: '⌘4',
+    focusWindow5: '⌘5',
+    focusWindow6: '⌘6',
+    focusWindow7: '⌘7',
+    focusWindow8: '⌘8',
+    focusWindow9: '⌘9',
+    openTerminal: '⌘T',
+    openChat: '⌘N',
+  };
+
+  const ACTIONS: Array<{ key: string; labelKey: string }> = [
+    { key: 'searchLauncher', labelKey: 'settings.shortcutSearchLauncher' },
+    { key: 'openChat', labelKey: 'settings.shortcutOpenChat' },
+    { key: 'newChat', labelKey: 'settings.shortcutNewChat' },
+    { key: 'stopGenerating', labelKey: 'settings.shortcutStopGenerating' },
+    { key: 'toggleSidebar', labelKey: 'settings.shortcutToggleSidebar' },
+    { key: 'openTerminal', labelKey: 'settings.shortcutOpenTerminal' },
+    { key: 'lockScreen', labelKey: 'settings.shortcutLockScreen' },
+    { key: 'closeWindow', labelKey: 'settings.shortcutCloseWindow' },
+    { key: 'minimizeWindow', labelKey: 'settings.shortcutMinimizeWindow' },
+    { key: 'maximizeWindow', labelKey: 'settings.shortcutMaximizeWindow' },
+    { key: 'focusWindow1', labelKey: 'settings.shortcutFocusWindow1' },
+    { key: 'focusWindow2', labelKey: 'settings.shortcutFocusWindow2' },
+    { key: 'focusWindow3', labelKey: 'settings.shortcutFocusWindow3' },
+    { key: 'focusWindow4', labelKey: 'settings.shortcutFocusWindow4' },
+    { key: 'focusWindow5', labelKey: 'settings.shortcutFocusWindow5' },
+    { key: 'focusWindow6', labelKey: 'settings.shortcutFocusWindow6' },
+    { key: 'focusWindow7', labelKey: 'settings.shortcutFocusWindow7' },
+    { key: 'focusWindow8', labelKey: 'settings.shortcutFocusWindow8' },
+    { key: 'focusWindow9', labelKey: 'settings.shortcutFocusWindow9' },
+  ];
+
+  const formatShortcut = (action: string, value: string): string => {
+    if (!value) return t('settings.shortcutDefault', DEFAULTS[action] || '—');
+    return value;
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, action: string) => {
+    e.preventDefault();
+    if (!recordingAction) return;
+
+    const parts: string[] = [];
+    if (e.metaKey || e.ctrlKey) parts.push('⌘');
+    if (e.altKey) parts.push('⌥');
+    if (e.shiftKey) parts.push('⇧');
+    const key = e.key;
+    if (!['Meta', 'Control', 'Alt', 'Shift'].includes(key)) {
+      parts.push(key.length === 1 ? key.toUpperCase() : key);
+    }
+
+    if (parts.length === 0 || (parts.length === 1 && ['Meta', 'Control', 'Alt', 'Shift'].includes(key))) return;
+
+    const shortcut = parts.join('');
+    const existing = Object.entries(shortcuts).find(([a, v]) => a !== action && v === shortcut && DEFAULTS[a] !== shortcut);
+    if (existing) {
+      setConflict(t('settings.shortcutConflict'));
+      setTimeout(() => setConflict(null), 2000);
+      return;
+    }
+
+    const updated = { ...shortcuts, [action]: shortcut };
+    setShortcuts(updated);
+    setRecordingAction(null);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Save to server user config for cross-device sync
+      await api.setUserConfig({ shortcuts });
+      // Save to localStorage so the keyboard shortcut hook picks up changes immediately
+      localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(shortcuts));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch { /* ignore */ }
+    setSaving(false);
+  };
+
+  // Sync shortcuts to localStorage on every change so the hook picks them up immediately
+  useEffect(() => {
+    if (!loading) {
+      localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(shortcuts));
+    }
+  }, [shortcuts, loading]);
+
+  const handleReset = (action: string) => {
+    const updated = { ...shortcuts };
+    delete updated[action];
+    setShortcuts(updated);
+  };
+
+  const handleResetAll = () => {
+    setShortcuts({});
+  };
+
+  if (loading) {
+    return <div className="text-xs text-desktop-muted p-4">{t('common.loading', 'Loading…')}</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.shortcuts')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-1">{t('settings.shortcutsDesc')}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleResetAll}
+            className="text-[11px] px-2 py-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/5 transition-colors"
+          >
+            {t('settings.shortcutResetAll')}
+          </button>
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving}
+            className="text-[11px] px-3 py-1 rounded bg-desktop-accent/60 text-desktop-text hover:bg-desktop-accent/80 transition-colors disabled:opacity-50"
+          >
+            {saved ? t('settings.shortcutSaved') : saving ? t('settings.testing', '…') : t('common.save', 'Save')}
+          </button>
+        </div>
+      </div>
+
+      {conflict && (
+        <div className="text-[11px] px-3 py-2 rounded bg-red-500/20 text-red-400">{conflict}</div>
+      )}
+
+      <div className="space-y-1">
+        {ACTIONS.map(({ key, labelKey }) => {
+          const current = shortcuts[key];
+          const isDefault = !current;
+          const displayValue = current || DEFAULTS[key] || '—';
+          const isRecording = recordingAction === key;
+
+          return (
+            <div key={key} className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-white/5 group">
+              <span className="text-xs text-desktop-muted w-48 shrink-0">{t(labelKey)}</span>
+
+              <div className="flex items-center gap-1.5 flex-1">
+                <div
+                  tabIndex={0}
+                  onClick={() => setRecordingAction(isRecording ? null : key)}
+                  onKeyDown={(e) => { if (isRecording) handleKeyDown(e, key); }}
+                  className={`text-xs px-2 py-1 rounded border cursor-pointer select-none min-w-[80px] text-center transition-colors ${
+                    isRecording
+                      ? 'border-desktop-accent bg-desktop-accent/20 text-desktop-accent'
+                      : isDefault
+                      ? 'border-white/10 text-desktop-muted'
+                      : 'border-white/20 text-desktop-text bg-desktop-accent/10'
+                  }`}
+                >
+                  {isRecording ? t('settings.shortcutRecord') : formatShortcut(key, current ?? '')}
+                </div>
+
+                {isRecording && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = { ...shortcuts, [key]: '' };
+                      setShortcuts(updated);
+                      setRecordingAction(null);
+                    }}
+                    className="text-[10px] px-1.5 py-0.5 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
+                    title={t('settings.shortcutClear')}
+                  >
+                    ✕
+                  </button>
+                )}
+
+                {!isDefault && (
+                  <button
+                    type="button"
+                    onClick={() => handleReset(key)}
+                    className="text-[10px] px-1.5 py-0.5 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                    title={t('settings.shortcutReset')}
+                  >
+                    ↩
+                  </button>
+                )}
+              </div>
+
+              {!isDefault && (
+                <span className="text-[10px] text-desktop-accent/60">{t('settings.shortcutCustom')}</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1681,6 +1904,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'account', labelKey: 'settings.account', icon: User },
     { id: 'apps', labelKey: 'settings.apps', icon: Package },
     { id: 'skills', labelKey: 'settings.skills', icon: Sparkles },
+    { id: 'shortcuts', labelKey: 'settings.shortcuts', icon: Keyboard },
     { id: 'tools', labelKey: 'settings.tools', icon: Wrench },
     { id: 'channels', labelKey: 'settings.channels', icon: MessageSquare },
     { id: 'about', labelKey: 'settings.about', icon: Info },
@@ -1923,6 +2147,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'templates' && (
           <PromptTemplatesSettings />
+        )}
+
+        {tab === 'shortcuts' && (
+          <ShortcutsSettings />
         )}
 
         {tab === 'announcements' && (

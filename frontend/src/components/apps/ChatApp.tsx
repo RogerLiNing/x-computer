@@ -48,6 +48,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; file: File }[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [sessionSearch, setSessionSearch] = useState('');
   /** 按需加载模式下本会话已加载的工具名，跨消息持久化 */
   const loadedToolNamesRef = useRef<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -78,6 +79,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     updateSessionTitle,
     refreshSessions,
   } = useChatSessions(setMessages);
+
+  const filteredSessions = sessionSearch.trim()
+    ? sessions.filter((s) => (s.title ?? '').toLowerCase().includes(sessionSearch.toLowerCase()))
+    : sessions;
   const tasks = useTaskStore((s) => s.tasks);
   const { openApp, setWindowTitle } = useDesktopStore();
   const addNotification = useConnectionStore((s) => s.addNotification);
@@ -1131,8 +1136,17 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             <MessageSquarePlus size={14} />
             新对话
           </button>
+          <div className="px-2 mb-1">
+            <input
+              type="text"
+              placeholder="搜索会话..."
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none"
+              value={sessionSearch}
+              onChange={(e) => setSessionSearch(e.target.value)}
+            />
+          </div>
           <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
-            {sessions.map((s) => (
+            {filteredSessions.map((s) => (
               <div
                 key={s.id}
                 className={`group flex items-center gap-0.5 rounded-lg ${

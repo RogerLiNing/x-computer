@@ -27,7 +27,6 @@
     "language": "Language",
     "noDescription": "No description"
   },
-  
   "apps": {
     "file-manager": "File Manager",
     "terminal": "Terminal",
@@ -49,7 +48,6 @@
     "subscription": "Subscription",
     "admin": "Admin"
   },
-
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
     "terminal": "Execute commands in sandbox",
@@ -72,7 +70,6 @@
     "admin": "User management, ban/unban, system overview (admin only)",
     "miniapp": "App created by X"
   },
-  
   "desktop": {
     "searchPlaceholder": "Search apps...",
     "noResults": "No apps found",
@@ -81,14 +78,12 @@
     "demo": "Demo",
     "comingSoon": "Coming Soon"
   },
-  
   "window": {
     "minimize": "Minimize",
     "maximize": "Maximize",
     "restore": "Restore",
     "close": "Close"
   },
-  
   "fileManager": {
     "name": "Name",
     "size": "Size",
@@ -108,7 +103,6 @@
     "workspacePath": "Workspace Path",
     "copyPathSuccess": "Path copied to clipboard"
   },
-  
   "terminal": {
     "placeholder": "Type a command...",
     "clear": "Clear",
@@ -132,7 +126,6 @@
     "helpCtrlL": "  Ctrl+L       Clear",
     "helpCtrlC": "  Ctrl+C       Cancel"
   },
-  
   "chat": {
     "placeholder": "Type a message...",
     "send": "Send",
@@ -151,7 +144,6 @@
     "exampleExplainCode": "Explain this code",
     "exampleSearchWeb": "Search the web for latest news about AI"
   },
-
   "templates": {
     "quickTasks": "Quick Tasks",
     "categoryStudent": "Student",
@@ -189,12 +181,11 @@
     "devApiDoc": "API documentation",
     "devApiDocText": "Generate API docs from this interface (params, return values, examples)"
   },
-  
   "settings": {
     "title": "Settings",
     "general": "General",
     "ai": "AI Configuration",
-    "mcp": "MCP Servers",
+    "mcp": "MCP",
     "skills": "Skills",
     "tools": "Tools",
     "searchTools": "Search tools...",
@@ -203,41 +194,33 @@
     "storage": "Storage",
     "about": "About",
     "subscription": "Subscription",
-    
     "language": "Language",
     "theme": "Theme",
     "autoSave": "Auto Save",
-    
     "llmProvider": "LLM Provider",
     "apiKey": "API Key",
     "model": "Model",
     "temperature": "Temperature",
     "maxTokens": "Max Tokens",
-    
     "mcpServers": "MCP Servers",
     "addServer": "Add Server",
     "serverName": "Server Name",
     "serverUrl": "Server URL",
     "serverEnabled": "Enabled",
-    
     "installedSkills": "Installed Skills",
     "availableSkills": "Available Skills",
     "installSkill": "Install",
     "uninstallSkill": "Uninstall",
-    
     "emailNotifications": "Email Notifications",
     "smtpHost": "SMTP Host",
     "smtpPort": "SMTP Port",
     "smtpUser": "SMTP Username",
     "smtpPassword": "SMTP Password",
-    
     "usedStorage": "Used Storage",
     "totalStorage": "Total Storage",
     "clearCache": "Clear Cache",
-    
     "version": "Version",
     "checkUpdates": "Check for Updates",
-    
     "currentPlan": "Current Plan",
     "usage": "Usage",
     "upgrade": "Upgrade",
@@ -245,7 +228,6 @@
     "account": "Account",
     "apps": "Apps",
     "models": "Models",
-    "mcp": "MCP",
     "media": "Media",
     "notify": "Notifications",
     "channels": "Channels",
@@ -256,7 +238,6 @@
     "themeDark": "Dark (default)",
     "themeLight": "Light",
     "themeSystem": "Follow system",
-    "theme": "Theme",
     "themeDescription": "Select system interface theme",
     "languageDescription": "System interface language",
     "notifications": "Notifications",
@@ -274,7 +255,7 @@
     "dataPublic": "Public",
     "dataSensitive": "Sensitive",
     "dataRegulated": "Regulated",
-    "auditLog": "Audit log",
+    "auditLog": "Audit Log",
     "aboutTitle": "About X-Computer",
     "aboutTagline": "AI Autonomous Computer System v0.1.0",
     "aboutDescription": "An AI-powered autonomous computer. Use as a daily workstation with full AI task execution—from chat, coding, agents, to office workflows.",
@@ -304,7 +285,6 @@
     "featureFlags": "Feature Flags",
     "lifecycleHooks": "Lifecycle Hooks",
     "llmCouncil": "LLM Council",
-    "auditLog": "Audit Log",
     "promptTemplates": "Prompt Templates",
     "promptTemplatesDesc": "Save and reuse common prompts with variable substitution",
     "createTemplate": "Create Template",
@@ -315,7 +295,6 @@
     "templateDescriptionOptional": "Description (optional)",
     "noTemplates": "No templates yet",
     "filterByCategory": "Filter by category",
-    "all": "All",
     "saving": "Saving…",
     "save": "Save",
     "copy": "Copy",
@@ -342,9 +321,39 @@
     "systemPrompts": "System Prompts",
     "systemPromptsDesc": "Customize AI behavior by mode",
     "enterSystemPrompt": "Enter system prompt here...",
-    "enabled": "Enabled"
+    "enabled": "Enabled",
+    "shortcuts": "Keyboard Shortcuts",
+    "shortcutsDesc": "Customize keyboard shortcuts for faster navigation",
+    "shortcutAction": "Action",
+    "shortcutKeys": "Shortcut",
+    "shortcutDefault": "Default",
+    "shortcutCustom": "Custom",
+    "shortcutReset": "Reset",
+    "shortcutResetAll": "Reset All to Default",
+    "shortcutSaved": "Shortcuts saved",
+    "shortcutRecord": "Press keys…",
+    "shortcutConflict": "Already in use",
+    "shortcutClear": "Clear",
+    "shortcutSearchLauncher": "Open Search Launcher",
+    "shortcutLockScreen": "Lock Screen",
+    "shortcutCloseWindow": "Close Active Window",
+    "shortcutMinimizeWindow": "Minimize Active Window",
+    "shortcutMaximizeWindow": "Maximize / Restore Window",
+    "shortcutFocusWindow1": "Focus 1st Window",
+    "shortcutFocusWindow2": "Focus 2nd Window",
+    "shortcutFocusWindow3": "Focus 3rd Window",
+    "shortcutFocusWindow4": "Focus 4th Window",
+    "shortcutFocusWindow5": "Focus 5th Window",
+    "shortcutFocusWindow6": "Focus 6th Window",
+    "shortcutFocusWindow7": "Focus 7th Window",
+    "shortcutFocusWindow8": "Focus 8th Window",
+    "shortcutFocusWindow9": "Focus 9th Window",
+    "shortcutOpenTerminal": "Open Terminal",
+    "shortcutOpenChat": "Open Chat",
+    "shortcutNewChat": "New Chat Message",
+    "shortcutStopGenerating": "Stop AI Generation",
+    "shortcutToggleSidebar": "Toggle Chat Sidebar"
   },
-
   "onboarding": {
     "welcome": "Welcome to X-Computer",
     "step1Title": "Open AI Assistant",
@@ -357,7 +366,6 @@
     "done": "Get Started",
     "skip": "Skip"
   },
-  
   "taskTimeline": {
     "title": "Task Timeline",
     "pending": "Pending",
@@ -414,7 +422,6 @@
     "retryFromFailure": "Retrying from failed step",
     "retryFromStart": "Task restarted from beginning"
   },
-  
   "auth": {
     "login": "Login",
     "register": "Register",
@@ -456,7 +463,6 @@
     "processing": "Processing...",
     "systemTagline": "X-Computer AI Autonomous Computer System"
   },
-  
   "subscription": {
     "title": "Subscription",
     "freePlan": "Free",
@@ -503,7 +509,6 @@
     "features": "Features",
     "popular": "Popular"
   },
-  
   "account": {
     "title": "Account",
     "profile": "Profile",
@@ -522,7 +527,6 @@
     "usageThisMonth": "Usage This Month",
     "usageHistory": "Usage History"
   },
-  
   "errors": {
     "networkError": "Network error. Please check your connection.",
     "serverError": "Server error. Please try again later.",
@@ -536,7 +540,6 @@
     "paymentRequired": "Payment required.",
     "unknown": "An unknown error occurred."
   },
-  
   "landing": {
     "nav": {
       "features": "Features",
@@ -556,36 +559,97 @@
     "features": {
       "title": "Powerful Features",
       "subtitle": "Everything you need in one AI-powered system",
-      "codeGeneration": { "title": "Code Generation", "description": "Write, edit, and debug code in any language with AI assistance" },
-      "webBrowsing": { "title": "Web Browsing", "description": "Browse the web, extract data, and automate web tasks" },
-      "taskAutomation": { "title": "Task Automation", "description": "Automate complex workflows with intelligent task planning" },
-      "secureSandbox": { "title": "Secure Sandbox", "description": "All operations run in a secure, isolated environment" },
-      "selfLearning": { "title": "Self-Learning", "description": "Continuously learns and improves from every interaction" },
-      "multiModal": { "title": "Multi-Modal AI", "description": "Generate images, music, and creative content" }
+      "codeGeneration": {
+        "title": "Code Generation",
+        "description": "Write, edit, and debug code in any language with AI assistance"
+      },
+      "webBrowsing": {
+        "title": "Web Browsing",
+        "description": "Browse the web, extract data, and automate web tasks"
+      },
+      "taskAutomation": {
+        "title": "Task Automation",
+        "description": "Automate complex workflows with intelligent task planning"
+      },
+      "secureSandbox": {
+        "title": "Secure Sandbox",
+        "description": "All operations run in a secure, isolated environment"
+      },
+      "selfLearning": {
+        "title": "Self-Learning",
+        "description": "Continuously learns and improves from every interaction"
+      },
+      "multiModal": {
+        "title": "Multi-Modal AI",
+        "description": "Generate images, music, and creative content"
+      }
     },
     "pricing": {
       "title": "Simple, Transparent Pricing",
       "subtitle": "Choose the plan that's right for you",
-      "trial": { "name": "Free Trial", "price": "$0", "period": "7 days", "cta": "Start Free Trial" },
-      "personal": { "name": "Personal", "price": "$9.99", "period": "per month", "cta": "Get Started" },
-      "pro": { "name": "Professional", "price": "$29.99", "period": "per month", "cta": "Get Started" },
+      "trial": {
+        "name": "Free Trial",
+        "price": "$0",
+        "period": "7 days",
+        "cta": "Start Free Trial"
+      },
+      "personal": {
+        "name": "Personal",
+        "price": "$9.99",
+        "period": "per month",
+        "cta": "Get Started"
+      },
+      "pro": {
+        "name": "Professional",
+        "price": "$29.99",
+        "period": "per month",
+        "cta": "Get Started"
+      },
       "features": {
-        "trial": ["100 AI calls", "100MB storage", "1 concurrent task", "Basic features"],
-        "personal": ["1,000 AI calls", "1GB storage", "3 concurrent tasks", "All features", "Priority support"],
-        "pro": ["5,000 AI calls", "10GB storage", "10 concurrent tasks", "All features", "Priority support", "Advanced tools"]
+        "trial": [
+          "100 AI calls",
+          "100MB storage",
+          "1 concurrent task",
+          "Basic features"
+        ],
+        "personal": [
+          "1,000 AI calls",
+          "1GB storage",
+          "3 concurrent tasks",
+          "All features",
+          "Priority support"
+        ],
+        "pro": [
+          "5,000 AI calls",
+          "10GB storage",
+          "10 concurrent tasks",
+          "All features",
+          "Priority support",
+          "Advanced tools"
+        ]
       }
     },
-    "cta": { "title": "Ready to Get Started?", "subtitle": "Join thousands of users who are already using X-Computer to automate their work", "button": "Start Your Free Trial" },
+    "cta": {
+      "title": "Ready to Get Started?",
+      "subtitle": "Join thousands of users who are already using X-Computer to automate their work",
+      "button": "Start Your Free Trial"
+    },
     "footer": {
       "description": "The AI-powered autonomous computer system for the future.",
-      "product": "Product", "company": "Company", "legal": "Legal",
-      "features": "Features", "pricing": "Pricing", "docs": "Documentation",
-      "about": "About", "blog": "Blog", "contact": "Contact",
-      "privacy": "Privacy", "terms": "Terms",
+      "product": "Product",
+      "company": "Company",
+      "legal": "Legal",
+      "features": "Features",
+      "pricing": "Pricing",
+      "docs": "Documentation",
+      "about": "About",
+      "blog": "Blog",
+      "contact": "Contact",
+      "privacy": "Privacy",
+      "terms": "Terms",
       "copyright": "© 2026 X-Computer. All rights reserved."
     }
   },
-
   "admin": {
     "title": "Admin",
     "totalUsers": "Total Users",
@@ -607,7 +671,6 @@
     "changePlan": "Change Plan",
     "pageInfo": "{{from}}-{{to}} of {{total}}"
   },
-
   "notifications": {
     "title": "Notifications",
     "markAllRead": "Mark All as Read",
