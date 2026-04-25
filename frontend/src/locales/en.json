@@ -296,7 +296,13 @@
     "connecting": "Connecting...",
     "simpleMode": "Simple mode",
     "simpleModeDescription": "Hide advanced settings (AI, MCP, Skills, etc.) for easier use",
-    "showAdvanced": "Show advanced settings"
+    "showAdvanced": "Show advanced settings",
+    "systemHealth": "System Health",
+    "scheduledJobs": "Scheduled Jobs",
+    "webhooks": "Webhooks",
+    "usageAnalytics": "Usage Analytics",
+    "featureFlags": "Feature Flags",
+    "lifecycleHooks": "Lifecycle Hooks"
   },
 
   "onboarding": {

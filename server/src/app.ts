@@ -36,6 +36,8 @@ import { createFeatureFlagsRouter } from './routes/featureFlags.js';
 import { initFeatureFlags } from './config/featureFlags.js';
 import { createUsageAnalyticsRouter } from './routes/usageAnalytics.js';
 import { createNotificationPreferencesRouter } from './routes/notificationPreferences.js';
+import { createHooksRouter } from './routes/hooks.js';
+import { createSystemHealthRouter } from './routes/systemHealth.js';
 import { createScheduledJobsRouter } from './routes/scheduledJobs.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createWebhookTriggerRouter } from './routes/webhookTrigger.js';
@@ -314,6 +316,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/admin/feature-flags', createFeatureFlagsRouter());
   app.use('/api/admin/usage', createUsageAnalyticsRouter(db));
   app.use('/api/admin/webhooks', createWebhooksRouter(db));
+  app.use('/api/admin/health', createSystemHealthRouter(db));
+  app.use('/api/hooks', createHooksRouter(db as any));
   app.use('/api/llm', createLLMRouter());
   app.use('/api/scheduled-jobs', createScheduledJobsRouter(db));
   app.use('/api/notification-preferences', createNotificationPreferencesRouter(db));

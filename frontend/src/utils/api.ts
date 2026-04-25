@@ -1577,4 +1577,49 @@ export const api = {
       tasks: { total: number; pending: number; running: number };
       dbStatus: string;
     }>('/admin/health/stats'),
+
+  // ── Lifecycle Hooks ─────────────────────────────────────────────
+
+  hooksList: () =>
+    request<Array<{
+      id: string; userId: string; name: string; hookPoint: string;
+      url: string; enabled: boolean; failureMode: string;
+      timeoutMs: number; headers: Record<string, string>; priority: number;
+      createdAt: number; updatedAt: number;
+    }>>('/hooks'),
+
+  hooksCreate: (params: {
+    name: string; hookPoint: string; url: string;
+    enabled?: boolean; failureMode?: string; timeoutMs?: number;
+    headers?: Record<string, string>; priority?: number;
+  }) =>
+    request<{
+      id: string; userId: string; name: string; hookPoint: string;
+      url: string; enabled: boolean; failureMode: string;
+      timeoutMs: number; headers: Record<string, string>; priority: number;
+      createdAt: number; updatedAt: number;
+    }>('/hooks', { method: 'POST', body: JSON.stringify(params) }),
+
+  hooksUpdate: (id: string, params: {
+    name?: string; hookPoint?: string; url?: string;
+    enabled?: boolean; failureMode?: string; timeoutMs?: number;
+    headers?: Record<string, string>; priority?: number;
+  }) =>
+    request<{
+      id: string; userId: string; name: string; hookPoint: string;
+      url: string; enabled: boolean; failureMode: string;
+      timeoutMs: number; headers: Record<string, string>; priority: number;
+      createdAt: number; updatedAt: number;
+    }>(`/hooks/${id}`, { method: 'PUT', body: JSON.stringify(params) }),
+
+  hooksDelete: (id: string) =>
+    request<{ message: string }>(`/hooks/${id}`, { method: 'DELETE' }),
+
+  hooksToggle: (id: string, enabled: boolean) =>
+    request<{
+      id: string; userId: string; name: string; hookPoint: string;
+      url: string; enabled: boolean; failureMode: string;
+      timeoutMs: number; headers: Record<string, string>; priority: number;
+      createdAt: number; updatedAt: number;
+    }>(`/hooks/${id}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) }),
 };

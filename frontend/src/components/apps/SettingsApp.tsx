@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1559,6 +1559,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'webhooks', labelKey: 'settings.webhooks', icon: WebhookIcon },
     { id: 'schedules', labelKey: 'settings.scheduledJobs', icon: Clock },
     { id: 'health', labelKey: 'settings.systemHealth', icon: Activity },
+    { id: 'hooks', labelKey: 'settings.lifecycleHooks', icon: Link },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1760,6 +1761,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'health' && (
           <SystemHealthSettings />
+        )}
+
+        {tab === 'hooks' && (
+          <HooksSettings />
         )}
       </div>
     </div>
@@ -1981,6 +1986,271 @@ function SystemHealthSettings() {
           </div>
         </div>
         )}
+    </div>
+  );
+}
+
+// ── Lifecycle Hooks ─────────────────────────────────────────────
+
+const HOOK_POINTS = [
+  { value: 'beforeInbound', label: 'Before Inbound Message' },
+  { value: 'beforeToolCall', label: 'Before Tool Call' },
+  { value: 'beforeOutbound', label: 'Before Outbound Response' },
+  { value: 'onSessionStart', label: 'On Session Start' },
+  { value: 'onSessionEnd', label: 'On Session End' },
+  { value: 'transformResponse', label: 'Transform Response' },
+];
+
+function HooksSettings() {
+  const { t } = useTranslation();
+  const [hooks, setHooks] = useState<Array<{
+    id: string; name: string; hookPoint: string; url: string;
+    enabled: boolean; failureMode: string; timeoutMs: number;
+    headers: Record<string, string>; priority: number;
+    createdAt: number; updatedAt: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    name: '', hookPoint: 'beforeInbound', url: '',
+    enabled: true, failureMode: 'failOpen', timeoutMs: 5000, priority: 100,
+  });
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const fetchHooks = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.hooksList();
+      setHooks(data);
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { fetchHooks(); }, [fetchHooks]);
+
+  const resetForm = () => {
+    setForm({ name: '', hookPoint: 'beforeInbound', url: '', enabled: true, failureMode: 'failOpen', timeoutMs: 5000, priority: 100 });
+    setError(null);
+  };
+
+  const handleAdd = async () => {
+    if (!form.name.trim() || !form.url.trim()) {
+      setError('Name and URL are required');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.hooksCreate({ name: form.name.trim(), hookPoint: form.hookPoint, url: form.url, enabled: form.enabled, failureMode: form.failureMode, timeoutMs: form.timeoutMs, priority: form.priority });
+      setShowAdd(false);
+      resetForm();
+      await fetchHooks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create hook');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!editing || !form.name.trim() || !form.url.trim()) {
+      setError('Name and URL are required');
+      return;
+    }
+    setSaving(true);
+    try {
+      await api.hooksUpdate(editing, { name: form.name.trim(), hookPoint: form.hookPoint, url: form.url, enabled: form.enabled, failureMode: form.failureMode, timeoutMs: form.timeoutMs, priority: form.priority });
+      setEditing(null);
+      resetForm();
+      await fetchHooks();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update hook');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this hook?')) return;
+    try {
+      await api.hooksDelete(id);
+      setHooks((prev) => prev.filter((h) => h.id !== id));
+    } catch {
+      // ignore
+    }
+  };
+
+  const startEdit = (hook: typeof hooks[0]) => {
+    setEditing(hook.id);
+    setForm({ name: hook.name, hookPoint: hook.hookPoint, url: hook.url, enabled: hook.enabled, failureMode: hook.failureMode, timeoutMs: hook.timeoutMs, priority: hook.priority });
+    setShowAdd(false);
+    setError(null);
+  };
+
+  const hookPointLabel = (pt: string) => HOOK_POINTS.find((p) => p.value === pt)?.label ?? pt;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">{t('settings.lifecycleHooks')}</h2>
+        <button
+          onClick={() => { setShowAdd(true); setEditing(null); resetForm(); }}
+          className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-desktop-accent/60 hover:bg-desktop-accent/80 transition-colors"
+        >
+          <Plus size={14} />
+          添加 Hook
+        </button>
+      </div>
+
+      <p className="text-xs text-desktop-muted">
+        Lifecycle Hooks let you intercept and modify agent behavior at key points. Each hook receives an HTTP POST request with event data and can return modifications or reject the operation.
+      </p>
+
+      {/* Add/Edit Form */}
+      {(showAdd || editing) && (
+        <div className="bg-white/5 rounded-lg p-4 space-y-3">
+          <div className="text-sm font-medium">{editing ? '编辑 Hook' : '添加新 Hook'}</div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-desktop-muted mb-1">名称 *</label>
+              <input
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+                value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="My Hook"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-desktop-muted mb-1">Hook 点 *</label>
+              <select
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+                value={form.hookPoint} onChange={(e) => setForm({ ...form, hookPoint: e.target.value })}
+              >
+                {HOOK_POINTS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </div>
+            <div className="col-span-2">
+              <label className="block text-xs text-desktop-muted mb-1">URL *</label>
+              <input
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+                value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} placeholder="https://example.com/hook"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-desktop-muted mb-1">失败模式</label>
+              <select
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+                value={form.failureMode} onChange={(e) => setForm({ ...form, failureMode: e.target.value })}
+              >
+                <option value="failOpen">Fail Open (继续处理)</option>
+                <option value="failClosed">Fail Closed (拒绝操作)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-desktop-muted mb-1">超时 (ms)</label>
+              <input
+                type="number"
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+                value={form.timeoutMs} onChange={(e) => setForm({ ...form, timeoutMs: parseInt(e.target.value) || 5000 })} min={500} max={30000}
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-desktop-muted mb-1">优先级</label>
+              <input
+                type="number"
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs outline-none focus:ring-1 focus:ring-desktop-highlight/50"
+                value={form.priority} onChange={(e) => setForm({ ...form, priority: parseInt(e.target.value) || 100 })} min={1} max={1000}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="hook-enabled"
+                checked={form.enabled}
+                onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
+                className="accent-desktop-accent"
+              />
+              <label htmlFor="hook-enabled" className="text-xs text-desktop-text">启用</label>
+            </div>
+          </div>
+          {error && <div className="text-xs text-red-400">{error}</div>}
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => { setShowAdd(false); setEditing(null); resetForm(); }}
+              className="px-4 py-2 rounded-lg text-xs text-desktop-muted hover:bg-white/10 transition-colors"
+            >
+              取消
+            </button>
+            <button
+              onClick={editing ? handleUpdate : handleAdd}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg text-xs bg-desktop-accent/60 hover:bg-desktop-accent/80 transition-colors disabled:opacity-50"
+            >
+              {saving ? '保存中...' : editing ? '保存' : '添加'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Hooks List */}
+      {loading && hooks.length === 0 && (
+        <div className="text-center text-desktop-muted py-8">{t('common.loading')}</div>
+      )}
+
+      {!loading && hooks.length === 0 && !showAdd && (
+        <div className="text-center text-desktop-muted py-8">
+          No lifecycle hooks configured yet.
+        </div>
+      )}
+
+      {hooks.length > 0 && (
+        <div className="space-y-2">
+          {hooks.map((hook) => (
+            <div key={hook.id} className={`bg-white/5 rounded-lg p-4 ${!hook.enabled ? 'opacity-60' : ''}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm font-medium">{hook.name}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${hook.enabled ? 'bg-green-500/20 text-green-400' : 'bg-white/10 text-desktop-muted'}`}>
+                      {hook.enabled ? 'Enabled' : 'Disabled'}
+                    </span>
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-white/10 text-desktop-muted font-mono">
+                      {hookPointLabel(hook.hookPoint)}
+                    </span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded ${hook.failureMode === 'failOpen' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-red-500/20 text-red-400'}`}>
+                      {hook.failureMode === 'failOpen' ? 'Fail Open' : 'Fail Closed'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-desktop-muted font-mono truncate">{hook.url}</div>
+                  <div className="flex gap-4 mt-1 text-xs text-desktop-muted">
+                    <span>超时: {hook.timeoutMs}ms</span>
+                    <span>优先级: {hook.priority}</span>
+                    <span>创建: {new Date(hook.createdAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => startEdit(hook)}
+                    className="text-xs text-desktop-muted hover:text-desktop-text transition-colors"
+                    title="Edit"
+                  >
+                    <Edit size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(hook.id)}
+                    className="text-xs text-red-400/60 hover:text-red-400 transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

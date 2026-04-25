@@ -302,7 +302,13 @@
     "connecting": "连接中…",
     "simpleMode": "简洁模式",
     "simpleModeDescription": "隐藏高级设置（AI、MCP、Skills 等），更易上手",
-    "showAdvanced": "显示高级设置"
+    "showAdvanced": "显示高级设置",
+    "systemHealth": "系统健康",
+    "scheduledJobs": "定时任务",
+    "webhooks": "Webhook",
+    "usageAnalytics": "用量分析",
+    "featureFlags": "功能开关",
+    "lifecycleHooks": "生命周期 Hook"
   },
 
   "onboarding": {
