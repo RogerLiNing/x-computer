@@ -1481,6 +1481,21 @@ export const api = {
   deleteChatSession: (sessionId: string) =>
     request<{ success: boolean }>(`/chat/sessions/${sessionId}`, { method: 'DELETE' }),
 
+  /** 创建提醒（定时消息） */
+  createReminder: (message: string, at: string | number, sessionId?: string) =>
+    request<{ id: string; intent: string; runAt: number; runAtISO: string; sessionId?: string }>('/reminders', {
+      method: 'POST',
+      body: JSON.stringify({ message, at, sessionId }),
+    }),
+
+  /** 删除提醒 */
+  deleteReminder: (id: string) =>
+    request<{ success: boolean }>(`/reminders/${id}`, { method: 'DELETE' }),
+
+  /** 获取当前用户的提醒列表 */
+  listReminders: () =>
+    request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),
+
   /** 获取会话消息 */
   getChatMessages: (sessionId: string, limit = 200) =>
     request<

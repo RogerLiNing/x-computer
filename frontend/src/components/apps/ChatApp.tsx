@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -63,6 +63,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [snippetFilter, setSnippetFilter] = useState('');
   const [calcOpen, setCalcOpen] = useState(false);
   const [calcExpr, setCalcExpr] = useState('');
+  /** 提醒浮层 */
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderMsg, setReminderMsg] = useState('');
+  const [reminderDate, setReminderDate] = useState('');
+  const [reminderTime, setReminderTime] = useState('');
   /** 当前正在录音的语音识别 ID，null 表示未在录音 */
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [agents, setAgents] = useState<AgentOption[]>([]);
@@ -282,6 +287,27 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       setInput((prev) => prev + (prev ? '\n' : '') + `${calcExpr} = ${result}`);
       setCalcExpr('');
       setCalcOpen(false);
+    }
+  };
+
+  const submitReminder = async () => {
+    if (!reminderMsg.trim()) return;
+    if (!reminderDate || !reminderTime) {
+      addNotification({ type: 'error', title: '请填写日期和时间', message: '' }); return;
+    }
+    const at = new Date(`${reminderDate}T${reminderTime}`).getTime();
+    if (isNaN(at) || at <= Date.now()) {
+      addNotification({ type: 'error', title: '时间必须是将来的时间', message: '' }); return;
+    }
+    try {
+      await api.createReminder(reminderMsg.trim(), at, currentSessionId ?? undefined);
+      addNotification({ type: 'info', title: '提醒已设置', message: `${reminderDate} ${reminderTime}` });
+      setReminderMsg('');
+      setReminderDate('');
+      setReminderTime('');
+      setReminderOpen(false);
+    } catch {
+      addNotification({ type: 'error', title: '设置提醒失败', message: '' });
     }
   };
 
@@ -2012,6 +2038,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           >
             <Calculator size={16} className="sm:size-4" />
           </button>
+          <button
+            type="button"
+            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+            onClick={() => setReminderOpen((o) => !o)}
+            title="设置提醒"
+          >
+            <Bell size={16} className="sm:size-4" />
+          </button>
           <textarea
             ref={inputRef}
             value={input}
@@ -2185,6 +2219,53 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               disabled={!calcExpr || !evalCalc(calcExpr)}
             >
               插入结果
+            </button>
+          </div>
+        )}
+
+        {/* Reminder Popover */}
+        {reminderOpen && (
+          <div className="border-t border-white/10 bg-desktop-bg/95 backdrop-blur-sm p-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <Bell size={14} className="text-desktop-accent shrink-0" />
+              <span className="text-xs font-medium text-desktop-text">设置提醒</span>
+              <button
+                type="button"
+                className="ml-auto text-desktop-muted hover:text-desktop-text transition-colors"
+                onClick={() => setReminderOpen(false)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <textarea
+              value={reminderMsg}
+              onChange={(e) => setReminderMsg(e.target.value)}
+              placeholder="提醒内容..."
+              className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted/50 outline-none focus:border-desktop-accent/50 resize-none"
+              rows={2}
+            />
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={reminderDate}
+                onChange={(e) => setReminderDate(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-desktop-text outline-none focus:border-desktop-accent/50"
+                min={new Date().toISOString().split('T')[0]}
+              />
+              <input
+                type="time"
+                value={reminderTime}
+                onChange={(e) => setReminderTime(e.target.value)}
+                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-desktop-text outline-none focus:border-desktop-accent/50"
+              />
+            </div>
+            <button
+              type="button"
+              className="w-full py-1.5 bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-xs text-desktop-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              onClick={submitReminder}
+              disabled={!reminderMsg.trim() || !reminderDate || !reminderTime}
+            >
+              设置提醒
             </button>
           </div>
         )}

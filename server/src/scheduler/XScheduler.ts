@@ -10,9 +10,13 @@ export interface ScheduledJob {
   intent: string;
   /** 单次执行：下次运行时间戳 */
   runAt: number;
-  /** 可选：cron 五段 "分 时 日 月 周"（如 "0 9 * * *" 每天 9:00），有则周期执行 */
+  /** 可选：cron 五段 "分 时 日 周"（如 "0 9 * * *" 每天 9:00），有则周期执行 */
   cron?: string;
   createdAt: number;
+  /** 关联的 chat 会话 ID（提醒用） */
+  sessionId?: string;
+  /** 任务名称 */
+  name?: string;
 }
 
 /** 持久化存储：用于重启恢复与多实例一致性 */
@@ -104,6 +108,8 @@ export class XScheduler {
     cron?: string,
     inMinutes?: number,
     inHours?: number,
+    sessionId?: string,
+    name?: string,
   ): ScheduledJob {
     const id = nextId();
     const now = Date.now();
@@ -128,6 +134,8 @@ export class XScheduler {
       runAt,
       cron: cron?.trim() || undefined,
       createdAt: now,
+      sessionId: sessionId?.trim() || undefined,
+      name: name?.trim() || undefined,
     };
     this.jobs.push(job);
     void Promise.resolve(this.store?.save(job)).catch(() => {});

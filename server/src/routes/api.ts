@@ -274,7 +274,7 @@ export function createApiRouter(
   const router = Router();
   router.use(createAgentsRouter(orchestrator, db));
   router.use(createTasksRouter(orchestrator, userSandboxManager, db, subscriptionService));
-  router.use(createSchedulerRouter());
+  router.use(createSchedulerRouter(db));
   router.use(createLLMRouter());
   router.use(createXProactiveRouter(db));
   router.use(createXPendingRouter(db));
@@ -614,13 +614,15 @@ export function createApiRouter(
     ? {
         async loadAll(): Promise<ScheduledJob[]> {
           const rows = await db!.getAllScheduledJobs();
-          return rows.map((r: { id: string; user_id: string; intent: string; run_at: number; cron: string | null; created_at: number }) => ({
+          return rows.map((r: { id: string; user_id: string; intent: string; run_at: number; cron: string | null; created_at: number; session_id: string | null; name: string | null }) => ({
             id: r.id,
             userId: r.user_id,
             intent: r.intent,
             runAt: r.run_at,
             cron: r.cron ?? undefined,
             createdAt: r.created_at,
+            sessionId: r.session_id ?? undefined,
+            name: r.name ?? undefined,
           }));
         },
         async save(job: ScheduledJob): Promise<void> {
@@ -631,6 +633,8 @@ export function createApiRouter(
             run_at: job.runAt,
             cron: job.cron ?? null,
             created_at: job.createdAt,
+            session_id: job.sessionId ?? null,
+            name: job.name ?? null,
           });
         },
         async updateRunAt(id: string, runAt: number): Promise<void> {
@@ -644,6 +648,15 @@ export function createApiRouter(
 
   const xScheduler = new XScheduler(
     async (job) => {
+      // 提醒：直接写入对应 chat 会话
+      if (job.sessionId) {
+        await db?.addMessage(
+          job.sessionId,
+          'assistant',
+          `⏰ **提醒**\n\n${job.intent}`,
+        );
+        return;
+      }
       await runScheduledIntent(job, {
         orchestrator,
         getSystemPrompt: getSystemPromptForScheduler,

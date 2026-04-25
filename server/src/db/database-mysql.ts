@@ -136,7 +136,8 @@ export class MysqlDatabase {
       cron VARCHAR(255),
       enabled TINYINT(1) NOT NULL DEFAULT 1,
       next_run BIGINT,
-      created_at BIGINT NOT NULL
+      created_at BIGINT NOT NULL,
+      session_id VARCHAR(36)
     )`, [], true);
     await this.ensureIndex(
       'scheduled_jobs',
@@ -248,6 +249,7 @@ export class MysqlDatabase {
     await this.ensureColumn('chat_sessions', 'scene', 'ALTER TABLE chat_sessions ADD COLUMN scene VARCHAR(64)', true);
     await this.ensureColumn('chat_sessions', 'tags', 'ALTER TABLE chat_sessions ADD COLUMN tags TEXT', true);
     await this.ensureColumn('chat_sessions', 'is_pinned', 'ALTER TABLE chat_sessions ADD COLUMN is_pinned TINYINT(1) NOT NULL DEFAULT 0', true);
+    await this.ensureColumn('scheduled_jobs', 'session_id', 'ALTER TABLE scheduled_jobs ADD COLUMN session_id VARCHAR(36)', true);
     await this.ensureColumn('chat_messages', 'images_json', 'ALTER TABLE chat_messages ADD COLUMN images_json LONGTEXT', true);
     await this.ensureColumn(
       'chat_messages',
@@ -875,10 +877,11 @@ export class MysqlDatabase {
     enabled?: boolean;
     next_run?: number | null;
     created_at: number;
+    session_id?: string | null;
   }): Promise<void> {
     return this._run(
-      'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at],
+      'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at, job.session_id ?? null],
     );
   }
 
@@ -904,18 +907,18 @@ export class MysqlDatabase {
   }
 
   getAllScheduledJobs(): Promise<
-    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null }[]
   > {
     return this._query(
-      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs ORDER BY next_run ASC',
+      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id FROM scheduled_jobs ORDER BY next_run ASC',
     );
   }
 
   listScheduledJobsByUser(userId: string): Promise<
-    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null }[]
   > {
     return this._query(
-      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs WHERE user_id = ? ORDER BY next_run ASC',
+      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id FROM scheduled_jobs WHERE user_id = ? ORDER BY next_run ASC',
       [userId],
     );
   }

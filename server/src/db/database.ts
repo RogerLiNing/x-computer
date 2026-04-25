@@ -190,7 +190,8 @@ export class SqliteAppDatabase {
         cron TEXT,
         enabled INTEGER NOT NULL DEFAULT 1,
         next_run INTEGER,
-        created_at INTEGER NOT NULL
+        created_at INTEGER NOT NULL,
+        session_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_user ON scheduled_jobs(user_id);
 
@@ -338,6 +339,15 @@ export class SqliteAppDatabase {
       const boardCols = this.db.prepare('PRAGMA table_info(x_board_items)').all() as { name: string }[];
       if (!boardCols.some((c) => c.name === 'source_id')) {
         this.db.exec('ALTER TABLE x_board_items ADD COLUMN source_id TEXT');
+      }
+    } catch {
+      /* 忽略 */
+    }
+    // 兼容旧库：scheduled_jobs 补充 session_id（关联提醒所属的 chat 会话）
+    try {
+      const jobCols = this.db.prepare('PRAGMA table_info(scheduled_jobs)').all() as { name: string }[];
+      if (!jobCols.some((c) => c.name === 'session_id')) {
+        this.db.exec('ALTER TABLE scheduled_jobs ADD COLUMN session_id TEXT');
       }
     } catch {
       /* 忽略 */
@@ -863,12 +873,13 @@ export class SqliteAppDatabase {
     enabled?: boolean;
     next_run?: number | null;
     created_at: number;
+    session_id?: string | null;
   }): void {
     this.db
       .prepare(
-        'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at);
+      .run(job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at, job.session_id ?? null);
   }
 
   updateScheduledJobRunAt(id: string, runAt: number): void {
@@ -894,19 +905,19 @@ export class SqliteAppDatabase {
 
   getAllScheduledJobs(): {
     id: string; user_id: string; name: string | null; intent: string;
-    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number;
+    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null;
   }[] {
     return this.db
-      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs ORDER BY next_run ASC')
+      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id FROM scheduled_jobs ORDER BY next_run ASC')
       .all() as any;
   }
 
   listScheduledJobsByUser(userId: string): {
     id: string; user_id: string; name: string | null; intent: string;
-    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number;
+    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null;
   }[] {
     return this.db
-      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs WHERE user_id = ? ORDER BY next_run ASC')
+      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id FROM scheduled_jobs WHERE user_id = ? ORDER BY next_run ASC')
       .all(userId) as any;
   }
 
@@ -1483,7 +1494,7 @@ export class SqliteDatabaseAdapter {
     return Promise.resolve();
   }
   getAllScheduledJobs(): Promise<
-    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null }[]
   > {
     return Promise.resolve(this.db.getAllScheduledJobs());
   }
