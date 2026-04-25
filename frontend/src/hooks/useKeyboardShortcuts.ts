@@ -21,6 +21,8 @@ const DEFAULT_SHORTCUTS: Record<string, () => string> = {
   focusWindow9: () => '⌘9',
   openTerminal: () => '⌘T',
   openChat: () => '⌘N',
+  newChat: () => '⌘⇧N',
+  toggleSidebar: () => '⌘B',
 };
 
 function loadCustomShortcuts(): Record<string, string> {
@@ -133,6 +135,22 @@ export function useKeyboardShortcuts() {
       if (matchesShortcut(e, parseShortcut(oc)!)) {
         e.preventDefault();
         s.openApp('chat');
+        return;
+      }
+
+      // New chat
+      const nc = shortcuts['newChat'] || DEFAULT_SHORTCUTS.newChat();
+      if (matchesShortcut(e, parseShortcut(nc)!)) {
+        e.preventDefault();
+        s.openApp('chat');
+        return;
+      }
+
+      // Toggle sidebar
+      const ts = shortcuts['toggleSidebar'] || DEFAULT_SHORTCUTS.toggleSidebar();
+      if (matchesShortcut(e, parseShortcut(ts)!)) {
+        // Sidebar toggle is handled per-app; dispatch a custom event
+        window.dispatchEvent(new CustomEvent('x:toggle-sidebar'));
         return;
       }
 

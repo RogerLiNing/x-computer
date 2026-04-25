@@ -159,6 +159,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     else setArchivedSessions([]);
   }, [showArchived, loadArchivedSessions]);
 
+  /** 监听全局快捷键的 sidebar 切换事件 */
+  useEffect(() => {
+    const handler = () => setSidebarOpen((v) => !v);
+    window.addEventListener('x:toggle-sidebar', handler);
+    return () => window.removeEventListener('x:toggle-sidebar', handler);
+  }, []);
+
   /** 更新会话已过时间（每分钟刷新） */
   useEffect(() => {
     if (!currentSessionId) return;
@@ -1852,6 +1859,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           <button
             className="text-xs text-desktop-muted hover:text-desktop-text px-2 py-1 rounded hover:bg-white/5"
             onClick={startNewChat}
+            title="新建对话 (⌘⇧N)"
           >
             新对话
           </button>
@@ -1861,7 +1869,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           <button
             className="p-1 rounded hover:bg-white/5 text-desktop-muted hover:text-desktop-text transition-colors"
             onClick={() => setSidebarOpen((o) => !o)}
-            title={sidebarOpen ? '收起会话列表' : '展开会话列表'}
+            title={sidebarOpen ? '收起会话列表 (⌘B)' : '展开会话列表 (⌘B)'}
           >
             {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}
           </button>
@@ -2490,7 +2498,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 sendMessage();
               }
             }}
-            placeholder="输入消息或任务描述... (Shift+Enter 换行)"
+            placeholder="输入消息或任务描述... / 调出命令 (Shift+Enter 换行)"
             className="flex-1 bg-transparent outline-none text-sm sm:text-xs text-desktop-text resize-none max-h-[120px] min-h-[32px] sm:min-h-[24px] py-1.5 sm:py-0.5 placeholder:text-desktop-muted/50 leading-relaxed"
             rows={1}
           />
