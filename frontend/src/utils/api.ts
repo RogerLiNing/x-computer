@@ -1463,6 +1463,13 @@ export const api = {
       body: JSON.stringify({ title }),
     }),
 
+  /** 使用 LLM 生成会话标题（仅当标题为空时） */
+  generateSessionTitle: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, apiKey?: string) =>
+    request<{ title: string }>(`/chat/sessions/${sessionId}/title`, {
+      method: 'POST',
+      body: JSON.stringify({ providerId, modelId, baseUrl, apiKey }),
+    }),
+
   /** 删除会话 */
   deleteChatSession: (sessionId: string) =>
     request<{ success: boolean }>(`/chat/sessions/${sessionId}`, { method: 'DELETE' }),

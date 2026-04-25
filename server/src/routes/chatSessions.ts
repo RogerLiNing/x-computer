@@ -12,6 +12,7 @@
  */
 
 import { Router } from 'express';
+import { callLLM } from '../chat/chatService.js';
 import type { AppDatabase } from '../db/database.js';
 
 /** 提取搜索关键词周围的文本片段 */
@@ -136,6 +137,51 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     const tagsJson = tags.length > 0 ? JSON.stringify(tags) : null;
     await db.updateSessionTags(session.id, tagsJson);
     res.json({ success: true, tags: tagsJson ? JSON.parse(tagsJson) : [] });
+  });
+
+  /**
+   * POST /api/chat/sessions/:id/title — 使用 LLM 为会话生成标题（仅当标题为空时）
+   * body: { providerId, modelId, baseUrl?, apiKey? }
+   * 返回: { title: string }
+   */
+  router.post('/:id/title', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+    // 已有标题直接返回
+    if (session.title) { res.json({ title: session.title }); return; }
+
+    const { providerId, modelId, baseUrl, apiKey } = req.body ?? {};
+    if (!providerId || !modelId) { res.status(400).json({ error: 'Missing providerId or modelId' }); return; }
+
+    // 获取第一条用户消息作为标题生成素材
+    const messages = await db.getMessages(req.params.id, 200);
+    const firstUserMsg = messages.find((m) => m.role === 'user');
+    if (!firstUserMsg?.content) { res.json({ title: '' }); return; }
+
+    const content = firstUserMsg.content.trim().slice(0, 500);
+    try {
+      const result = await callLLM({
+        messages: [
+          { role: 'user', content: `根据以下对话首条用户消息，生成一个简短标题（中文≤40字，英文≤60字符）。只输出标题，不要解释。\n\n用户消息：${content}` },
+        ],
+        providerId,
+        modelId,
+        baseUrl,
+        apiKey,
+      });
+      const title = (result ?? '').trim().slice(0, 60);
+      if (title) {
+        await db.updateSessionTitle(session.id, title);
+        res.json({ title });
+      } else {
+        res.json({ title: '' });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Title generation failed', detail: msg });
+    }
   });
 
   /** DELETE /api/chat/sessions/:id - 删除会话 */

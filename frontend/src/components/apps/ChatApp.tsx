@@ -398,12 +398,18 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
     // D.2: 先拿到会话 id，后续所有分支统一持久化到云端
+    const llmConfig = useLLMConfigStore.getState().llmConfig;
+    const chatSel = llmConfig?.defaultByModality?.chat;
+    const chatProviderId = chatSel?.providerId ?? llmConfig?.providers?.[0]?.id;
+    const chatProvider = llmConfig?.providers?.find((p: { id: string }) => p.id === chatProviderId);
+    const chatModelId = chatSel?.modelId ?? '__custom__';
+    const chatBaseUrl = chatProvider?.baseUrl ?? '';
     let sid: string = '';
     try {
       const res = await ensureSessionId();
       sid = res.id;
       if (res.isNew) {
-        api.updateChatSessionTitle(sid, text.slice(0, 30)).catch(() => {});
+        api.generateSessionTitle(sid, chatProviderId ?? '', chatModelId, chatBaseUrl).catch(() => {});
       }
     } catch {
       setChatSyncFailed(true);
@@ -452,7 +458,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     );
     const taskSummaryStr = formatTaskSummaryForPrompt(useTaskStore.getState().tasks);
 
-    const llmConfig = useLLMConfigStore.getState().llmConfig;
     const vectorSel = llmConfig?.defaultByModality?.vector;
     const vectorConfig =
       vectorSel?.providerId && vectorSel?.modelId
