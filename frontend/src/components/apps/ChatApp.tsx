@@ -131,6 +131,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     refreshSessions,
     generateSummary,
     autoTag,
+    forkSession,
   } = useChatSessions(setMessages);
 
   const llmConfig = useLLMConfigStore.getState().llmConfig;
@@ -1959,6 +1960,24 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
             </div>
           </div>
+          {currentSessionId && (
+            <button
+              className="flex items-center gap-1 text-[10px] text-desktop-muted hover:text-purple-400 px-2 py-1 rounded hover:bg-white/5 transition-colors"
+              onClick={async () => {
+                try {
+                  const newId = await forkSession(currentSessionId);
+                  selectSession(newId);
+                  addNotification({ type: 'info', title: '分支已创建', message: '' });
+                } catch {
+                  addNotification({ type: 'error', title: '分支创建失败', message: '' });
+                }
+              }}
+              title="复制当前会话为新会话"
+            >
+              <GitBranch size={11} />
+              分支
+            </button>
+          )}
           <button
             className="text-[10px] text-desktop-muted hover:text-desktop-text px-2 py-1 rounded hover:bg-white/5 transition-colors"
             onClick={() => openApp('task-timeline')}

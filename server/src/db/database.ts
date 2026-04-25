@@ -42,6 +42,8 @@ export interface ChatSessionRow {
   is_archived?: number;
   /** LLM 生成的会话摘要 */
   summary?: string | null;
+  /** 父会话 ID（分支会话） */
+  parent_session_id?: string | null;
 }
 
 export interface NotificationRow {
@@ -153,7 +155,9 @@ export class SqliteAppDatabase {
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
         tags TEXT,
         is_pinned INTEGER NOT NULL DEFAULT 0,
-        is_archived INTEGER NOT NULL DEFAULT 0
+        is_archived INTEGER NOT NULL DEFAULT 0,
+        summary TEXT,
+        parent_session_id TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
       CREATE INDEX IF NOT EXISTS idx_chat_sessions_archived ON chat_sessions(user_id, is_archived);
@@ -355,6 +359,12 @@ export class SqliteAppDatabase {
       }
       if (!sessionCols.some((c) => c.name === 'is_archived')) {
         this.db.exec('ALTER TABLE chat_sessions ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!sessionCols.some((c) => c.name === 'summary')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN summary TEXT');
+      }
+      if (!sessionCols.some((c) => c.name === 'parent_session_id')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN parent_session_id TEXT');
       }
     } catch {
       /* 忽略 */
@@ -666,6 +676,16 @@ export class SqliteAppDatabase {
   updateSessionSummary(sessionId: string, summary: string | null): void {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE chat_sessions SET summary = ?, updated_at = ? WHERE id = ?').run(summary, now, sessionId);
+  }
+
+  forkSession(parentId: string, newId: string, userId: string): ChatSessionRow {
+    const now = new Date().toISOString();
+    const parent = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(parentId) as ChatSessionRow;
+    if (!parent) throw new Error('Parent session not found');
+    this.db.prepare(
+      'INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at, tags, is_pinned, is_archived, summary, parent_session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(newId, userId, parent.title ?? null, now, now, parent.tags ?? null, 0, 0, parent.summary ?? null, parentId);
+    return this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(newId) as ChatSessionRow;
   }
 
   unarchiveSession(sessionId: string): void {
@@ -1692,6 +1712,10 @@ export class SqliteDatabaseAdapter {
   updateSessionSummary(sessionId: string, summary: string | null): Promise<void> {
     this.db.updateSessionSummary(sessionId, summary);
     return Promise.resolve();
+  }
+
+  forkSession(parentId: string, newId: string, userId: string): Promise<ChatSessionRow> {
+    return Promise.resolve(this.db.forkSession(parentId, newId, userId));
   }
 
   unarchiveSession(sessionId: string): Promise<void> {

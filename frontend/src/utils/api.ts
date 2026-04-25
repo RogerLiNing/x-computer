@@ -1532,6 +1532,13 @@ export const api = {
       body: JSON.stringify({ providerId, modelId, baseUrl, apiKey }),
     }),
 
+  /** 创建分支会话（复制所有消息） */
+  forkChatSession: (sessionId: string) =>
+    request<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; summary: string | null; parentSessionId: string | null }>(
+      `/chat/sessions/${sessionId}/branch`,
+      { method: 'POST' },
+    ),
+
   generateSessionSummary: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, apiKey?: string) =>
     request<{ summary: string }>(`/chat/sessions/${sessionId}/summary`, {
       method: 'PATCH',

@@ -11,7 +11,7 @@ import { v4 as uuid } from 'uuid';
 
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
-interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; }
+interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; parent_session_id?: string | null; }
 interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; bookmarked: number | null; created_at: string; }
 interface NotificationRow { id: string; user_id: string; type: string; title: string; body: string | null; link: string | null; read: number; created_at: number; expires_at: number | null; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -254,6 +254,8 @@ export class MysqlDatabase {
     await this.ensureColumn('chat_sessions', 'tags', 'ALTER TABLE chat_sessions ADD COLUMN tags TEXT', true);
     await this.ensureColumn('chat_sessions', 'is_pinned', 'ALTER TABLE chat_sessions ADD COLUMN is_pinned TINYINT(1) NOT NULL DEFAULT 0', true);
     await this.ensureColumn('chat_sessions', 'is_archived', 'ALTER TABLE chat_sessions ADD COLUMN is_archived TINYINT(1) NOT NULL DEFAULT 0', true);
+    await this.ensureColumn('chat_sessions', 'summary', 'ALTER TABLE chat_sessions ADD COLUMN summary TEXT', true);
+    await this.ensureColumn('chat_sessions', 'parent_session_id', 'ALTER TABLE chat_sessions ADD COLUMN parent_session_id VARCHAR(36)', true);
     await this.ensureColumn('scheduled_jobs', 'session_id', 'ALTER TABLE scheduled_jobs ADD COLUMN session_id VARCHAR(36)', true);
     await this.ensureColumn('chat_messages', 'images_json', 'ALTER TABLE chat_messages ADD COLUMN images_json LONGTEXT', true);
     await this.ensureColumn(
@@ -685,6 +687,20 @@ export class MysqlDatabase {
 
   updateSessionSummary(sessionId: string, summary: string | null): Promise<void> {
     return this._run('UPDATE chat_sessions SET summary = ?, updated_at = NOW() WHERE id = ?', [summary, sessionId]);
+  }
+
+  async forkSession(parentId: string, newId: string, userId: string): Promise<ChatSessionRow> {
+    const parent = await this.queryOne<ChatSessionRow>(
+      'SELECT * FROM chat_sessions WHERE id = ?',
+      [parentId],
+    );
+    if (!parent) throw new Error('Parent session not found');
+    await this._run(
+      'INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at, tags, is_pinned, is_archived, summary, parent_session_id) VALUES (?, ?, ?, NOW(), NOW(), ?, 0, 0, ?, ?)',
+      [newId, userId, parent.title ?? null, parent.tags ?? null, parent.summary ?? null, parentId],
+    );
+    const row = await this.queryOne<ChatSessionRow>('SELECT * FROM chat_sessions WHERE id = ?', [newId]);
+    return row!;
   }
 
   unarchiveSession(sessionId: string): Promise<void> {

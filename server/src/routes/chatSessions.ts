@@ -45,7 +45,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : undefined;
     const includeArchived = req.query.archived === 'true';
     const sessions = await db.listSessions(userId, limit, scene, includeArchived);
-    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null }) => {
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; parent_session_id?: string | null }) => {
       const tags = s.tags ? JSON.parse(s.tags) as string[] : [];
       return {
         id: s.id,
@@ -56,6 +56,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         isPinned: !!s.is_pinned,
         isArchived: !!s.is_archived,
         summary: s.summary ?? null,
+        parentSessionId: s.parent_session_id ?? null,
       };
     });
     let result = mapped;
@@ -197,6 +198,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
       createdAt: session.created_at,
       updatedAt: session.updated_at,
       summary: session.summary ?? null,
+      parentSessionId: session.parent_session_id ?? null,
     });
   });
 
@@ -458,6 +460,43 @@ ${transcript}
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: 'Auto-tagging failed', detail: msg });
     }
+  });
+
+  /**
+   * POST /api/chat/sessions/:id/branch — 创建分支会话（复制父会话的所有消息）
+   * 返回: { id, title, created_at, updated_at, tags, parent_session_id }
+   */
+  router.post('/:id/branch', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+    const newId = `branch-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const forked = await db.forkSession(req.params.id, newId, req.userId);
+
+    // 复制父会话的所有消息到新会话
+    const messages = await db.getMessages(req.params.id, 1000);
+    for (const msg of messages) {
+      await db.addMessage(
+        newId,
+        msg.role,
+        msg.content ?? '',
+        msg.tool_calls_json ?? undefined,
+        msg.images_json ?? undefined,
+        msg.attached_files_json ?? undefined,
+      );
+    }
+
+    const tags = forked.tags ? JSON.parse(forked.tags) as string[] : [];
+    res.status(201).json({
+      id: forked.id,
+      title: forked.title,
+      created_at: forked.created_at,
+      updated_at: forked.updated_at,
+      tags,
+      summary: forked.summary ?? null,
+      parent_session_id: forked.parent_session_id ?? null,
+    });
   });
 
   /** DELETE /api/chat/sessions/:id - 删除会话 */

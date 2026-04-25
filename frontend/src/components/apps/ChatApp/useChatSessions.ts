@@ -11,6 +11,7 @@ export interface ChatSessionItem {
   isPinned?: boolean;
   isArchived?: boolean;
   summary?: string | null;
+  parentSessionId?: string | null;
 }
 
 export const WELCOME_FALLBACK = `我是 X-Computer 主脑，掌控本机所有应用与任务。
@@ -64,6 +65,7 @@ export interface UseChatSessionsReturn {
   refreshSessions: () => void;
   generateSummary: (sessionId: string, providerId: string, modelId: string, baseUrl?: string) => Promise<string>;
   autoTag: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, merge?: boolean) => Promise<string[]>;
+  forkSession: (sessionId: string) => Promise<string>;
 }
 
 /** 会话管理：列表、当前会话、切换、新对话、ensure（发送时创建） */
@@ -199,6 +201,21 @@ export function useChatSessions(
     return res.tags;
   }, []);
 
+  const forkSession = useCallback(async (sessionId: string): Promise<string> => {
+    const res = await api.forkChatSession(sessionId);
+    const newSession = {
+      id: res.id,
+      title: res.title,
+      createdAt: res.createdAt,
+      updatedAt: res.updatedAt,
+      tags: res.tags,
+      summary: res.summary ?? null,
+      parentSessionId: res.parentSessionId ?? null,
+    };
+    setSessions((prev) => [newSession, ...prev]);
+    return res.id;
+  }, []);
+
   return {
     sessions,
     currentSessionId,
@@ -217,5 +234,6 @@ export function useChatSessions(
     refreshSessions: loadSessions,
     generateSummary,
     autoTag,
+    forkSession,
   };
 }
