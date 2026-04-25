@@ -3,7 +3,7 @@
  * 用于 task_complete、memory_captured、x_chat_round_complete 等事件，扩展时不必改核心流程。
  */
 
-export type HookEventName = 'task_complete' | 'memory_captured' | 'x_chat_round_complete';
+export type HookEventName = 'task_complete' | 'memory_captured' | 'x_chat_round_complete' | 'session_end';
 
 export interface TaskCompletePayload {
   taskId: string;
@@ -26,10 +26,17 @@ export interface XChatRoundCompletePayload {
   lastAssistantContent: string;
 }
 
+/** 会话归档/结束时触发，用于自动生成会话摘要 */
+export interface SessionEndPayload {
+  userId: string;
+  sessionId: string;
+}
+
 export type HookPayloadMap = {
   task_complete: TaskCompletePayload;
   memory_captured: MemoryCapturedPayload;
   x_chat_round_complete: XChatRoundCompletePayload;
+  session_end: SessionEndPayload;
 };
 
 export type HookHandler<E extends HookEventName = HookEventName> = (payload: HookPayloadMap[E]) => void | Promise<void>;

@@ -11,7 +11,7 @@ import { v4 as uuid } from 'uuid';
 
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
-interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; }
+interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; }
 interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; bookmarked: number | null; created_at: string; }
 interface NotificationRow { id: string; user_id: string; type: string; title: string; body: string | null; link: string | null; read: number; created_at: number; expires_at: number | null; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -681,6 +681,10 @@ export class MysqlDatabase {
 
   archiveSession(sessionId: string): Promise<void> {
     return this._run('UPDATE chat_sessions SET is_archived = 1, updated_at = NOW() WHERE id = ?', [sessionId]);
+  }
+
+  updateSessionSummary(sessionId: string, summary: string | null): Promise<void> {
+    return this._run('UPDATE chat_sessions SET summary = ?, updated_at = NOW() WHERE id = ?', [summary, sessionId]);
   }
 
   unarchiveSession(sessionId: string): Promise<void> {

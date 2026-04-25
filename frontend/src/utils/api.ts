@@ -1517,6 +1517,12 @@ export const api = {
       body: JSON.stringify({ providerId, modelId, baseUrl, apiKey }),
     }),
 
+  generateSessionSummary: (sessionId: string, providerId: string, modelId: string, baseUrl?: string, apiKey?: string) =>
+    request<{ summary: string }>(`/chat/sessions/${sessionId}/summary`, {
+      method: 'PATCH',
+      body: JSON.stringify({ providerId, modelId, baseUrl, apiKey }),
+    }),
+
   /** 置顶/取消置顶会话 */
   pinChatSession: (sessionId: string, pinned: boolean) =>
     request<{ success: boolean; pinned: boolean }>(`/chat/sessions/${sessionId}/pin`, {

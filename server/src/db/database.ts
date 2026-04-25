@@ -40,6 +40,8 @@ export interface ChatSessionRow {
   is_pinned?: number;
   /** 是否归档会话 */
   is_archived?: number;
+  /** LLM 生成的会话摘要 */
+  summary?: string | null;
 }
 
 export interface NotificationRow {
@@ -659,6 +661,11 @@ export class SqliteAppDatabase {
   archiveSession(sessionId: string): void {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE chat_sessions SET is_archived = 1, updated_at = ? WHERE id = ?').run(now, sessionId);
+  }
+
+  updateSessionSummary(sessionId: string, summary: string | null): void {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE chat_sessions SET summary = ?, updated_at = ? WHERE id = ?').run(summary, now, sessionId);
   }
 
   unarchiveSession(sessionId: string): void {
@@ -1679,6 +1686,11 @@ export class SqliteDatabaseAdapter {
 
   archiveSession(sessionId: string): Promise<void> {
     this.db.archiveSession(sessionId);
+    return Promise.resolve();
+  }
+
+  updateSessionSummary(sessionId: string, summary: string | null): Promise<void> {
+    this.db.updateSessionSummary(sessionId, summary);
     return Promise.resolve();
   }
 

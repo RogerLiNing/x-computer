@@ -129,7 +129,15 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     togglePin,
     toggleArchive,
     refreshSessions,
+    generateSummary,
   } = useChatSessions(setMessages);
+
+  const llmConfig = useLLMConfigStore.getState().llmConfig;
+  const chatSel = llmConfig?.defaultByModality?.chat;
+  const chatProviderId = chatSel?.providerId ?? llmConfig?.providers?.[0]?.id;
+  const chatProvider = llmConfig?.providers?.find((p: { id: string }) => p.id === chatProviderId);
+  const chatModelId = chatSel?.modelId ?? '__custom__';
+  const chatBaseUrl = chatProvider?.baseUrl ?? '';
 
   const filteredSessions = sessionSearch.trim()
     ? sessions.filter((s) => {
@@ -1700,6 +1708,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       {s.tags.length > 3 && <span className="text-[9px] text-desktop-muted">+{s.tags.length - 3}</span>}
                     </span>
                   )}
+                  {s.summary && (
+                    <span className="text-[9px] text-desktop-muted/60 truncate block max-w-[140px]" title={s.summary}>{s.summary}</span>
+                  )}
                 </button>
                 <button
                   type="button"
@@ -1748,6 +1759,23 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   }}
                 >
                   <Archive size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-purple-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="生成摘要"
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (!chatProviderId) { addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' }); return; }
+                    try {
+                      await generateSummary(s.id, chatProviderId, chatModelId, chatBaseUrl);
+                      addNotification({ type: 'info', title: '摘要已生成', message: '' });
+                    } catch {
+                      addNotification({ type: 'error', title: '摘要生成失败', message: '' });
+                    }
+                  }}
+                >
+                  <Sparkles size={12} />
                 </button>
                 <button
                   type="button"
@@ -1905,6 +1933,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
               {selectedAgentId && agents.find((a) => a.id === selectedAgentId) && (
                 <span className="ml-1">· 与「{agents.find((a) => a.id === selectedAgentId)!.name}」对话</span>
+              )}
+              {(sessions.find((s) => s.id === currentSessionId))?.summary && (
+                <span className="text-[9px] text-purple-400/70 truncate max-w-[200px] ml-1" title={(sessions.find((s) => s.id === currentSessionId))?.summary ?? ''}>
+                  · {(sessions.find((s) => s.id === currentSessionId))?.summary}
+                </span>
               )}
             </div>
           </div>

@@ -14,6 +14,7 @@
 import { Router } from 'express';
 import { callLLM } from '../chat/chatService.js';
 import type { AppDatabase } from '../db/database.js';
+import { fire as fireHook } from '../hooks/HookRegistry.js';
 
 /** 提取搜索关键词周围的文本片段 */
 function extractSnippet(content: string, q: string, context = 60): string {
@@ -44,7 +45,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : undefined;
     const includeArchived = req.query.archived === 'true';
     const sessions = await db.listSessions(userId, limit, scene, includeArchived);
-    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number }) => {
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null }) => {
       const tags = s.tags ? JSON.parse(s.tags) as string[] : [];
       return {
         id: s.id,
@@ -54,6 +55,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         tags,
         isPinned: !!s.is_pinned,
         isArchived: !!s.is_archived,
+        summary: s.summary ?? null,
       };
     });
     let result = mapped;
@@ -194,6 +196,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
       title: session.title,
       createdAt: session.created_at,
       updatedAt: session.updated_at,
+      summary: session.summary ?? null,
     });
   });
 
@@ -234,6 +237,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
     if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
     await db.archiveSession(session.id);
+    fireHook('session_end', { userId: session.user_id, sessionId: session.id });
     res.json({ success: true, is_archived: true });
   });
 
@@ -309,6 +313,66 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: 'Title generation failed', detail: msg });
+    }
+  });
+
+  /**
+   * PATCH /api/chat/sessions/:id/summary — 使用 LLM 生成会话摘要
+   * body: { providerId, modelId, baseUrl?, apiKey? }
+   * 返回: { summary: string }
+   */
+  router.patch('/:id/summary', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+
+    const { providerId, modelId, baseUrl, apiKey } = req.body ?? {};
+    if (!providerId || !modelId) { res.status(400).json({ error: 'Missing providerId or modelId' }); return; }
+
+    const messages = await db.getMessages(req.params.id, 100);
+    if (messages.length === 0) { res.json({ summary: '' }); return; }
+
+    const lines: string[] = [];
+    for (const msg of messages) {
+      const role = msg.role === 'user' ? '用户' : '助手';
+      const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+      lines.push(`[${role}] ${content}`);
+      lines.push('');
+    }
+    const transcript = lines.join('\n').slice(0, 8000);
+    const date = new Date().toISOString().slice(0, 10);
+
+    const prompt = `你是一个专业的技术文档助手。请为以下对话生成一个简洁的摘要。
+
+要求：
+- 中文，200字以内
+- 总结本次会话的主要话题、解决的问题和关键结论
+- 只输出摘要内容，不要有前缀说明
+
+---
+## 会话记录 (${date})
+
+${transcript}
+
+---
+摘要：`;
+
+    try {
+      const result = await callLLM({
+        messages: [{ role: 'user', content: prompt }],
+        providerId,
+        modelId,
+        baseUrl,
+        apiKey,
+      });
+      const summary = (result ?? '').replace(/\x00/g, '').replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '').trim().slice(0, 500);
+      if (summary) {
+        await db.updateSessionSummary(session.id, summary);
+      }
+      res.json({ summary });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Summary generation failed', detail: msg });
     }
   });
 

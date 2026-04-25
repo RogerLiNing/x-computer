@@ -10,6 +10,7 @@ export interface ChatSessionItem {
   tags: string[];
   isPinned?: boolean;
   isArchived?: boolean;
+  summary?: string | null;
 }
 
 export const WELCOME_FALLBACK = `我是 X-Computer 主脑，掌控本机所有应用与任务。
@@ -61,6 +62,7 @@ export interface UseChatSessionsReturn {
   toggleArchive: (sessionId: string) => void;
   setCurrentSessionId: (id: string | null) => void;
   refreshSessions: () => void;
+  generateSummary: (sessionId: string, providerId: string, modelId: string, baseUrl?: string) => Promise<string>;
 }
 
 /** 会话管理：列表、当前会话、切换、新对话、ensure（发送时创建） */
@@ -178,6 +180,15 @@ export function useChatSessions(
     action.then(() => loadSessions()).catch(() => {});
   }, [sessions, loadSessions]);
 
+  const generateSummary = useCallback(async (sessionId: string, providerId: string, modelId: string, baseUrl?: string): Promise<string> => {
+    const res = await api.generateSessionSummary(sessionId, providerId, modelId, baseUrl);
+    // Optimistically update the session in state
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, summary: res.summary ?? null } : s)),
+    );
+    return res.summary ?? '';
+  }, []);
+
   return {
     sessions,
     currentSessionId,
@@ -194,5 +205,6 @@ export function useChatSessions(
     toggleArchive,
     setCurrentSessionId,
     refreshSessions: loadSessions,
+    generateSummary,
   };
 }
