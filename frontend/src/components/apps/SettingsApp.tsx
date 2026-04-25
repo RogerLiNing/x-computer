@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -252,6 +252,212 @@ function HeartbeatSettings() {
       >
         {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
       </button>
+    </div>
+  );
+}
+
+function ScheduledJobsSettings() {
+  const { t } = useTranslation();
+  const [jobs, setJobs] = useState<Array<{
+    id: string; userId: string; name: string; intent: string;
+    cron: string | null; enabled: boolean; nextRun: number; createdAt: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', intent: '', cron: '' });
+  const [creating, setCreating] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [toggling, setToggling] = useState<string | null>(null);
+
+  const fetchJobs = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.scheduledJobsList();
+      setJobs(data);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  const handleCreate = async () => {
+    if (!createForm.intent) return;
+    setCreating(true);
+    try {
+      const result = await api.scheduledJobsCreate({
+        name: createForm.name || undefined,
+        intent: createForm.intent,
+        cron: createForm.cron || undefined,
+      });
+      setJobs((prev) => [result, ...prev]);
+      setShowCreate(false);
+      setCreateForm({ name: '', intent: '', cron: '' });
+    } catch { /* ignore */ }
+    finally { setCreating(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('确定删除此定时任务？')) return;
+    setDeleting(id);
+    try {
+      await api.scheduledJobsDelete(id);
+      setJobs((prev) => prev.filter((j) => j.id !== id));
+    } catch { /* ignore */ }
+    finally { setDeleting(null); }
+  };
+
+  const handleToggle = async (id: string, currentEnabled: boolean) => {
+    setToggling(id);
+    try {
+      const result = await api.scheduledJobsToggle(id);
+      setJobs((prev) => prev.map((j) => j.id === id ? { ...j, enabled: result.enabled } : j));
+    } catch { /* ignore */ }
+    finally { setToggling(null); }
+  };
+
+  const formatNextRun = (nextRun: number) => {
+    const d = new Date(nextRun);
+    const now = Date.now();
+    if (nextRun < now) return t('settings.overdue', '已超时');
+    const diff = nextRun - now;
+    if (diff < 60000) return t('settings.soon', '即将执行');
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}${t('settings.minutesLater', '分钟后')}`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}${t('settings.hoursLater', '小时后')}`;
+    return d.toLocaleDateString();
+  };
+
+  const CRON_PRESETS = [
+    { label: t('settings.every5min', '每5分钟'), value: '*/5 * * * *' },
+    { label: t('settings.hourly', '每小时'), value: '0 * * * *' },
+    { label: t('settings.daily', '每天'), value: '0 9 * * *' },
+    { label: t('settings.weekly', '每周'), value: '0 9 * * 1' },
+    { label: t('settings.monthly', '每月'), value: '0 9 1 * *' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.scheduledJobs', '定时任务')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-0.5">
+            {t('settings.scheduledJobsDesc', '管理 X 主脑定时执行的任务')}
+          </p>
+        </div>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-xs text-desktop-text transition-colors flex items-center gap-1"
+        >
+          <Plus size={12} /> {t('settings.add', '添加')}
+        </button>
+      </div>
+
+      {/* 创建表单 */}
+      {showCreate && (
+        <div className="bg-white/[0.03] rounded-xl p-4 border border-desktop-accent/30 space-y-3">
+          <h4 className="text-xs font-medium text-desktop-text">{t('settings.createScheduledJob', '创建定时任务')}</h4>
+          <input
+            type="text"
+            placeholder={t('settings.jobNameOptional', '任务名称（可选）')}
+            value={createForm.name}
+            onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+          />
+          <textarea
+            placeholder={t('settings.taskDescription', '任务描述（X 主脑 将执行的操作）')}
+            value={createForm.intent}
+            onChange={(e) => setCreateForm((f) => ({ ...f, intent: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none resize-none h-20"
+          />
+          <div>
+            <div className="text-[10px] text-desktop-muted mb-1">{t('settings.cronExpression', 'Cron 表达式')}</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {CRON_PRESETS.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setCreateForm((f) => ({ ...f, cron: p.value }))}
+                  className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                    createForm.cron === p.value
+                      ? 'bg-desktop-accent/40 text-desktop-text'
+                      : 'bg-white/5 text-desktop-muted hover:bg-white/10'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <input
+              type="text"
+              placeholder="*/5 * * * *"
+              value={createForm.cron}
+              onChange={(e) => setCreateForm((f) => ({ ...f, cron: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none font-mono"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCreate}
+              disabled={creating || !createForm.intent}
+              className="px-3 py-1.5 rounded-lg bg-desktop-accent/50 hover:bg-desktop-accent/70 disabled:opacity-40 text-xs text-desktop-text transition-colors"
+            >
+              {creating ? t('settings.creating', '创建中…') : t('settings.create', '创建')}
+            </button>
+            <button
+              onClick={() => { setShowCreate(false); setCreateForm({ name: '', intent: '', cron: '' }); }}
+              className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+            >
+              {t('settings.cancel', '取消')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 任务列表 */}
+      {loading ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', '加载中…')}</div>
+      ) : jobs.length === 0 ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">
+          {t('settings.noScheduledJobs', '暂无定时任务')}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {jobs.map((job) => (
+            <div key={job.id} className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
+              <div className="px-3 py-2.5 flex items-center gap-2">
+                <button
+                  onClick={() => handleToggle(job.id, job.enabled)}
+                  disabled={toggling === job.id}
+                  className={`shrink-0 transition-colors ${job.enabled ? 'text-green-400' : 'text-desktop-muted/30'}`}
+                >
+                  <ToggleRight size={18} fill={job.enabled ? 'currentColor' : 'none'} />
+                </button>
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs text-desktop-text font-medium truncate">{job.name || job.intent}</div>
+                  {job.name && (
+                    <div className="text-[10px] text-desktop-muted/60 truncate mt-0.5">{job.intent}</div>
+                  )}
+                  <div className="flex items-center gap-2 mt-0.5">
+                    {job.cron && (
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-desktop-accent/15 text-desktop-muted font-mono">
+                        {job.cron}
+                      </span>
+                    )}
+                    <span className="text-[9px] text-desktop-muted/40">
+                      → {formatNextRun(job.nextRun)}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDelete(job.id)}
+                  disabled={deleting === job.id}
+                  className="p-1 rounded hover:bg-red-500/10 text-desktop-muted/40 hover:text-red-400 transition-colors shrink-0"
+                >
+                  {deleting === job.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1229,6 +1435,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'flags', labelKey: 'settings.featureFlags', icon: ToggleRight },
     { id: 'usage', labelKey: 'settings.usageAnalytics', icon: BarChart2 },
     { id: 'webhooks', labelKey: 'settings.webhooks', icon: WebhookIcon },
+    { id: 'schedules', labelKey: 'settings.scheduledJobs', icon: Clock },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1421,6 +1628,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'webhooks' && (
           <WebhooksSettings />
+        )}
+
+        {tab === 'schedules' && (
+          <ScheduledJobsSettings />
         )}
       </div>
     </div>

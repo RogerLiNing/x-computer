@@ -128,9 +128,12 @@ export class MysqlDatabase {
     await this._run(`CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id VARCHAR(36) PRIMARY KEY,
       user_id VARCHAR(36) NOT NULL,
+      name VARCHAR(255),
       intent VARCHAR(512) NOT NULL,
       run_at BIGINT NOT NULL,
       cron VARCHAR(255),
+      enabled TINYINT(1) NOT NULL DEFAULT 1,
+      next_run BIGINT,
       created_at BIGINT NOT NULL
     )`, [], true);
     await this.ensureIndex(
@@ -796,30 +799,55 @@ export class MysqlDatabase {
   insertScheduledJob(job: {
     id: string;
     user_id: string;
+    name?: string | null;
     intent: string;
     run_at: number;
     cron: string | null;
+    enabled?: boolean;
+    next_run?: number | null;
     created_at: number;
   }): Promise<void> {
     return this._run(
-      'INSERT INTO scheduled_jobs (id, user_id, intent, run_at, cron, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      [job.id, job.user_id, job.intent, job.run_at, job.cron ?? null, job.created_at],
+      'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at],
     );
   }
 
   updateScheduledJobRunAt(id: string, runAt: number): Promise<void> {
-    return this._run('UPDATE scheduled_jobs SET run_at = ? WHERE id = ?', [runAt, id]);
+    return this._run('UPDATE scheduled_jobs SET run_at = ?, next_run = ? WHERE id = ?', [runAt, runAt, id]);
   }
 
   deleteScheduledJob(id: string): Promise<void> {
     return this._run('DELETE FROM scheduled_jobs WHERE id = ?', [id]);
   }
 
+  updateScheduledJob(id: string, fields: { name?: string; intent?: string; cron?: string | null; enabled?: boolean; next_run?: number | null }): Promise<void> {
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+    if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
+    if (fields.intent !== undefined) { sets.push('intent = ?'); params.push(fields.intent); }
+    if (fields.cron !== undefined) { sets.push('cron = ?'); params.push(fields.cron ?? null); }
+    if (fields.enabled !== undefined) { sets.push('enabled = ?'); params.push(fields.enabled ? 1 : 0); }
+    if (fields.next_run !== undefined) { sets.push('next_run = ?'); params.push(fields.next_run); }
+    if (sets.length === 0) return Promise.resolve();
+    params.push(id);
+    return this._run(`UPDATE scheduled_jobs SET ${sets.join(', ')} WHERE id = ?`, params);
+  }
+
   getAllScheduledJobs(): Promise<
-    { id: string; user_id: string; intent: string; run_at: number; cron: string | null; created_at: number }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
   > {
     return this._query(
-      'SELECT id, user_id, intent, run_at, cron, created_at FROM scheduled_jobs ORDER BY run_at ASC',
+      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs ORDER BY next_run ASC',
+    );
+  }
+
+  listScheduledJobsByUser(userId: string): Promise<
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
+  > {
+    return this._query(
+      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs WHERE user_id = ? ORDER BY next_run ASC',
+      [userId],
     );
   }
 

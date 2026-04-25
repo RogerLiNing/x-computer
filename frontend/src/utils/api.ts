@@ -499,6 +499,35 @@ export const api = {
       createdAt: number;
     }>>(`/admin/webhooks/${encodeURIComponent(id)}/logs${limit ? `?limit=${limit}` : ''}`),
 
+  // ── 定时任务 ────────────────────────────────────────────────────
+
+  /** 列出当前用户所有定时任务 */
+  scheduledJobsList: () =>
+    request<Array<{
+      id: string; userId: string; name: string; intent: string;
+      cron: string | null; enabled: boolean; nextRun: number; createdAt: number;
+    }>>('/scheduled-jobs'),
+
+  /** 创建定时任务 */
+  scheduledJobsCreate: (params: { name?: string; intent: string; cron?: string; nextRun?: number }) =>
+    request<{ id: string; userId: string; name: string; intent: string; cron: string | null; enabled: boolean; nextRun: number; createdAt: number }>(
+      '/scheduled-jobs', { method: 'POST', body: JSON.stringify(params) }
+    ),
+
+  /** 更新定时任务 */
+  scheduledJobsUpdate: (id: string, fields: { name?: string; intent?: string; cron?: string | null; enabled?: boolean; nextRun?: number | null }) =>
+    request<{ id: string; userId: string; name: string; intent: string; cron: string | null; enabled: boolean; nextRun: number }>(
+      `/scheduled-jobs/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(fields) }
+    ),
+
+  /** 删除定时任务 */
+  scheduledJobsDelete: (id: string) =>
+    request<{ success: boolean }>(`/scheduled-jobs/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 启用/禁用定时任务 */
+  scheduledJobsToggle: (id: string) =>
+    request<{ id: string; enabled: boolean }>(`/scheduled-jobs/${encodeURIComponent(id)}/toggle`, { method: 'POST' }),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{

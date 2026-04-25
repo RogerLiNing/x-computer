@@ -178,9 +178,12 @@ export class SqliteAppDatabase {
       CREATE TABLE IF NOT EXISTS scheduled_jobs (
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
+        name TEXT,
         intent TEXT NOT NULL,
         run_at INTEGER NOT NULL,
         cron TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        next_run INTEGER,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_user ON scheduled_jobs(user_id);
@@ -747,44 +750,58 @@ export class SqliteAppDatabase {
   insertScheduledJob(job: {
     id: string;
     user_id: string;
+    name?: string | null;
     intent: string;
     run_at: number;
     cron: string | null;
+    enabled?: boolean;
+    next_run?: number | null;
     created_at: number;
   }): void {
     this.db
       .prepare(
-        'INSERT INTO scheduled_jobs (id, user_id, intent, run_at, cron, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(job.id, job.user_id, job.intent, job.run_at, job.cron ?? null, job.created_at);
+      .run(job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at);
   }
 
   updateScheduledJobRunAt(id: string, runAt: number): void {
-    this.db.prepare('UPDATE scheduled_jobs SET run_at = ? WHERE id = ?').run(runAt, id);
+    this.db.prepare('UPDATE scheduled_jobs SET run_at = ?, next_run = ? WHERE id = ?').run(runAt, runAt, id);
   }
 
   deleteScheduledJob(id: string): void {
     this.db.prepare('DELETE FROM scheduled_jobs WHERE id = ?').run(id);
   }
 
+  updateScheduledJob(id: string, fields: { name?: string; intent?: string; cron?: string | null; enabled?: boolean; next_run?: number | null }): void {
+    const sets: string[] = [];
+    const params: unknown[] = [];
+    if (fields.name !== undefined) { sets.push('name = ?'); params.push(fields.name); }
+    if (fields.intent !== undefined) { sets.push('intent = ?'); params.push(fields.intent); }
+    if (fields.cron !== undefined) { sets.push('cron = ?'); params.push(fields.cron ?? null); }
+    if (fields.enabled !== undefined) { sets.push('enabled = ?'); params.push(fields.enabled ? 1 : 0); }
+    if (fields.next_run !== undefined) { sets.push('next_run = ?'); params.push(fields.next_run); }
+    if (sets.length === 0) return;
+    params.push(id);
+    this.db.prepare(`UPDATE scheduled_jobs SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  }
+
   getAllScheduledJobs(): {
-    id: string;
-    user_id: string;
-    intent: string;
-    run_at: number;
-    cron: string | null;
-    created_at: number;
+    id: string; user_id: string; name: string | null; intent: string;
+    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number;
   }[] {
     return this.db
-      .prepare('SELECT id, user_id, intent, run_at, cron, created_at FROM scheduled_jobs ORDER BY run_at ASC')
-      .all() as {
-      id: string;
-      user_id: string;
-      intent: string;
-      run_at: number;
-      cron: string | null;
-      created_at: number;
-    }[];
+      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs ORDER BY next_run ASC')
+      .all() as any;
+  }
+
+  listScheduledJobsByUser(userId: string): {
+    id: string; user_id: string; name: string | null; intent: string;
+    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number;
+  }[] {
+    return this.db
+      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at FROM scheduled_jobs WHERE user_id = ? ORDER BY next_run ASC')
+      .all(userId) as any;
   }
 
   // ── Handled Events（已处理事件去重，避免定时/信号任务重复执行）────────────────
@@ -1257,9 +1274,18 @@ export class SqliteDatabaseAdapter {
     return Promise.resolve();
   }
   getAllScheduledJobs(): Promise<
-    { id: string; user_id: string; intent: string; run_at: number; cron: string | null; created_at: number }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
   > {
     return Promise.resolve(this.db.getAllScheduledJobs());
+  }
+  updateScheduledJob(id: string, fields: { name?: string; intent?: string; cron?: string | null; enabled?: boolean; next_run?: number | null }): Promise<void> {
+    this.db.updateScheduledJob(id, fields);
+    return Promise.resolve();
+  }
+  listScheduledJobsByUser(userId: string): Promise<
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number }[]
+  > {
+    return Promise.resolve(this.db.listScheduledJobsByUser(userId));
   }
   hasHandledEvent(userId: string, fingerprint: string): Promise<boolean> {
     return Promise.resolve(this.db.hasHandledEvent(userId, fingerprint));
