@@ -1,4 +1,4 @@
-import { MessageSquarePlus, Pencil, Trash2 } from 'lucide-react';
+import { MessageSquarePlus, Pencil, Trash2, Download } from 'lucide-react';
 
 interface ChatSessionItem {
   id: string;
@@ -12,6 +12,7 @@ interface SessionSidebarProps {
   onStartNewChat: () => void;
   onUpdateSessionTitle: (id: string, title: string) => void;
   onDeleteSession: (id: string) => void;
+  onExportSession: (id: string, format: 'markdown' | 'json') => void;
 }
 
 export function SessionSidebar({
@@ -21,6 +22,7 @@ export function SessionSidebar({
   onStartNewChat,
   onUpdateSessionTitle,
   onDeleteSession,
+  onExportSession,
 }: SessionSidebarProps) {
   return (
     <div className="w-full sm:w-56 shrink-0 border-r border-white/5 bg-white/[0.02] flex flex-col absolute sm:relative inset-x-0 top-12 sm:top-0 bottom-0 sm:bottom-auto z-20 sm:z-auto">
@@ -59,6 +61,14 @@ export function SessionSidebar({
               }}
             >
               <Pencil size={12} />
+            </button>
+            <button
+              type="button"
+              className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
+              title="导出 MD"
+              onClick={(e) => { e.stopPropagation(); onExportSession(s.id, 'markdown'); }}
+            >
+              <Download size={12} />
             </button>
             <button
               type="button"

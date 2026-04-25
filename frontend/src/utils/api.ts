@@ -1456,6 +1456,16 @@ export const api = {
       }>
     >(`/chat/sessions/${sessionId}/messages?limit=${limit}`),
 
+  /** 导出会话（Markdown） */
+  exportChatSessionMarkdown: (sessionId: string) => {
+    return `${window.location.origin}/api/chat/sessions/${sessionId}/export?format=markdown`;
+  },
+
+  /** 导出会话（JSON） */
+  exportChatSessionJson: (sessionId: string) => {
+    return `${window.location.origin}/api/chat/sessions/${sessionId}/export?format=json`;
+  },
+
   /** 追加消息到会话。images: 图片路径或 URL；attachedFiles: 用户附带文档 [{ name, path }] */
   addChatMessage: (
     sessionId: string,

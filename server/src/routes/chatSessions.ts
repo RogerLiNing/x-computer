@@ -184,5 +184,72 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     res.json({ success: true });
   });
 
+  /** GET /api/chat/sessions/:id/export - 导出会话为 Markdown 或 JSON */
+  router.get('/:id/export', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    if (session.user_id !== req.userId) {
+      res.status(403).json({ error: 'Forbidden' });
+      return;
+    }
+    const messages = await db.getMessages(session.id, 2000);
+    const format = (req.query.format as string) || 'markdown';
+
+    if (format === 'json') {
+      res.json({
+        session: { id: session.id, title: session.title, createdAt: session.created_at, updatedAt: session.updated_at },
+        messages: messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          toolCalls: m.tool_calls_json ? JSON.parse(m.tool_calls_json) : undefined,
+          images: m.images_json ? JSON.parse(m.images_json) : undefined,
+          createdAt: m.created_at,
+        })),
+      });
+      return;
+    }
+
+    // Markdown export
+    const lines: string[] = [
+      `# ${session.title || 'Untitled Conversation'}`,
+      '',
+      `> Export date: ${new Date().toLocaleString()}`,
+      '',
+      '---',
+      '',
+    ];
+
+    for (const m of messages) {
+      const roleLabel = m.role === 'user' ? '**User**' : m.role === 'assistant' ? '**Assistant**' : `**${m.role}**`;
+      const time = new Date(m.created_at).toLocaleString();
+      lines.push(`### ${roleLabel}  \n*<small>${time}</small>*`);
+      lines.push('');
+      if (m.tool_calls_json) {
+        try {
+          const tools = JSON.parse(m.tool_calls_json);
+          if (tools.length > 0) {
+            lines.push('*Tools used:*');
+            for (const t of tools) {
+              lines.push(`- \`${t.name}\`: ${JSON.stringify(t.arguments ?? {}).slice(0, 200)}`);
+            }
+            lines.push('');
+          }
+        } catch { /* ignore */ }
+      }
+      lines.push(m.content || '');
+      lines.push('');
+      lines.push('---');
+      lines.push('');
+    }
+
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="conversation-${session.id}.md"`);
+    res.send(lines.join('\n'));
+  });
+
   return router;
 }

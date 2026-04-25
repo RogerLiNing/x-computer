@@ -1162,6 +1162,18 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 </button>
                 <button
                   type="button"
+                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="导出 MD"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const url = api.exportChatSessionMarkdown(s.id);
+                    window.open(url, '_blank');
+                  }}
+                >
+                  <Download size={12} />
+                </button>
+                <button
+                  type="button"
                   className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                   title="删除会话"
                   onClick={(e) => {
