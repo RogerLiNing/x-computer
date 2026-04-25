@@ -691,6 +691,7 @@ export class MysqlDatabase {
       images_json: imagesJson ?? null,
       attached_files_json: attachedFilesJson ?? null,
       reactions: null,
+      bookmarked: 0,
       created_at: now,
     };
   }
@@ -711,6 +712,17 @@ export class MysqlDatabase {
     return this.query<ChatMessageRow>(
       'SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?',
       [sessionId, limit],
+    );
+  }
+
+  /** 获取用户所有会话中被收藏的消息 */
+  getBookmarkedMessages(userId: string, limit = 100): Promise<ChatMessageRow[]> {
+    return this.query<ChatMessageRow>(
+      `SELECT m.* FROM chat_messages m
+       JOIN chat_sessions s ON m.session_id = s.id
+       WHERE s.user_id = ? AND m.bookmarked = 1
+       ORDER BY m.created_at DESC LIMIT ?`,
+      [userId, limit],
     );
   }
 

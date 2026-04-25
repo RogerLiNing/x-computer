@@ -65,6 +65,32 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     res.json(result);
   });
 
+  /** GET /api/chat/sessions/bookmarks - 获取当前用户所有会话中被收藏的消息 */
+  router.get('/bookmarks', async (req, res) => {
+    const userId = req.userId;
+    await db.ensureUser(userId);
+    const limit = parseInt(req.query.limit as string) || 100;
+    try {
+      const messages = await db.getBookmarkedMessages(userId, limit);
+      res.json(
+        messages.map((m: import('../db/database.js').ChatMessageRow) => ({
+          id: m.id,
+          sessionId: m.session_id,
+          role: m.role,
+          content: m.content,
+          toolCalls: m.tool_calls_json ? JSON.parse(m.tool_calls_json) : undefined,
+          images: m.images_json ? JSON.parse(m.images_json) : undefined,
+          reactions: m.reactions ? JSON.parse(m.reactions) : undefined,
+          bookmarked: !!m.bookmarked,
+          createdAt: m.created_at,
+        })),
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Failed to get bookmarks', detail: msg });
+    }
+  });
+
   /** POST /api/chat/sessions - 创建会话；body.scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */
   router.post('/', async (req, res) => {
     const userId = req.userId;
@@ -316,7 +342,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     res.json({ success: true });
   });
 
-  /** PATCH /api/chat/messages/:msgId/bookmark - 收藏/取消收藏消息 */
+  /** PATCH /api/chat/sessions/messages/:msgId/bookmark - 收藏/取消收藏消息 */
   router.patch('/messages/:msgId/bookmark', async (req, res) => {
     const { bookmarked } = req.body ?? {};
     if (typeof bookmarked !== 'boolean') {

@@ -652,6 +652,7 @@ export class SqliteAppDatabase {
       images_json: imagesJson ?? null,
       attached_files_json: attachedFilesJson ?? null,
       reactions: null,
+      bookmarked: 0,
       created_at: now,
     };
   }
@@ -672,6 +673,18 @@ export class SqliteAppDatabase {
     return this.db
       .prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?')
       .all(sessionId, limit) as ChatMessageRow[];
+  }
+
+  /** 获取用户所有会话中被收藏的消息 */
+  getBookmarkedMessages(userId: string, limit = 100): ChatMessageRow[] {
+    return this.db
+      .prepare(
+        `SELECT m.* FROM chat_messages m
+         JOIN chat_sessions s ON m.session_id = s.id
+         WHERE s.user_id = ? AND m.bookmarked = 1
+         ORDER BY m.created_at DESC LIMIT ?`,
+      )
+      .all(userId, limit) as ChatMessageRow[];
   }
 
   deleteMessage(messageId: string): void {
@@ -1458,6 +1471,9 @@ export class SqliteDatabaseAdapter {
   }
   getMessages(sessionId: string, limit?: number): Promise<ChatMessageRow[]> {
     return Promise.resolve(this.db.getMessages(sessionId, limit));
+  }
+  getBookmarkedMessages(userId: string, limit?: number): Promise<ChatMessageRow[]> {
+    return Promise.resolve(this.db.getBookmarkedMessages(userId, limit));
   }
   deleteMessage(messageId: string): Promise<void> {
     this.db.deleteMessage(messageId);

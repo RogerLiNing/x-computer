@@ -274,6 +274,43 @@ describe('多用户基础设施', () => {
         .set('X-User-Id', USER_A);
       expect(check.status).toBe(404);
     });
+
+    it('PATCH /api/chat/sessions/messages/:msgId/bookmark 收藏消息', async () => {
+      const session = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
+      const sId = session.body.id;
+      const msg = await request(app)
+        .post(`/api/chat/sessions/${sId}/messages`)
+        .set('X-User-Id', USER_A)
+        .send({ role: 'user', content: 'test bookmark' });
+      const msgId = msg.body.id;
+      const res = await request(app)
+        .patch(`/api/chat/sessions/messages/${msgId}/bookmark`)
+        .set('X-User-Id', USER_A)
+        .send({ bookmarked: true });
+      expect(res.status).toBe(200);
+      expect(res.body.bookmarked).toBe(true);
+    });
+
+    it('GET /api/chat/sessions/bookmarks 返回跨会话收藏消息', async () => {
+      resetRateLimitState(); // ensure clean rate limit state
+      // 创建两个会话，各加一条收藏消息
+      const s1 = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
+      const s2 = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
+      const m1 = await request(app).post(`/api/chat/sessions/${s1.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: 'bm1' });
+      const m2 = await request(app).post(`/api/chat/sessions/${s2.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: 'bm2' });
+      await request(app).patch(`/api/chat/sessions/messages/${m1.body.id}/bookmark`).set('X-User-Id', USER_A).send({ bookmarked: true });
+      await request(app).patch(`/api/chat/sessions/messages/${m2.body.id}/bookmark`).set('X-User-Id', USER_A).send({ bookmarked: true });
+      // 等待速率限制窗口通过（3s > 2s rate limit）
+      await new Promise((r) => setTimeout(r, 3000));
+      const res = await request(app).get('/api/chat/sessions/bookmarks').set('X-User-Id', USER_A);
+      expect(res.status).toBe(200);
+      expect(res.body.length).toBeGreaterThanOrEqual(2);
+      // 用户 B 不应看到用户 A 的收藏
+      const bRes = await request(app).get('/api/chat/sessions/bookmarks').set('X-User-Id', USER_B);
+      expect(bRes.status).toBe(200);
+      const bIds = bRes.body.map((m: any) => m.id);
+      expect(bIds).not.toContain(m1.body.id);
+    });
   });
 
   // ── 文件系统隔离 ──

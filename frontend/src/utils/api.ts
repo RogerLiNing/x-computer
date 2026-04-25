@@ -1521,10 +1521,26 @@ export const api = {
 
   /** 收藏/取消收藏消息 */
   setMessageBookmark: (msgId: string, bookmarked: boolean) =>
-    request<{ success: boolean; bookmarked: boolean }>(`/chat/messages/${msgId}/bookmark`, {
+    request<{ success: boolean; bookmarked: boolean }>(`/chat/sessions/messages/${msgId}/bookmark`, {
       method: 'PATCH',
       body: JSON.stringify({ bookmarked }),
     }),
+
+  /** 获取当前用户所有会话中被收藏的消息 */
+  getBookmarkedMessages: (limit = 100) =>
+    request<
+      Array<{
+        id: string;
+        sessionId: string;
+        role: string;
+        content: string;
+        toolCalls?: unknown;
+        images?: string[];
+        reactions?: Record<string, boolean>;
+        bookmarked: boolean;
+        createdAt: string;
+      }>
+    >(`/chat/sessions/bookmarks?limit=${limit}`),
 
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
