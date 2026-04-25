@@ -337,7 +337,14 @@
     "contentZh": "内容（中文）",
     "contentEn": "内容（英文）",
     "priority": "优先级",
-    "noAnnouncements": "暂无公告"
+    "noAnnouncements": "暂无公告",
+    "webhookTester": "Webhook 测试工具",
+    "webhookTesterDesc": "发送 HTTP 请求测试任意端点",
+    "headers": "请求头",
+    "requestBody": "请求体",
+    "responseBody": "响应体",
+    "send": "发送",
+    "testing": "测试中…"
   },
 
   "onboarding": {

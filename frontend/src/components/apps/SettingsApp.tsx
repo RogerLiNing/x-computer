@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -866,6 +866,147 @@ function WebhooksSettings() {
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      <WebhookTester />
+    </div>
+  );
+}
+
+// ── Webhook Testing Tool ────────────────────────────────────
+
+function WebhookTester() {
+  const { t } = useTranslation();
+  const [method, setMethod] = useState<'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'>('POST');
+  const [url, setUrl] = useState('');
+  const [headers, setHeaders] = useState('Content-Type: application/json\nAuthorization: Bearer ');
+  const [body, setBody] = useState('{\n  "event": "test",\n  "data": {}\n}');
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<{
+    status: number; statusText: string;
+    headers: Record<string, string>; body: string; time: number;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleTest = async () => {
+    if (!url.trim()) return;
+    setTesting(true);
+    setResult(null);
+    setError(null);
+    const start = Date.now();
+    try {
+      const headerMap: Record<string, string> = {};
+      for (const line of headers.split('\n')) {
+        const idx = line.indexOf(':');
+        if (idx > 0) {
+          const key = line.slice(0, idx).trim();
+          const val = line.slice(idx + 1).trim();
+          if (key) headerMap[key] = val;
+        }
+      }
+      const opts: RequestInit = { method, headers: headerMap };
+      if (!['GET', 'HEAD'].includes(method) && body.trim()) {
+        opts.body = body;
+      }
+      const resp = await fetch(url, opts);
+      const respBody = await resp.text();
+      const respHeaders: Record<string, string> = {};
+      resp.headers.forEach((val, key) => { respHeaders[key] = val; });
+      setResult({ status: resp.status, statusText: resp.statusText, headers: respHeaders, body: respBody, time: Date.now() - start });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Request failed');
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const METHOD_COLORS: Record<string, string> = {
+    GET: 'bg-green-500/20 text-green-400',
+    POST: 'bg-blue-500/20 text-blue-400',
+    PUT: 'bg-yellow-500/20 text-yellow-400',
+    PATCH: 'bg-orange-500/20 text-orange-400',
+    DELETE: 'bg-red-500/20 text-red-400',
+  };
+
+  return (
+    <div className="space-y-4 mt-6 pt-6 border-t border-white/5">
+      <div>
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.webhookTester', 'Webhook 测试工具')}</h3>
+        <p className="text-[11px] text-desktop-muted mt-0.5">
+          {t('settings.webhookTesterDesc', '发送 HTTP 请求测试任意端点')}
+        </p>
+      </div>
+
+      <div className="flex gap-2">
+        <select
+          value={method}
+          onChange={(e) => setMethod(e.target.value as typeof method)}
+          className={`px-2 py-1.5 rounded-lg text-xs font-medium ${METHOD_COLORS[method]} border border-white/10`}
+        >
+          {Object.keys(METHOD_COLORS).map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <input
+          type="url"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="https://example.com/webhook"
+          className="flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+        />
+        <button
+          onClick={handleTest}
+          disabled={testing || !url.trim()}
+          className="px-4 py-1.5 rounded-lg bg-desktop-accent/60 hover:bg-desktop-accent/80 text-xs disabled:opacity-50 flex items-center gap-1"
+        >
+          {testing ? <RefreshCw size={12} className="animate-spin" /> : <Send size={12} />}
+          {testing ? t('settings.testing', '测试中…') : t('settings.send', '发送')}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <div className="text-[10px] text-desktop-muted mb-1">{t('settings.headers', '请求头')}（每行 Key: Value）</div>
+          <textarea
+            value={headers}
+            onChange={(e) => setHeaders(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text outline-none resize-none h-20 font-mono"
+            placeholder="Content-Type: application/json"
+          />
+        </div>
+        <div>
+          <div className="text-[10px] text-desktop-muted mb-1">{t('settings.requestBody', '请求体')}</div>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text outline-none resize-none h-20 font-mono"
+            placeholder='{"key": "value"}'
+          />
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div className="bg-white/[0.02] rounded-xl border border-white/5 overflow-hidden">
+          <div className="px-3 py-2 flex items-center gap-3 border-b border-white/5">
+            <span className={`text-xs font-medium ${result.status >= 200 && result.status < 300 ? 'text-green-400' : result.status >= 400 ? 'text-red-400' : 'text-yellow-400'}`}>
+              {result.status} {result.statusText}
+            </span>
+            <span className="text-xs text-desktop-muted font-mono">{result.time}ms</span>
+          </div>
+          <div className="px-3 py-2 max-h-64 overflow-auto">
+            <div className="text-[10px] text-desktop-muted mb-1">{t('settings.responseBody', '响应体')}</div>
+            <pre className="text-xs text-desktop-text whitespace-pre-wrap break-all font-mono bg-white/5 rounded p-2 max-h-48 overflow-auto">
+              {(() => {
+                try { return JSON.stringify(JSON.parse(result.body), null, 2); }
+                catch { return result.body; }
+              })()}
+            </pre>
+          </div>
         </div>
       )}
     </div>

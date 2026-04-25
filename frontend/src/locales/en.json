@@ -331,7 +331,14 @@
     "contentZh": "Content (Chinese)",
     "contentEn": "Content (English)",
     "priority": "Priority",
-    "noAnnouncements": "No announcements"
+    "noAnnouncements": "No announcements",
+    "webhookTester": "Webhook Tester",
+    "webhookTesterDesc": "Send HTTP requests to test any endpoint",
+    "headers": "Headers",
+    "requestBody": "Request Body",
+    "responseBody": "Response Body",
+    "send": "Send",
+    "testing": "Testing…"
   },
 
   "onboarding": {
