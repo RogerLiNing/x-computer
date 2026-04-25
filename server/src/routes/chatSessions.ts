@@ -117,6 +117,28 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     }
   });
 
+  /** POST /api/chat/sessions/branch - 从指定消息分支创建新会话 */
+  router.post('/branch', async (req, res) => {
+    const userId = req.userId;
+    await db.ensureUser(userId);
+    const { messageId } = req.body ?? {};
+    if (!messageId || typeof messageId !== 'string') {
+      res.status(400).json({ error: 'Missing messageId' });
+      return;
+    }
+    try {
+      const newSession = await db.branchSession(messageId, userId);
+      if (!newSession) {
+        res.status(404).json({ error: 'Message not found or access denied' });
+        return;
+      }
+      res.status(201).json({ id: newSession.id, title: newSession.title, createdAt: newSession.created_at });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Failed to branch session', detail: msg });
+    }
+  });
+
   /** POST /api/chat/sessions - 创建会话；body.scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */
   router.post('/', async (req, res) => {
     const userId = req.userId;

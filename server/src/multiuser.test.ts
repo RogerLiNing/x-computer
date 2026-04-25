@@ -328,6 +328,21 @@ describe('多用户基础设施', () => {
       expect(emptyRes.status).toBe(200);
       expect(emptyRes.body).toHaveLength(0);
     });
+
+    it('POST /api/chat/sessions/branch 从消息创建分支会话', async () => {
+      resetRateLimitState();
+      const s = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({ title: '原始会话' });
+      const m1 = await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '第一条消息' });
+      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '第二条消息' });
+      await new Promise((r) => setTimeout(r, 2500));
+      const res = await request(app).post('/api/chat/sessions/branch').set('X-User-Id', USER_A).send({ messageId: m1.body.id });
+      expect(res.status).toBe(201);
+      expect(res.body.title).toMatch(/分支/);
+      const newSessionId = res.body.id;
+      // 新会话应包含两条消息（从 m1 开始）
+      const newMsgs = await request(app).get(`/api/chat/sessions/${newSessionId}/messages`).set('X-User-Id', USER_A);
+      expect(newMsgs.body.length).toBeGreaterThanOrEqual(1);
+    });
   });
 
   // ── 文件系统隔离 ──

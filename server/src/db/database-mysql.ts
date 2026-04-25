@@ -739,6 +739,33 @@ export class MysqlDatabase {
     );
   }
 
+  /** 分支会话：从指定消息开始复制后续消息到新会话 */
+  async branchSession(fromMessageId: string, userId: string): Promise<{ id: string; title: string | null; created_at: string } | null> {
+    const [sourceMsg] = await this.query<ChatMessageRow>('SELECT * FROM chat_messages WHERE id = ?', [fromMessageId]);
+    if (!sourceMsg) return null;
+    const [session] = await this.query<{ id: string; user_id: string; title: string | null }>('SELECT * FROM chat_sessions WHERE id = ?', [sourceMsg.session_id]);
+    if (!session || session.user_id !== userId) return null;
+    const newSessionId = uuid();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    await this._run(
+      'INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      [newSessionId, userId, `分支: ${session.title || '新对话'}`, now, now],
+    );
+    const msgs = await this.query<ChatMessageRow>(
+      'SELECT * FROM chat_messages WHERE session_id = ? AND created_at >= ? ORDER BY created_at ASC',
+      [sourceMsg.session_id, sourceMsg.created_at],
+    );
+    for (const m of msgs) {
+      const newMsgId = uuid();
+      await this._run(
+        `INSERT INTO chat_messages (id, session_id, role, content, tool_calls_json, images_json, attached_files_json, reactions, bookmarked, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [newMsgId, newSessionId, m.role, m.content, m.tool_calls_json, m.images_json, m.attached_files_json, m.reactions, m.bookmarked ?? 0, m.created_at],
+      );
+    }
+    return { id: newSessionId, title: `分支: ${session.title || '新对话'}`, created_at: now };
+  }
+
   deleteMessage(messageId: string): Promise<void> {
     return this._run('DELETE FROM chat_messages WHERE id = ?', [messageId]);
   }

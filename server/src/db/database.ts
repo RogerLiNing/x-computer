@@ -701,6 +701,33 @@ export class SqliteAppDatabase {
       .all(userId, like, limit) as Array<ChatMessageRow & { session_title: string | null }>;
   }
 
+  /** 分支会话：从指定消息开始复制后续消息到新会话 */
+  branchSession(fromMessageId: string, userId: string): { id: string; title: string | null; created_at: string } | null {
+    const sourceMsg = this.db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(fromMessageId) as ChatMessageRow | undefined;
+    if (!sourceMsg) return null;
+    // Verify user owns this session
+    const session = this.db.prepare('SELECT * FROM chat_sessions WHERE id = ?').get(sourceMsg.session_id) as { id: string; user_id: string; title: string | null } | undefined;
+    if (!session || session.user_id !== userId) return null;
+    // Create new session with "分支: 原标题" title
+    const newSessionId = uuid();
+    const now = new Date().toISOString();
+    this.db.prepare('INSERT INTO chat_sessions (id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
+      newSessionId, userId, `分支: ${session.title || '新对话'}`, now, now,
+    );
+    // Copy this message and all subsequent messages
+    const subsequentMsgs = this.db
+      .prepare('SELECT * FROM chat_messages WHERE session_id = ? AND created_at >= ? ORDER BY created_at ASC')
+      .all(sourceMsg.session_id, sourceMsg.created_at) as ChatMessageRow[];
+    for (const m of subsequentMsgs) {
+      const newMsgId = uuid();
+      this.db.prepare(
+        `INSERT INTO chat_messages (id, session_id, role, content, tool_calls_json, images_json, attached_files_json, reactions, bookmarked, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(newMsgId, newSessionId, m.role, m.content, m.tool_calls_json, m.images_json, m.attached_files_json, m.reactions, m.bookmarked ?? 0, m.created_at);
+    }
+    return { id: newSessionId, title: `分支: ${session.title || '新对话'}`, created_at: now };
+  }
+
   deleteMessage(messageId: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE id = ?').run(messageId);
   }
@@ -1491,6 +1518,9 @@ export class SqliteDatabaseAdapter {
   }
   searchMessages(userId: string, q: string, limit?: number): Promise<Array<ChatMessageRow & { session_title: string | null }>> {
     return Promise.resolve(this.db.searchMessages(userId, q, limit));
+  }
+  branchSession(fromMessageId: string, userId: string): Promise<{ id: string; title: string | null; created_at: string } | null> {
+    return Promise.resolve(this.db.branchSession(fromMessageId, userId));
   }
   deleteMessage(messageId: string): Promise<void> {
     this.db.deleteMessage(messageId);

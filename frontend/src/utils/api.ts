@@ -1556,6 +1556,13 @@ export const api = {
       }>
     >(`/chat/sessions/search?q=${encodeURIComponent(q)}&limit=${limit}`),
 
+  /** 从指定消息分支创建新会话 */
+  branchSession: (messageId: string) =>
+    request<{ id: string; title: string; createdAt: string }>('/chat/sessions/branch', {
+      method: 'POST',
+      body: JSON.stringify({ messageId }),
+    }),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),

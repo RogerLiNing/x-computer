@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -2043,6 +2043,26 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     title="删除"
                   >
                     <Trash2 size={10} />
+                  </button>
+                )}
+                {msg.id !== 'welcome' && (
+                  <button
+                    type="button"
+                    className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-accent transition-colors"
+                    onClick={async () => {
+                      try {
+                        const newSession = await api.branchSession(msg.id);
+                        if (newSession) {
+                          selectSession(newSession.id);
+                          addNotification({ type: 'info', title: '已创建分支会话', message: newSession.title });
+                        }
+                      } catch {
+                        addNotification({ type: 'error', title: '分支失败', message: '请重试' });
+                      }
+                    }}
+                    title="以此消息为起点分支新会话"
+                  >
+                    <GitBranch size={10} />
                   </button>
                 )}
                 {msg.id !== 'welcome' && (
