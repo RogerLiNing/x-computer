@@ -71,6 +71,19 @@ export interface ChatMessageRow {
   created_at: string;
 }
 
+export interface CalendarEventRow {
+  id: string;
+  user_id: string;
+  title: string;
+  description: string | null;
+  start_time: number;
+  end_time: number | null;
+  all_day: number;
+  color: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export class SqliteAppDatabase {
   private db: Database.Database;
 
@@ -1580,6 +1593,66 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM notifications WHERE id = ? AND user_id = ?').run(id, userId);
   }
 
+  // ── Calendar Events ─────────────────────────────────────────────
+
+  createCalendarEvent(params: {
+    id?: string; userId: string; title: string; description?: string | null;
+    startTime: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }): CalendarEventRow {
+    const id = params.id ?? uuid();
+    const color = params.color ?? '#6366f1';
+    const allDay = params.allDay ? 1 : 0;
+    this.db.prepare(
+      `INSERT INTO calendar_events (id, user_id, title, description, start_time, end_time, all_day, color)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, params.userId, params.title, params.description ?? null, params.startTime, params.endTime ?? null, allDay, color);
+    return this.db.prepare('SELECT * FROM calendar_events WHERE id = ?').get(id) as CalendarEventRow;
+  }
+
+  listCalendarEvents(userId: string, options?: { year?: number; month?: number; startTime?: number; endTime?: number }): CalendarEventRow[] {
+    const conditions = ['user_id = ?'];
+    const args: (string | number)[] = [userId];
+
+    if (options?.year != null && options?.month != null) {
+      const startOfMonth = new Date(options.year, options.month, 1).getTime();
+      const endOfMonth = new Date(options.year, options.month + 1, 0, 23, 59, 59, 999).getTime();
+      conditions.push('start_time >= ? AND start_time <= ?');
+      args.push(startOfMonth, endOfMonth);
+    } else if (options?.startTime != null && options?.endTime != null) {
+      conditions.push('start_time >= ? AND start_time <= ?');
+      args.push(options.startTime, options.endTime);
+    }
+
+    return this.db.prepare(
+      `SELECT * FROM calendar_events WHERE ${conditions.join(' AND ')} ORDER BY start_time ASC`,
+    ).all(...args) as CalendarEventRow[];
+  }
+
+  getCalendarEvent(id: string, userId: string): CalendarEventRow | undefined {
+    return this.db.prepare('SELECT * FROM calendar_events WHERE id = ? AND user_id = ?').get(id, userId) as CalendarEventRow | undefined;
+  }
+
+  updateCalendarEvent(id: string, userId: string, fields: {
+    title?: string; description?: string | null; startTime?: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }): CalendarEventRow | undefined {
+    const sets: string[] = [];
+    const args: (string | number | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description ?? null); }
+    if (fields.startTime !== undefined) { sets.push('start_time = ?'); args.push(fields.startTime); }
+    if (fields.endTime !== undefined) { sets.push('end_time = ?'); args.push(fields.endTime ?? null); }
+    if (fields.allDay !== undefined) { sets.push('all_day = ?'); args.push(fields.allDay ? 1 : 0); }
+    if (fields.color !== undefined) { sets.push('color = ?'); args.push(fields.color); }
+    if (sets.length === 0) return this.getCalendarEvent(id, userId);
+    args.push(id, userId);
+    this.db.prepare(`UPDATE calendar_events SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getCalendarEvent(id, userId);
+  }
+
+  deleteCalendarEvent(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM calendar_events WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -2062,6 +2135,27 @@ export class SqliteDatabaseAdapter {
   }
   deleteNotification(id: string, userId: string): Promise<void> {
     this.db.deleteNotification(id, userId);
+    return Promise.resolve();
+  }
+  createCalendarEvent(params: {
+    id?: string; userId: string; title: string; description?: string | null;
+    startTime: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }): Promise<CalendarEventRow> {
+    return Promise.resolve(this.db.createCalendarEvent(params));
+  }
+  listCalendarEvents(userId: string, options?: { year?: number; month?: number; startTime?: number; endTime?: number }): Promise<CalendarEventRow[]> {
+    return Promise.resolve(this.db.listCalendarEvents(userId, options));
+  }
+  getCalendarEvent(id: string, userId: string): Promise<CalendarEventRow | undefined> {
+    return Promise.resolve(this.db.getCalendarEvent(id, userId));
+  }
+  updateCalendarEvent(id: string, userId: string, fields: {
+    title?: string; description?: string | null; startTime?: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }): Promise<CalendarEventRow | undefined> {
+    return Promise.resolve(this.db.updateCalendarEvent(id, userId, fields));
+  }
+  deleteCalendarEvent(id: string, userId: string): Promise<void> {
+    this.db.deleteCalendarEvent(id, userId);
     return Promise.resolve();
   }
   close(): void {

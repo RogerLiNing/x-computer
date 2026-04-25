@@ -1546,6 +1546,90 @@ export class MysqlDatabase {
     await this._run('DELETE FROM notifications WHERE id = ? AND user_id = ?', [id, userId]);
   }
 
+  // ── Calendar Events ─────────────────────────────────────────────
+
+  async createCalendarEvent(params: {
+    id?: string; userId: string; title: string; description?: string | null;
+    startTime: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }): Promise<{
+    id: string; user_id: string; title: string; description: string | null;
+    start_time: number; end_time: number | null; all_day: number; color: string;
+    created_at: string; updated_at: string;
+  }> {
+    const id = params.id ?? uuid();
+    const color = params.color ?? '#6366f1';
+    const allDay = params.allDay ? 1 : 0;
+    await this._run(
+      'INSERT INTO calendar_events (id, user_id, title, description, start_time, end_time, all_day, color) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, params.userId, params.title, params.description ?? null, params.startTime, params.endTime ?? null, allDay, color],
+    );
+    const rows = await this._query<{
+      id: string; user_id: string; title: string; description: string | null;
+      start_time: number; end_time: number | null; all_day: number; color: string;
+      created_at: string; updated_at: string;
+    }>('SELECT * FROM calendar_events WHERE id = ?', [id]);
+    return rows[0];
+  }
+
+  async listCalendarEvents(userId: string, options?: { year?: number; month?: number; startTime?: number; endTime?: number }): Promise<{
+    id: string; user_id: string; title: string; description: string | null;
+    start_time: number; end_time: number | null; all_day: number; color: string;
+    created_at: string; updated_at: string;
+  }[]> {
+    const conditions = ['user_id = ?'];
+    const args: (string | number)[] = [userId];
+    if (options?.year != null && options?.month != null) {
+      const startOfMonth = new Date(options.year, options.month, 1).getTime();
+      const endOfMonth = new Date(options.year, options.month + 1, 0, 23, 59, 59, 999).getTime();
+      conditions.push('start_time >= ? AND start_time <= ?');
+      args.push(startOfMonth, endOfMonth);
+    } else if (options?.startTime != null && options?.endTime != null) {
+      conditions.push('start_time >= ? AND start_time <= ?');
+      args.push(options.startTime, options.endTime);
+    }
+    return this._query(
+      `SELECT * FROM calendar_events WHERE ${conditions.join(' AND ')} ORDER BY start_time ASC`,
+      args,
+    );
+  }
+
+  async getCalendarEvent(id: string, userId: string): Promise<{
+    id: string; user_id: string; title: string; description: string | null;
+    start_time: number; end_time: number | null; all_day: number; color: string;
+    created_at: string; updated_at: string;
+  } | undefined> {
+    const rows = await this._query(
+      'SELECT * FROM calendar_events WHERE id = ? AND user_id = ?',
+      [id, userId],
+    );
+    return rows[0] as any;
+  }
+
+  async updateCalendarEvent(id: string, userId: string, fields: {
+    title?: string; description?: string | null; startTime?: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }): Promise<{
+    id: string; user_id: string; title: string; description: string | null;
+    start_time: number; end_time: number | null; all_day: number; color: string;
+    created_at: string; updated_at: string;
+  } | undefined> {
+    const sets: string[] = [];
+    const args: (string | number | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description ?? null); }
+    if (fields.startTime !== undefined) { sets.push('start_time = ?'); args.push(fields.startTime); }
+    if (fields.endTime !== undefined) { sets.push('end_time = ?'); args.push(fields.endTime ?? null); }
+    if (fields.allDay !== undefined) { sets.push('all_day = ?'); args.push(fields.allDay ? 1 : 0); }
+    if (fields.color !== undefined) { sets.push('color = ?'); args.push(fields.color); }
+    if (sets.length === 0) return this.getCalendarEvent(id, userId);
+    args.push(id, userId);
+    await this._run(`UPDATE calendar_events SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    return this.getCalendarEvent(id, userId);
+  }
+
+  async deleteCalendarEvent(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM calendar_events WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
   close(): void {
     this.pool.end();
   }

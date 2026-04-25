@@ -65,6 +65,7 @@ import { fireSignal } from '../signals/signalService.js';
 import { workflowFireEvent } from '../workflow/workflowClient.js';
 import { startEmailCheckLoop } from '../email/emailCheckLoop.js';
 import { createEmailRouter } from './email.js';
+import { createCalendarRouter } from './calendar.js';
 import { createSlackRouter } from './messaging/slack.js';
 import { aiCallsQuota, tasksQuota } from '../subscription/quotaMiddleware.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
@@ -1009,6 +1010,7 @@ export function createApiRouter(
       : null;
 
   router.use(createEmailRouter(db, signalFireDeps));
+  router.use('/calendar', createCalendarRouter(db));
 
   if (db && signalFireDeps) {
     const doneLogService = new DoneLogService(db);

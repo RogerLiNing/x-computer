@@ -2117,4 +2117,39 @@ export const api = {
 
   setDndPreferences: (prefs: { enabled?: boolean; quietHoursStart?: string | null; quietHoursEnd?: string | null }) =>
     request<{ success: boolean }>('/notifications/dnd', { method: 'PUT', body: JSON.stringify(prefs) }),
+
+  // ── Calendar Events ────────────────────────────────────────────────
+
+  calendarListEvents: (params?: { year?: number; month?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.year != null) q.set('year', String(params.year));
+    if (params?.month != null) q.set('month', String(params.month));
+    const qs = q.toString();
+    return request<Array<{
+      id: string; title: string; description: string | null;
+      startTime: number; endTime: number | null; allDay: boolean; color: string;
+      createdAt: string; updatedAt: string;
+    }>>(`/calendar/events${qs ? `?${qs}` : ''}`);
+  },
+
+  calendarCreateEvent: (params: {
+    title: string; description?: string; startTime: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }) =>
+    request<{
+      id: string; title: string; description: string | null;
+      startTime: number; endTime: number | null; allDay: boolean; color: string;
+      createdAt: string; updatedAt: string;
+    }>('/calendar/events', { method: 'POST', body: JSON.stringify(params) }),
+
+  calendarUpdateEvent: (id: string, fields: {
+    title?: string; description?: string; startTime?: number; endTime?: number | null; allDay?: boolean; color?: string;
+  }) =>
+    request<{
+      id: string; title: string; description: string | null;
+      startTime: number; endTime: number | null; allDay: boolean; color: string;
+      createdAt: string; updatedAt: string;
+    }>(`/calendar/events/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
+
+  calendarDeleteEvent: (id: string) =>
+    request<void>(`/calendar/events/${id}`, { method: 'DELETE' }),
 };
