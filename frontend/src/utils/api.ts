@@ -1433,7 +1433,7 @@ export const api = {
 
   /** 获取会话列表；scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手） */
   listChatSessions: (limit = 50, scene?: string) =>
-    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[] }>>(
+    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; isPinned?: boolean }>>(
       scene ? `/chat/sessions?limit=${limit}&scene=${encodeURIComponent(scene)}` : `/chat/sessions?limit=${limit}`,
     ),
 
@@ -1468,6 +1468,13 @@ export const api = {
     request<{ title: string }>(`/chat/sessions/${sessionId}/title`, {
       method: 'POST',
       body: JSON.stringify({ providerId, modelId, baseUrl, apiKey }),
+    }),
+
+  /** 置顶/取消置顶会话 */
+  pinChatSession: (sessionId: string, pinned: boolean) =>
+    request<{ success: boolean; pinned: boolean }>(`/chat/sessions/${sessionId}/pin`, {
+      method: 'PATCH',
+      body: JSON.stringify({ pinned }),
     }),
 
   /** 删除会话 */

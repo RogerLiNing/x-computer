@@ -11,7 +11,7 @@ import { v4 as uuid } from 'uuid';
 
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
-interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; }
+interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; }
 interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; created_at: string; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -74,7 +74,8 @@ export class MysqlDatabase {
       created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       scene VARCHAR(64),
-      tags TEXT
+      tags TEXT,
+      is_pinned TINYINT(1) NOT NULL DEFAULT 0
     )`, [], true);
     await this.ensureIndex('chat_sessions', 'idx_chat_sessions_user', 'CREATE INDEX idx_chat_sessions_user ON chat_sessions(user_id)', true);
 
@@ -246,6 +247,7 @@ export class MysqlDatabase {
 
     await this.ensureColumn('chat_sessions', 'scene', 'ALTER TABLE chat_sessions ADD COLUMN scene VARCHAR(64)', true);
     await this.ensureColumn('chat_sessions', 'tags', 'ALTER TABLE chat_sessions ADD COLUMN tags TEXT', true);
+    await this.ensureColumn('chat_sessions', 'is_pinned', 'ALTER TABLE chat_sessions ADD COLUMN is_pinned TINYINT(1) NOT NULL DEFAULT 0', true);
     await this.ensureColumn('chat_messages', 'images_json', 'ALTER TABLE chat_messages ADD COLUMN images_json LONGTEXT', true);
     await this.ensureColumn(
       'chat_messages',
@@ -614,20 +616,21 @@ export class MysqlDatabase {
   }
 
   listSessions(userId: string, limit = 50, scene?: string | null): Promise<ChatSessionRow[]> {
+    const orderBy = 'ORDER BY is_pinned DESC, updated_at DESC';
     if (scene === 'x_direct') {
       return this.query<ChatSessionRow>(
-        'SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ORDER BY updated_at DESC LIMIT ?',
+        `SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${orderBy} LIMIT ?`,
         [userId, 'x_direct', limit],
       );
     }
     if (scene === 'normal_chat' || scene == null || scene === '') {
       return this.query<ChatSessionRow>(
-        'SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ORDER BY updated_at DESC LIMIT ?',
+        `SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${orderBy} LIMIT ?`,
         [userId, 'normal_chat', limit],
       );
     }
     return this.query<ChatSessionRow>(
-      'SELECT * FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
+      `SELECT * FROM chat_sessions WHERE user_id = ? ${orderBy} LIMIT ?`,
       [userId, limit],
     );
   }
@@ -642,6 +645,10 @@ export class MysqlDatabase {
 
   updateSessionTags(sessionId: string, tags: string | null): Promise<void> {
     return this._run('UPDATE chat_sessions SET tags = ?, updated_at = NOW() WHERE id = ?', [tags, sessionId]);
+  }
+
+  updateSessionPin(sessionId: string, pinned: boolean): Promise<void> {
+    return this._run('UPDATE chat_sessions SET is_pinned = ?, updated_at = NOW() WHERE id = ?', [pinned ? 1 : 0, sessionId]);
   }
 
   deleteSession(sessionId: string): Promise<void> {

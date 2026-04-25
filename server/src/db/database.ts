@@ -36,6 +36,8 @@ export interface ChatSessionRow {
   scene?: string | null;
   /** 会话标签，JSON array string */
   tags?: string | null;
+  /** 是否置顶会话 */
+  is_pinned?: number;
 }
 
 export interface ChatMessageRow {
@@ -131,7 +133,8 @@ export class SqliteAppDatabase {
         title TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        tags TEXT
+        tags TEXT,
+        is_pinned INTEGER NOT NULL DEFAULT 0
       );
       CREATE INDEX IF NOT EXISTS idx_chat_sessions_user ON chat_sessions(user_id);
 
@@ -323,6 +326,9 @@ export class SqliteAppDatabase {
       }
       if (!sessionCols.some((c) => c.name === 'tags')) {
         this.db.exec('ALTER TABLE chat_sessions ADD COLUMN tags TEXT');
+      }
+      if (!sessionCols.some((c) => c.name === 'is_pinned')) {
+        this.db.exec('ALTER TABLE chat_sessions ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0');
       }
     } catch {
       /* 忽略 */
@@ -554,18 +560,19 @@ export class SqliteAppDatabase {
   }
 
   listSessions(userId: string, limit = 50, scene?: string | null): ChatSessionRow[] {
+    const orderBy = 'ORDER BY is_pinned DESC, updated_at DESC';
     if (scene === 'x_direct') {
       return this.db
-        .prepare('SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ORDER BY updated_at DESC LIMIT ?')
+        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${orderBy} LIMIT ?`)
         .all(userId, 'x_direct', limit) as ChatSessionRow[];
     }
     if (scene === 'normal_chat' || scene == null || scene === '') {
       return this.db
-        .prepare('SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ORDER BY updated_at DESC LIMIT ?')
+        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${orderBy} LIMIT ?`)
         .all(userId, 'normal_chat', limit) as ChatSessionRow[];
     }
     return this.db
-      .prepare('SELECT * FROM chat_sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?')
+      .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? ${orderBy} LIMIT ?`)
       .all(userId, limit) as ChatSessionRow[];
   }
 
@@ -581,6 +588,11 @@ export class SqliteAppDatabase {
   updateSessionTags(sessionId: string, tags: string | null): void {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE chat_sessions SET tags = ?, updated_at = ? WHERE id = ?').run(tags, now, sessionId);
+  }
+
+  updateSessionPin(sessionId: string, pinned: boolean): void {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE chat_sessions SET is_pinned = ?, updated_at = ? WHERE id = ?').run(pinned ? 1 : 0, now, sessionId);
   }
 
   deleteSession(sessionId: string): void {
@@ -1384,6 +1396,12 @@ export class SqliteDatabaseAdapter {
     this.db.updateSessionTags(sessionId, tags);
     return Promise.resolve();
   }
+
+  updateSessionPin(sessionId: string, pinned: boolean): Promise<void> {
+    this.db.updateSessionPin(sessionId, pinned);
+    return Promise.resolve();
+  }
+
   deleteSession(sessionId: string): Promise<void> {
     this.db.deleteSession(sessionId);
     return Promise.resolve();

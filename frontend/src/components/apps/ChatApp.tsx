@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -89,6 +89,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     deleteSession,
     updateSessionTitle,
     updateSessionTags,
+    togglePin,
     refreshSessions,
   } = useChatSessions(setMessages);
 
@@ -1342,6 +1343,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   }}
                 >
                   <Pencil size={12} />
+                </button>
+                <button
+                  type="button"
+                  className={`shrink-0 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity ${
+                    s.isPinned ? 'text-desktop-accent' : 'text-desktop-muted hover:text-desktop-text hover:bg-white/10'
+                  }`}
+                  title={s.isPinned ? '取消置顶' : '置顶会话'}
+                  onClick={(e) => { e.stopPropagation(); togglePin(s.id); }}
+                >
+                  <Pin size={12} />
                 </button>
                 <button
                   type="button"

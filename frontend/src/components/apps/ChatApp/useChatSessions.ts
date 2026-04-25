@@ -8,6 +8,7 @@ export interface ChatSessionItem {
   createdAt: string;
   updatedAt: string;
   tags: string[];
+  isPinned?: boolean;
 }
 
 export const WELCOME_FALLBACK = `我是 X-Computer 主脑，掌控本机所有应用与任务。
@@ -54,6 +55,7 @@ export interface UseChatSessionsReturn {
   deleteSession: (sessionId: string) => void;
   updateSessionTitle: (sessionId: string, title: string) => void;
   updateSessionTags: (sessionId: string, tags: string[]) => void;
+  togglePin: (sessionId: string) => void;
   setCurrentSessionId: (id: string | null) => void;
   refreshSessions: () => void;
 }
@@ -159,6 +161,12 @@ export function useChatSessions(
     api.updateSessionTags(sessionId, tags).then(() => loadSessions()).catch(() => {});
   }, [loadSessions]);
 
+  const togglePin = useCallback((sessionId: string) => {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    api.pinChatSession(sessionId, !session.isPinned).then(() => loadSessions()).catch(() => {});
+  }, [sessions, loadSessions]);
+
   return {
     sessions,
     currentSessionId,
@@ -171,6 +179,7 @@ export function useChatSessions(
     deleteSession,
     updateSessionTitle,
     updateSessionTags,
+    togglePin,
     setCurrentSessionId,
     refreshSessions: loadSessions,
   };

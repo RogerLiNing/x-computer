@@ -43,7 +43,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : undefined;
     const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : undefined;
     const sessions = await db.listSessions(userId, limit, scene);
-    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null }) => {
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number }) => {
       const tags = s.tags ? JSON.parse(s.tags) as string[] : [];
       return {
         id: s.id,
@@ -51,6 +51,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         createdAt: s.created_at,
         updatedAt: s.updated_at,
         tags,
+        isPinned: !!s.is_pinned,
       };
     });
     let result = mapped;
@@ -116,6 +117,17 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     }
     await db.updateSessionTitle(session.id, title);
     res.json({ success: true });
+  });
+
+  /** PATCH /api/chat/sessions/:id/pin - 置顶/取消置顶会话 */
+  router.patch('/:id/pin', async (req, res) => {
+    const session = await db.getSession(req.params.id);
+    if (!session) { res.status(404).json({ error: 'Session not found' }); return; }
+    if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+    const { pinned } = req.body ?? {};
+    if (typeof pinned !== 'boolean') { res.status(400).json({ error: 'Missing pinned (boolean)' }); return; }
+    await db.updateSessionPin(session.id, pinned);
+    res.json({ success: true, pinned });
   });
 
   /** PATCH /api/chat/sessions/:id/tags - 更新会话标签 */
