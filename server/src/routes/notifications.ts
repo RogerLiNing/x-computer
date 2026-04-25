@@ -93,5 +93,46 @@ export function createNotificationsRouter(db: AsyncDatabase): Router {
     }
   });
 
+  // GET /api/notifications/dnd — 获取 DND 免打扰设置
+  router.get('/dnd', async (req, res) => {
+    try {
+      const userId = (req as any).userId;
+      const row = await db.queryOne<{ value: string }>(
+        'SELECT value FROM user_config WHERE user_id = ? AND `key` = ?',
+        [userId, 'dnd_preferences'],
+      );
+      if (row?.value) {
+        res.json({ success: true, data: JSON.parse(row.value) });
+      } else {
+        res.json({ success: true, data: { enabled: false, quietHoursStart: null, quietHoursEnd: null } });
+      }
+    } catch (err) {
+      serverLogger.error('notifications', '获取 DND 设置失败', String(err));
+      res.status(500).json({ success: false, error: '获取 DND 设置失败' });
+    }
+  });
+
+  // PUT /api/notifications/dnd — 保存 DND 免打扰设置
+  router.put('/dnd', async (req, res) => {
+    try {
+      const userId = (req as any).userId;
+      const prefs = req.body as { enabled?: boolean; quietHoursStart?: string | null; quietHoursEnd?: string | null };
+      const value = JSON.stringify({
+        enabled: prefs.enabled ?? false,
+        quietHoursStart: prefs.quietHoursStart ?? null,
+        quietHoursEnd: prefs.quietHoursEnd ?? null,
+      });
+      await db.run(
+        `INSERT INTO user_config (user_id, \`key\`, value, updated_at) VALUES (?, 'dnd_preferences', ?, ?)
+         ON CONFLICT(user_id, \`key\`) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+        [userId, value, Date.now()],
+      );
+      res.json({ success: true });
+    } catch (err) {
+      serverLogger.error('notifications', '保存 DND 设置失败', String(err));
+      res.status(500).json({ success: false, error: '保存 DND 设置失败' });
+    }
+  });
+
   return router;
 }

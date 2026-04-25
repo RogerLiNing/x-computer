@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { X, CheckCircle, AlertTriangle, XCircle, Info } from 'lucide-react';
+import { isDndActive } from '../../store/dndStore';
 
 export interface ToastItem {
   id: string;
@@ -75,6 +76,8 @@ const listeners = new Set<ToastListener>();
 let currentToasts: ToastItem[] = [];
 
 export function showToast(toast: Omit<ToastItem, 'id'>): void {
+  // Respect DND mode — skip toast when DND is active
+  if (isDndActive()) return;
   const id = Math.random().toString(36).slice(2);
   currentToasts = [...currentToasts.slice(-4), { ...toast, id }];
   listeners.forEach((l) => l(currentToasts));

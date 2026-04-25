@@ -2034,4 +2034,12 @@ export const api = {
         avgTasksPerDay: number;
       };
     }>(`/admin/usage/tasks?days=${days}`),
+
+  // ── Do Not Disturb ────────────────────────────────────────────────
+
+  getDndPreferences: () =>
+    request<{ data: { enabled: boolean; quietHoursStart: string | null; quietHoursEnd: string | null } }>('/notifications/dnd'),
+
+  setDndPreferences: (prefs: { enabled?: boolean; quietHoursStart?: string | null; quietHoursEnd?: string | null }) =>
+    request<{ success: boolean }>('/notifications/dnd', { method: 'PUT', body: JSON.stringify(prefs) }),
 };

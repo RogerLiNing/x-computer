@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { api } from '../../../utils/api.js';
 import type { LucideIcon } from 'lucide-react';
-import { Bell, X, CheckCheck, Trash2, Info, CheckCircle, AlertTriangle, XCircle, Zap, Webhook, Settings } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Info, CheckCircle, AlertTriangle, XCircle, Zap, Webhook, Settings, Moon } from 'lucide-react';
+import { isDndActive, setDndEnabled, setDndPreferences, subscribeDndState } from '../../../store/dndStore';
 
 interface Notification {
   id: string;
@@ -52,11 +53,33 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [dndActive, setDndActive] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Poll for unread count every 30 seconds
+  // Sync DND state from store
+  useEffect(() => {
+    const sync = (enabled: boolean) => setDndActive(enabled);
+    setDndActive(isDndActive());
+    const unsub = subscribeDndState(sync);
+    return unsub;
+  }, []);
+
+  // Load DND preferences and notification count
+  useEffect(() => {
+    const fetchPrefs = async () => {
+      try {
+        const res = await api.getDndPreferences();
+        setDndPreferences(res.data);
+        setDndEnabled(res.data.enabled);
+      } catch { /* ignore */ }
+    };
+    fetchPrefs();
+  }, []);
+
+  // Poll for unread count every 30 seconds (skip when DND is active)
   useEffect(() => {
     const fetchCount = async () => {
+      if (isDndActive()) { setUnreadCount(0); return; }
       try {
         const res = await api.getUnreadNotificationCount();
         setUnreadCount(res.data.count);
@@ -66,6 +89,15 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     const interval = setInterval(fetchCount, 30_000);
     return () => clearInterval(interval);
   }, []);
+
+  const handleToggleDnd = async () => {
+    const next = !dndActive;
+    setDndActive(next);
+    setDndEnabled(next);
+    try {
+      await api.setDndPreferences({ enabled: next });
+    } catch { /* ignore */ }
+  };
 
   // Load notifications when panel opens
   useEffect(() => {
@@ -127,12 +159,12 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
     <div className="relative" ref={panelRef}>
       <button
         type="button"
-        title="通知中心"
+        title={dndActive ? '免打扰模式已开启' : '通知中心'}
         onClick={() => setOpen((v) => !v)}
-        className="relative flex items-center justify-center w-8 h-8 rounded-lg hover:bg-white/10 transition-colors"
+        className={`relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${dndActive ? 'text-yellow-400 hover:bg-yellow-400/10' : 'hover:bg-white/10'}`}
       >
-        <Bell size={18} className="text-desktop-muted" />
-        {unreadCount > 0 && (
+        {dndActive ? <Moon size={18} /> : <Bell size={18} className="text-desktop-muted" />}
+        {!dndActive && unreadCount > 0 && (
           <span className="absolute top-0.5 right-0.5 min-w-[16px] h-4 px-1 text-[10px] font-bold leading-4 text-white bg-red-500 rounded-full flex items-center justify-center">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
@@ -143,8 +175,24 @@ export function NotificationCenter({ onNotificationClick }: NotificationCenterPr
         <div className="absolute right-0 top-10 w-80 max-h-[480px] bg-desktop-panel border border-white/10 rounded-xl shadow-2xl flex flex-col z-50">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-            <span className="text-sm font-semibold text-desktop-text">通知中心</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold text-desktop-text">通知中心</span>
+              {dndActive && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 flex items-center gap-0.5">
+                  <Moon size={10} /> 免打扰
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-1">
+              <button
+                type="button"
+                title={dndActive ? '关闭免打扰' : '开启免打扰'}
+                onClick={handleToggleDnd}
+                className={`flex items-center gap-1 px-2 py-1 text-xs rounded transition-colors ${dndActive ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' : 'text-desktop-muted hover:text-yellow-400 hover:bg-white/5'}`}
+              >
+                <Moon size={13} />
+                {dndActive ? '关闭 DND' : '免打扰'}
+              </button>
               {unreadCount > 0 && (
                 <button
                   type="button"
