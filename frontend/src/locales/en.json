@@ -321,7 +321,17 @@
     "copy": "Copy",
     "edit": "Edit",
     "delete": "Delete",
-    "confirmDeleteTemplate": "Are you sure you want to delete this template?"
+    "confirmDeleteTemplate": "Are you sure you want to delete this template?",
+    "announcements": "Announcements",
+    "announcementsDesc": "Create and manage system-wide announcements",
+    "createAnnouncement": "Create Announcement",
+    "editAnnouncement": "Edit Announcement",
+    "titleZh": "Title (Chinese)",
+    "titleEn": "Title (English)",
+    "contentZh": "Content (Chinese)",
+    "contentEn": "Content (English)",
+    "priority": "Priority",
+    "noAnnouncements": "No announcements"
   },
 
   "onboarding": {

@@ -327,7 +327,17 @@
     "copy": "复制",
     "edit": "编辑",
     "delete": "删除",
-    "confirmDeleteTemplate": "确定删除此模板？"
+    "confirmDeleteTemplate": "确定删除此模板？",
+    "announcements": "公告管理",
+    "announcementsDesc": "创建和管理系统公告",
+    "createAnnouncement": "创建公告",
+    "editAnnouncement": "编辑公告",
+    "titleZh": "标题（中文）",
+    "titleEn": "标题（英文）",
+    "contentZh": "内容（中文）",
+    "contentEn": "内容（英文）",
+    "priority": "优先级",
+    "noAnnouncements": "暂无公告"
   },
 
   "onboarding": {

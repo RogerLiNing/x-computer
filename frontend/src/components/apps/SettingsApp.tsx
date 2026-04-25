@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates';
+type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -1563,6 +1563,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'council', labelKey: 'settings.llmCouncil', icon: Users },
     { id: 'auditlog', labelKey: 'settings.auditLog', icon: ShieldAlert },
     { id: 'templates', labelKey: 'settings.promptTemplates', icon: FileText },
+    { id: 'announcements', labelKey: 'settings.announcements', icon: Bell },
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
@@ -1780,6 +1781,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'templates' && (
           <PromptTemplatesSettings />
+        )}
+
+        {tab === 'announcements' && (
+          <AnnouncementsSettings />
         )}
       </div>
     </div>
@@ -2085,6 +2090,312 @@ function PromptTemplatesSettings() {
                   </div>
                 </div>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 公告管理 ────────────────────────────────────────────────
+
+function AnnouncementsSettings() {
+  const { t } = useTranslation();
+  const [announcements, setAnnouncements] = useState<Array<{
+    id: string; title: string; title_en: string | null;
+    content: string; content_en: string | null; type: string;
+    target: string; priority: number; is_active: number;
+    start_at: number | null; end_at: number | null;
+    created_by: string | null; created_at: number; updated_at: number;
+  }>>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    title: '', title_en: '', content: '', content_en: '',
+    type: 'info', target: 'all', priority: 0,
+    start_at: '', end_at: '',
+    is_active: true,
+  });
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const fetchAnnouncements = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.announcementsList();
+      setAnnouncements(data.announcements);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchAnnouncements(); }, [fetchAnnouncements]);
+
+  const resetForm = () => {
+    setForm({ title: '', title_en: '', content: '', content_en: '', type: 'info', target: 'all', priority: 0, start_at: '', end_at: '', is_active: true });
+  };
+
+  const parseTs = (v: string) => v ? new Date(v).getTime() : null;
+
+  const handleCreate = async () => {
+    if (!form.title || !form.content) return;
+    setSaving(true);
+    try {
+      await api.announcementsCreate({
+        title: form.title,
+        title_en: form.title_en || undefined,
+        content: form.content,
+        content_en: form.content_en || undefined,
+        type: form.type,
+        target: form.target,
+        priority: form.priority,
+        start_at: parseTs(form.start_at),
+        end_at: parseTs(form.end_at),
+      });
+      setShowCreate(false);
+      resetForm();
+      await fetchAnnouncements();
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  const handleUpdate = async (id: string) => {
+    if (!form.title || !form.content) return;
+    setSaving(true);
+    try {
+      await api.announcementsUpdate(id, {
+        title: form.title,
+        title_en: form.title_en || undefined,
+        content: form.content,
+        content_en: form.content_en || undefined,
+        type: form.type,
+        target: form.target,
+        priority: form.priority,
+        is_active: form.is_active,
+        start_at: parseTs(form.start_at),
+        end_at: parseTs(form.end_at),
+      });
+      setEditing(null);
+      resetForm();
+      await fetchAnnouncements();
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this announcement?')) return;
+    setDeleting(id);
+    try {
+      await api.announcementsDelete(id);
+      setAnnouncements((prev) => prev.filter((a) => a.id !== id));
+    } catch { /* ignore */ }
+    finally { setDeleting(null); }
+  };
+
+  const startEdit = (a: typeof announcements[0]) => {
+    setEditing(a.id);
+    setForm({
+      title: a.title,
+      title_en: a.title_en || '',
+      content: a.content,
+      content_en: a.content_en || '',
+      type: a.type,
+      target: a.target,
+      priority: a.priority,
+      is_active: !!a.is_active,
+      start_at: a.start_at ? new Date(a.start_at).toISOString().slice(0, 16) : '',
+      end_at: a.end_at ? new Date(a.end_at).toISOString().slice(0, 16) : '',
+    });
+    setShowCreate(false);
+  };
+
+  const TYPE_COLORS: Record<string, string> = {
+    info: 'bg-blue-500/20 text-blue-400',
+    warning: 'bg-yellow-500/20 text-yellow-400',
+    error: 'bg-red-500/20 text-red-400',
+    success: 'bg-green-500/20 text-green-400',
+  };
+
+  const TYPE_OPTIONS = [
+    { value: 'info', label: 'Info' },
+    { value: 'warning', label: 'Warning' },
+    { value: 'error', label: 'Error' },
+    { value: 'success', label: 'Success' },
+  ];
+
+  const TARGET_OPTIONS = [
+    { value: 'all', label: 'All Users' },
+    { value: 'free', label: 'Free Users' },
+    { value: 'pro', label: 'Pro Users' },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-medium text-desktop-text">{t('settings.announcements', 'Announcements')}</h3>
+          <p className="text-[11px] text-desktop-muted mt-0.5">
+            {t('settings.announcementsDesc', 'Create and manage system-wide announcements')}
+          </p>
+        </div>
+        <button
+          onClick={() => { setShowCreate(true); setEditing(null); resetForm(); }}
+          className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-xs text-desktop-text transition-colors flex items-center gap-1"
+        >
+          <Plus size={12} /> {t('settings.create', 'Create')}
+        </button>
+      </div>
+
+      {/* Create/Edit Form */}
+      {(showCreate || editing) && (
+        <div className="bg-white/[0.03] rounded-xl p-4 border border-desktop-accent/30 space-y-3">
+          <h4 className="text-xs font-medium text-desktop-text">
+            {editing ? t('settings.editAnnouncement', 'Edit Announcement') : t('settings.createAnnouncement', 'Create Announcement')}
+          </h4>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              placeholder={t('settings.titleZh', 'Title (Chinese)')}
+              value={form.title}
+              onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            />
+            <input
+              type="text"
+              placeholder={t('settings.titleEn', 'Title (English)')}
+              value={form.title_en}
+              onChange={(e) => setForm((f) => ({ ...f, title_en: e.target.value }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <select
+              value={form.type}
+              onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            >
+              {TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <select
+              value={form.target}
+              onChange={(e) => setForm((f) => ({ ...f, target: e.target.value }))}
+              className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            >
+              {TARGET_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+            <input
+              type="number"
+              placeholder={t('settings.priority', 'Priority')}
+              value={form.priority}
+              onChange={(e) => setForm((f) => ({ ...f, priority: parseInt(e.target.value) || 0 }))}
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none"
+            />
+          </div>
+          <textarea
+            placeholder={t('settings.contentZh', 'Content (Chinese)')}
+            value={form.content}
+            onChange={(e) => setForm((f) => ({ ...f, content: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none resize-none h-20"
+          />
+          <textarea
+            placeholder={t('settings.contentEn', 'Content (English)')}
+            value={form.content_en}
+            onChange={(e) => setForm((f) => ({ ...f, content_en: e.target.value }))}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text outline-none resize-none h-16"
+          />
+          <div className="grid grid-cols-3 gap-2 items-center">
+            <label className="flex items-center gap-2 text-xs text-desktop-muted">
+              <input
+                type="checkbox"
+                checked={form.is_active}
+                onChange={(e) => setForm((f) => ({ ...f, is_active: e.target.checked }))}
+                className="accent-desktop-accent"
+              />
+              Active
+            </label>
+            <input
+              type="datetime-local"
+              value={form.start_at}
+              onChange={(e) => setForm((f) => ({ ...f, start_at: e.target.value }))}
+              className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-desktop-text outline-none"
+            />
+            <input
+              type="datetime-local"
+              value={form.end_at}
+              onChange={(e) => setForm((f) => ({ ...f, end_at: e.target.value }))}
+              className="bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-desktop-text outline-none"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => editing ? handleUpdate(editing) : handleCreate()}
+              disabled={saving || !form.title || !form.content}
+              className="px-3 py-1.5 rounded-lg bg-desktop-accent/50 hover:bg-desktop-accent/70 disabled:opacity-40 text-xs text-desktop-text transition-colors"
+            >
+              {saving ? t('settings.saving', 'Saving…') : t('settings.save', 'Save')}
+            </button>
+            <button
+              onClick={() => { setShowCreate(false); setEditing(null); resetForm(); }}
+              className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+            >
+              {t('settings.cancel', 'Cancel')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      {loading ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', 'Loading…')}</div>
+      ) : announcements.length === 0 ? (
+        <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.noAnnouncements', 'No announcements')}</div>
+      ) : (
+        <div className="space-y-2">
+          {announcements.map((a) => (
+            <div key={a.id} className={`rounded-xl border ${a.is_active ? 'border-white/10' : 'border-white/5 opacity-60'} bg-white/[0.02] overflow-hidden`}>
+              <div className="px-3 py-2.5">
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${TYPE_COLORS[a.type] ?? TYPE_COLORS.info}`}>
+                        {a.type.toUpperCase()}
+                      </span>
+                      {a.is_active ? (
+                        <span className="text-[9px] text-green-400">ACTIVE</span>
+                      ) : (
+                        <span className="text-[9px] text-desktop-muted/40">INACTIVE</span>
+                      )}
+                      <span className="text-[9px] text-desktop-muted/40">{TARGET_OPTIONS.find((o) => o.value === a.target)?.label ?? a.target}</span>
+                    </div>
+                    <div className="text-xs text-desktop-text font-medium">{a.title}</div>
+                    {a.title_en && <div className="text-[10px] text-desktop-muted/60 mt-0.5">{a.title_en}</div>}
+                    <div className="text-[10px] text-desktop-muted/60 mt-1 line-clamp-2">{a.content}</div>
+                    <div className="text-[9px] text-desktop-muted/30 mt-1">
+                      {a.start_at ? `From ${new Date(a.start_at).toLocaleDateString()}` : ''}
+                      {a.end_at ? ` Until ${new Date(a.end_at).toLocaleDateString()}` : ''}
+                      {' · '}{new Date(a.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => startEdit(a)}
+                      className="p-1 rounded hover:bg-white/10 text-desktop-muted/40 hover:text-desktop-muted transition-colors"
+                      title={t('settings.edit', 'Edit')}
+                    >
+                      <Edit size={13} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(a.id)}
+                      disabled={deleting === a.id}
+                      className="p-1 rounded hover:bg-red-500/10 text-desktop-muted/40 hover:text-red-400 transition-colors"
+                      title={t('settings.delete', 'Delete')}
+                    >
+                      {deleting === a.id ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
           ))}
         </div>

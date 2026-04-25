@@ -599,6 +599,46 @@ export const api = {
       body: JSON.stringify(prefs),
     }),
 
+  // ── 公告管理 ────────────────────────────────────────────────
+
+  announcementsList: () =>
+    request<{ announcements: Array<{
+      id: string; title: string; title_en: string | null;
+      content: string; content_en: string | null; type: string;
+      target: string; priority: number; is_active: number;
+      start_at: number | null; end_at: number | null; created_by: string | null;
+      created_at: number; updated_at: number;
+    }> }>('/admin/announcements'),
+
+  announcementsActive: () =>
+    request<{ announcements: Array<{
+      id: string; title: string; content: string; type: string; priority: number; created_at: number;
+    }> }>('/announcements/active'),
+
+  announcementsCreate: (params: {
+    title: string; title_en?: string; content: string; content_en?: string;
+    type?: string; target?: string; priority?: number; start_at?: number | null; end_at?: number | null;
+  }) =>
+    request<{ success: boolean; id: string }>('/admin/announcements', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    }),
+
+  announcementsUpdate: (id: string, params: {
+    title?: string; title_en?: string; content?: string; content_en?: string;
+    type?: string; target?: string; priority?: number; is_active?: boolean;
+    start_at?: number | null; end_at?: number | null;
+  }) =>
+    request<{ success: boolean }>(`/admin/announcements/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    }),
+
+  announcementsDelete: (id: string) =>
+    request<{ success: boolean }>(`/admin/announcements/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{
