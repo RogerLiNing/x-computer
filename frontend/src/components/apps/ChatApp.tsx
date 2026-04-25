@@ -23,6 +23,7 @@ import { useImageHandling } from './ChatApp/useImageHandling';
 import { useChatSessions, WELCOME_FALLBACK } from './ChatApp/useChatSessions';
 import { useFormatChatError } from './ChatApp/useFormatChatError';
 import { getMessagesForChat } from './ChatApp/chatHelpers';
+import { CommandPalette, getDefaultCommands } from './ChatApp/CommandPalette';
 import type { Message } from './ChatApp/Message';
 import { TASK_KEYWORDS, DEFAULT_MAX_CHAT_ROUNDS, type AgentOption } from './ChatApp/chatConstants';
 import { ToolCallBlock, MarkdownContent, MarkdownWithThink, type ToolCallRecord } from '@/components/shared';
@@ -81,6 +82,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [showArchived, setShowArchived] = useState(false);
   /** 已归档会话列表 */
   const [archivedSessions, setArchivedSessions] = useState<Array<{ id: string; title: string; createdAt: string; updatedAt: string; tags: string[]; isPinned: boolean; isArchived: boolean }>>([]);
+  /** 命令面板 */
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
+  const [commandPalettePosition, setCommandPalettePosition] = useState({ top: 0, left: 0 });
   /** 跨会话收藏消息列表 */
   const [allBookmarks, setAllBookmarks] = useState<Array<{ id: string; sessionId: string; role: string; content: string; createdAt: string }>>([]);
   const [globalSearchQuery, setGlobalSearchQuery] = useState('');
@@ -423,9 +428,24 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
   // Auto-resize textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInput(e.target.value);
+    const value = e.target.value;
+    setInput(value);
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+
+    // Detect "/" at start or after space to open command palette
+    const slashMatch = value.match(/(?:^|\s)\/(\w*)$/);
+    if (slashMatch) {
+      setCommandQuery(slashMatch[1]);
+      // Position palette below the input bar
+      const rect = inputRef.current?.getBoundingClientRect();
+      if (rect) {
+        setCommandPalettePosition({ top: rect.bottom + 4, left: rect.left });
+      }
+      setCommandPaletteOpen(true);
+    } else {
+      setCommandPaletteOpen(false);
+    }
   };
 
   const insertSnippet = (code: string) => {
@@ -434,6 +454,32 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     setSnippetFilter('');
     setTimeout(() => inputRef.current?.focus(), 0);
   };
+
+  /** Handle command palette selection */
+  const handleCommandSelect = (command: { insertText?: string; action?: () => void }) => {
+    if (command.action) {
+      command.action();
+    }
+    if (command.insertText !== undefined) {
+      // Replace the /query with the insertText
+      setInput((prev) => prev.replace(/\/\w*$/, command.insertText || ''));
+    }
+    setCommandPaletteOpen(false);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  /** Build default commands with current app actions */
+  const defaultCommands = getDefaultCommands({
+    onSearch: () => { setGlobalSearchQuery(''); setSidebarOpen(true); },
+    onReminder: () => { setReminderOpen(true); },
+    onVoice: () => { toggleVoiceInput(); },
+    onExport: () => { /* no current session id — handled via insertText */ },
+    onNewChat: () => { startNewChat(); },
+    onBookmarks: () => { setShowStarred(true); setSidebarOpen(true); },
+    onArchive: () => { setShowArchived(true); setSidebarOpen(true); },
+    onCalculator: () => { setCalcOpen(true); },
+    onPromptTemplate: undefined,
+  });
 
   /** 将附带的文档文件上传到沙箱 文档/对话上传/，返回沙箱路径列表（失败则跳过该个） */
   const uploadAttachedFilesToSandbox = useCallback(async (files: { name: string; file: File }[]): Promise<string[]> => {
@@ -2721,6 +2767,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           />
         </div>
       )}
+
+      {/* Command Palette */}
+      <CommandPalette
+        query={commandQuery}
+        visible={commandPaletteOpen}
+        position={commandPalettePosition}
+        commands={defaultCommands}
+        onSelect={handleCommandSelect}
+        onClose={() => setCommandPaletteOpen(false)}
+      />
     </div>
   );
 }
