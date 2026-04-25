@@ -2013,29 +2013,31 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                         {speakingMsgId === msg.id ? <VolumeX size={13} /> : <Speaker size={13} />}
                       </button>
                       <div className="absolute -top-1 right-6 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {['👍', '❤️', '😮', '😂', '😢'].map((emoji) => {
+                          const isActive = msg.reactions?.[emoji];
+                          return (
+                            <button
+                              key={emoji}
+                              type="button"
+                              title={emoji}
+                              onClick={async () => {
+                                const next = { ...(msg.reactions ?? {}), [emoji]: !(msg.reactions?.[emoji] ?? false) };
+                                setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: next } : m)));
+                                try { await api.setMessageReaction(msg.id, next); } catch { /* revert on error */ }
+                              }}
+                              className={`text-[13px] px-1 py-0.5 rounded transition-colors ${isActive ? 'bg-desktop-accent/20 scale-110' : 'text-desktop-muted hover:text-desktop-text hover:bg-white/10'}`}
+                            >
+                              {emoji}
+                            </button>
+                          );
+                        })}
                         <button
                           type="button"
-                          title="赞"
-                          onClick={async () => {
-                            const next = { ...(msg.reactions ?? {}), thumbsUp: !(msg.reactions?.thumbsUp ?? false), thumbsDown: false };
-                            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: next } : m)));
-                            try { await api.setMessageReaction(msg.id, next); } catch { /* revert on error */ }
-                          }}
-                          className={`p-1 rounded transition-colors ${msg.reactions?.thumbsUp ? 'text-desktop-accent' : 'text-desktop-muted hover:text-desktop-text'}`}
+                          title="复制"
+                          onClick={() => copyMessage(msg)}
+                          className="p-1 rounded text-desktop-muted hover:text-desktop-text transition-colors"
                         >
-                          <ThumbsUp size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          title="踩"
-                          onClick={async () => {
-                            const next = { ...(msg.reactions ?? {}), thumbsDown: !(msg.reactions?.thumbsDown ?? false), thumbsUp: false };
-                            setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: next } : m)));
-                            try { await api.setMessageReaction(msg.id, next); } catch { /* revert on error */ }
-                          }}
-                          className={`p-1 rounded transition-colors ${msg.reactions?.thumbsDown ? 'text-red-400' : 'text-desktop-muted hover:text-desktop-text'}`}
-                        >
-                          <ThumbsDown size={13} />
+                          <Copy size={13} />
                         </button>
                       </div>
                       <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
