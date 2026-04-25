@@ -1285,6 +1285,17 @@ export const api = {
   getMe: () =>
     request<{ id: string; displayName: string | null; email: string | null; createdAt: string; updatedAt: string }>('/users/me'),
 
+  /** 获取用户资料 */
+  getUserProfile: () =>
+    request<{ displayName: string | null; bio: string | null; timezone: string | null; language: string | null }>('/users/me/profile'),
+
+  /** 更新用户资料 */
+  updateUserProfile: (data: { displayName?: string; bio?: string | null; timezone?: string | null; language?: string | null }) =>
+    request<{ success: boolean }>('/users/me/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
   /** 获取所有用户配置 */
   getUserConfig: () => request<Record<string, unknown>>('/users/me/config'),
 

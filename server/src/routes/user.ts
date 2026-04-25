@@ -49,6 +49,50 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
     });
   });
 
+  /** PATCH /api/users/me/profile - 更新用户资料（display_name + profile JSON） */
+  router.patch('/me/profile', async (req, res) => {
+    const userId = req.userId;
+    const user = await db.ensureUser(userId);
+    const { displayName, bio, timezone, language } = req.body ?? {};
+
+    // Update display_name in users table
+    if (typeof displayName === 'string') {
+      await db.updateUserDisplayName(userId, displayName.trim().slice(0, 100));
+    }
+
+    // Merge profile into user_config
+    const PROFILE_KEY = 'user_profile';
+    const existing = await db.getConfig(userId, PROFILE_KEY);
+    let profile: Record<string, string> = {};
+    try { profile = existing ? JSON.parse(existing) : {}; } catch { /* use empty */ }
+
+    if (typeof bio === 'string') profile.bio = bio.trim().slice(0, 500);
+    else if (bio === null || bio === '') profile.bio = '';
+    if (typeof timezone === 'string') profile.timezone = timezone.slice(0, 64);
+    else if (timezone === null || timezone === '') profile.timezone = '';
+    if (typeof language === 'string') profile.language = language.slice(0, 16);
+    else if (language === null || language === '') profile.language = '';
+
+    await db.setConfig(userId, PROFILE_KEY, JSON.stringify(profile));
+    res.json({ success: true });
+  });
+
+  /** GET /api/users/me/profile - 获取用户资料 */
+  router.get('/me/profile', async (req, res) => {
+    const userId = req.userId;
+    const user = await db.ensureUser(userId);
+    const PROFILE_KEY = 'user_profile';
+    const raw = await db.getConfig(userId, PROFILE_KEY);
+    let profile: Record<string, string> = {};
+    try { profile = raw ? JSON.parse(raw) : {}; } catch { /* use empty */ }
+    res.json({
+      displayName: user.display_name ?? null,
+      bio: profile.bio ?? null,
+      timezone: profile.timezone ?? null,
+      language: profile.language ?? null,
+    });
+  });
+
   /** GET /api/users/me/config - 获取所有配置，缺失项合并 .x-config.json 默认值 */
   router.get('/me/config', async (req, res) => {
     const userId = req.userId;

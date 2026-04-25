@@ -427,6 +427,11 @@ export class SqliteAppDatabase {
     return { id: userId, display_name: displayName ?? null, created_at: now, updated_at: now };
   }
 
+  updateUserDisplayName(userId: string, displayName: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?').run(displayName, now, userId);
+  }
+
   getUser(userId: string): UserRow | undefined {
     return this.db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as UserRow | undefined;
   }
@@ -1472,6 +1477,10 @@ export class SqliteDatabaseAdapter {
   }
   mergeUserDataInto(fromUserId: string, toUserId: string): Promise<void> {
     this.db.mergeUserDataInto(fromUserId, toUserId);
+    return Promise.resolve();
+  }
+  updateUserDisplayName(userId: string, displayName: string): Promise<void> {
+    this.db.updateUserDisplayName(userId, displayName);
     return Promise.resolve();
   }
   getConfig(userId: string, key: string): Promise<string | undefined> {

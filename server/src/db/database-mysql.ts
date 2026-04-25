@@ -452,6 +452,10 @@ export class MysqlDatabase {
     });
   }
 
+  updateUserDisplayName(userId: string, displayName: string): Promise<void> {
+    return this._run('UPDATE users SET display_name = ?, updated_at = NOW() WHERE id = ?', [displayName, userId]);
+  }
+
   getUser(userId: string): Promise<UserRow | undefined> {
     return this.queryOne<UserRow>('SELECT * FROM users WHERE id = ?', [userId]);
   }

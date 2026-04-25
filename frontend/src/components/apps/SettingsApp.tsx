@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets';
+type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -273,6 +273,144 @@ function NotificationPreferencesSettings() {
         className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 disabled:opacity-50 text-xs text-desktop-text transition-colors"
       >
         {saving ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
+      </button>
+    </div>
+  );
+}
+
+/** 用户资料设置：昵称、个人简介、时区、语言 */
+function ProfileSettings() {
+  const { t } = useTranslation();
+  const [displayName, setDisplayName] = useState('');
+  const [bio, setBio] = useState('');
+  const [timezone, setTimezone] = useState('');
+  const [language, setLanguage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getUserProfile().then((p) => {
+      setDisplayName(p.displayName ?? '');
+      setBio(p.bio ?? '');
+      setTimezone(p.timezone ?? '');
+      setLanguage(p.language ?? '');
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSuccess(false);
+    try {
+      await api.updateUserProfile({
+        displayName: displayName.trim(),
+        bio: bio.trim() || null,
+        timezone: timezone.trim() || null,
+        language: language.trim() || null,
+      });
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const TIMEZONES = [
+    'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Seoul',
+    'America/New_York', 'America/Los_Angeles', 'America/Chicago',
+    'Europe/London', 'Europe/Paris', 'Europe/Berlin',
+    'Asia/Singapore', 'Australia/Sydney',
+  ];
+  const LANGUAGES = [
+    { value: 'zh-CN', label: '简体中文' },
+    { value: 'zh-TW', label: '繁體中文' },
+    { value: 'en', label: 'English' },
+    { value: 'ja', label: '日本語' },
+    { value: 'ko', label: '한국어' },
+  ];
+
+  if (loading) {
+    return <div className="text-xs text-desktop-muted">{t('common.loading', '加载中...')}</div>;
+  }
+
+  return (
+    <div className="space-y-6 max-w-lg">
+      <h3 className="text-sm font-medium text-desktop-text">{t('settings.profile', '个人资料')}</h3>
+
+      <div className="space-y-4">
+        <div>
+          <label className="block text-xs text-desktop-muted mb-1">{t('settings.displayName', '昵称')}</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            maxLength={100}
+            placeholder={t('settings.displayNamePlaceholder', '给自己起个名字')}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text placeholder:text-desktop-muted/40 outline-none focus:border-desktop-accent/50"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-desktop-muted mb-1">
+            {t('settings.bio', '个人简介')}
+            <span className="ml-1 text-desktop-muted/40">({bio.length}/500)</span>
+          </label>
+          <textarea
+            value={bio}
+            onChange={(e) => setBio(e.target.value.slice(0, 500))}
+            rows={3}
+            placeholder={t('settings.bioPlaceholder', '告诉 AI 你的一些基本情况，帮助它更好地帮助你')}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text placeholder:text-desktop-muted/40 outline-none focus:border-desktop-accent/50 resize-none"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs text-desktop-muted mb-1">{t('settings.timezone', '时区')}</label>
+          <select
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text outline-none focus:border-desktop-accent/50"
+          >
+            <option value="">—</option>
+            {TIMEZONES.map((tz) => (
+              <option key={tz} value={tz}>{tz}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs text-desktop-muted mb-1">{t('settings.language', '界面语言')}</label>
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text outline-none focus:border-desktop-accent/50"
+          >
+            <option value="">—</option>
+            {LANGUAGES.map((l) => (
+              <option key={l.value} value={l.value}>{l.label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">{error}</div>
+      )}
+      {success && (
+        <div className="text-xs text-green-400 bg-green-500/10 rounded-lg px-3 py-2">{t('settings.saved', '已保存')}</div>
+      )}
+
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving}
+        className="px-4 py-2 rounded-lg text-xs bg-desktop-accent hover:bg-desktop-accent/80 text-white transition-colors disabled:opacity-50"
+      >
+        {saving ? t('common.saving', '保存中...') : t('common.save', '保存')}
       </button>
     </div>
   );
@@ -1902,6 +2040,7 @@ export function SettingsApp({ windowId }: Props) {
   const basicTabs: { id: SettingsTab; labelKey: string; icon: React.ElementType }[] = [
     { id: 'general', labelKey: 'settings.general', icon: Monitor },
     { id: 'account', labelKey: 'settings.account', icon: User },
+    { id: 'profile', labelKey: 'settings.profile', icon: User },
     { id: 'apps', labelKey: 'settings.apps', icon: Package },
     { id: 'skills', labelKey: 'settings.skills', icon: Sparkles },
     { id: 'shortcuts', labelKey: 'settings.shortcuts', icon: Keyboard },
@@ -2001,6 +2140,8 @@ export function SettingsApp({ windowId }: Props) {
             onOpenSubscription={() => useDesktopStore.getState().openApp('subscription')}
           />
         )}
+
+        {tab === 'profile' && <ProfileSettings />}
 
         {tab === 'general' && (
           <div className="space-y-6">
