@@ -528,6 +528,45 @@ export const api = {
   scheduledJobsToggle: (id: string) =>
     request<{ id: string; enabled: boolean }>(`/scheduled-jobs/${encodeURIComponent(id)}/toggle`, { method: 'POST' }),
 
+  // ── 通知偏好设置 ────────────────────────────────────────────────
+
+  /** 获取当前用户通知偏好 */
+  notificationPreferencesGet: () =>
+    request<{
+      inApp: boolean;
+      email: boolean;
+      taskEvents: boolean;
+      approval: boolean;
+      heartbeat: boolean;
+      heartbeatDaily: boolean;
+      webhook: boolean;
+      system: boolean;
+      skill: boolean;
+      quietHoursEnabled: boolean;
+      quietHoursStart: string | null;
+      quietHoursEnd: string | null;
+    }>('/notification-preferences'),
+
+  /** 更新通知偏好（部分更新） */
+  notificationPreferencesUpdate: (prefs: {
+    inApp?: boolean;
+    email?: boolean;
+    taskEvents?: boolean;
+    approval?: boolean;
+    heartbeat?: boolean;
+    heartbeatDaily?: boolean;
+    webhook?: boolean;
+    system?: boolean;
+    skill?: boolean;
+    quietHoursEnabled?: boolean;
+    quietHoursStart?: string | null;
+    quietHoursEnd?: string | null;
+  }) =>
+    request<{ success: boolean; message: string }>('/notification-preferences', {
+      method: 'PUT',
+      body: JSON.stringify(prefs),
+    }),
+
   /** 获取当前用户订阅信息（套餐、额度、使用量）。需已登录，匿名返回 401。canConfigureLLM 表示是否可配置大模型（仅专业版） */
   getSubscriptionMe: () =>
     request<{

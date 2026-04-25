@@ -35,6 +35,7 @@ import { createPageIndexRouter } from './routes/pageindex.js';
 import { createFeatureFlagsRouter } from './routes/featureFlags.js';
 import { initFeatureFlags } from './config/featureFlags.js';
 import { createUsageAnalyticsRouter } from './routes/usageAnalytics.js';
+import { createNotificationPreferencesRouter } from './routes/notificationPreferences.js';
 import { createScheduledJobsRouter } from './routes/scheduledJobs.js';
 import { createWebhooksRouter } from './routes/webhooks.js';
 import { createWebhookTriggerRouter } from './routes/webhookTrigger.js';
@@ -315,6 +316,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/admin/webhooks', createWebhooksRouter(db));
   app.use('/api/llm', createLLMRouter());
   app.use('/api/scheduled-jobs', createScheduledJobsRouter(db));
+  app.use('/api/notification-preferences', createNotificationPreferencesRouter(db));
   app.use('/api/admin/content', createContentManagementRoutes(db));
   app.use('/api/announcements', createContentManagementRoutes(db));
   app.use('/api/pageindex', createPageIndexRouter(userSandboxManager, db, subscriptionService));

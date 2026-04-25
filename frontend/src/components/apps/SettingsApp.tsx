@@ -156,6 +156,128 @@ function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
 }
 
 /** X 主脑主动心跳设置：配置定时主动检查和通知 */
+function NotificationPreferencesSettings() {
+  const { t } = useTranslation();
+  const [prefs, setPrefs] = useState({
+    inApp: true,
+    email: false,
+    taskEvents: true,
+    approval: true,
+    heartbeat: true,
+    heartbeatDaily: true,
+    webhook: true,
+    system: true,
+    skill: true,
+    quietHoursEnabled: false,
+    quietHoursStart: null as string | null,
+    quietHoursEnd: null as string | null,
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.notificationPreferencesGet().then((p) => {
+      setPrefs(p);
+    }).catch(() => {}).finally(() => setLoading(false));
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api.notificationPreferencesUpdate(prefs);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  const set = (key: keyof typeof prefs, value: typeof prefs[keyof typeof prefs]) => {
+    setPrefs((p) => ({ ...p, [key]: value }));
+  };
+
+  if (loading) return null;
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.notificationPreferences', '通知偏好')}</h3>
+      </div>
+
+      {/* 通知渠道 */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] text-desktop-muted/60 uppercase tracking-wide">{t('settings.notificationChannels', '通知渠道')}</div>
+        <SettingRow label={t('settings.inAppNotifications', '应用内通知')} description={t('settings.inAppNotificationsDesc', '在 X 主脑内显示通知')}>
+          <ToggleSwitch value={prefs.inApp} onToggle={(v) => set('inApp', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.emailNotifications', '邮件通知')} description={t('settings.emailNotificationsDesc', '接收邮件通知')}>
+          <ToggleSwitch value={prefs.email} onToggle={(v) => set('email', v)} />
+        </SettingRow>
+      </div>
+
+      {/* 通知类型 */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] text-desktop-muted/60 uppercase tracking-wide">{t('settings.notificationTypes', '通知类型')}</div>
+        <SettingRow label={t('settings.taskEvents', '任务事件')} description={t('settings.taskEventsDesc', '任务完成/失败时通知')}>
+          <ToggleSwitch value={prefs.taskEvents} onToggle={(v) => set('taskEvents', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.approvalRequests', '审批请求')} description={t('settings.approvalRequestsDesc', '高风险操作需审批时通知')}>
+          <ToggleSwitch value={prefs.approval} onToggle={(v) => set('approval', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.heartbeatAlerts', '心跳告警')} description={t('settings.heartbeatAlertsDesc', '配额告警、任务异常等')}>
+          <ToggleSwitch value={prefs.heartbeat} onToggle={(v) => set('heartbeat', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.dailySummary', '每日摘要')} description={t('settings.dailySummaryDesc', '每日任务汇总通知')}>
+          <ToggleSwitch value={prefs.heartbeatDaily} onToggle={(v) => set('heartbeatDaily', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.webhookTriggers', 'Webhook 触发')} description={t('settings.webhookTriggersDesc', 'Webhook 触发任务时通知')}>
+          <ToggleSwitch value={prefs.webhook} onToggle={(v) => set('webhook', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.systemAnnouncements', '系统公告')} description={t('settings.systemAnnouncementsDesc', '系统更新、维护公告')}>
+          <ToggleSwitch value={prefs.system} onToggle={(v) => set('system', v)} />
+        </SettingRow>
+        <SettingRow label={t('settings.skillsUpdates', 'Skills 更新')} description={t('settings.skillsUpdatesDesc', 'Skills 新版本或可用更新')}>
+          <ToggleSwitch value={prefs.skill} onToggle={(v) => set('skill', v)} />
+        </SettingRow>
+      </div>
+
+      {/* 免打扰时间 */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] text-desktop-muted/60 uppercase tracking-wide">{t('settings.quietHours', '免打扰时间')}</div>
+        <SettingRow label={t('settings.enableQuietHours', '启用免打扰')} description={t('settings.enableQuietHoursDesc', '在指定时间段内静默所有通知')}>
+          <ToggleSwitch value={prefs.quietHoursEnabled} onToggle={(v) => set('quietHoursEnabled', v)} />
+        </SettingRow>
+        {prefs.quietHoursEnabled && (
+          <div className="flex items-center gap-2 pl-4">
+            <input
+              type="time"
+              value={prefs.quietHoursStart ?? '22:00'}
+              onChange={(e) => set('quietHoursStart', e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-desktop-text outline-none"
+            />
+            <span className="text-desktop-muted text-xs">—</span>
+            <input
+              type="time"
+              value={prefs.quietHoursEnd ?? '08:00'}
+              onChange={(e) => set('quietHoursEnd', e.target.value)}
+              className="bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-desktop-text outline-none"
+            />
+          </div>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={handleSave}
+        disabled={saving}
+        className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 disabled:opacity-50 text-xs text-desktop-text transition-colors"
+      >
+        {saving ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
+      </button>
+    </div>
+  );
+}
+
 function HeartbeatSettings() {
   const { t } = useTranslation();
   const [enabled, setEnabled] = useState(true);
@@ -1523,6 +1645,7 @@ export function SettingsApp({ windowId }: Props) {
             <SettingRow label={t('settings.notifications')} description={t('settings.notifications')}>
               <ToggleSwitch defaultOn={true} />
             </SettingRow>
+            <NotificationPreferencesSettings />
             <HeartbeatSettings />
           </div>
         )}
