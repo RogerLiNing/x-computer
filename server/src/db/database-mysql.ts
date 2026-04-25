@@ -726,6 +726,19 @@ export class MysqlDatabase {
     );
   }
 
+  /** 跨会话全文搜索消息 */
+  searchMessages(userId: string, q: string, limit = 50): Promise<Array<ChatMessageRow & { session_title: string | null }>> {
+    const like = `%${q}%`;
+    return this.query<ChatMessageRow & { session_title: string | null }>(
+      `SELECT m.*, s.title as session_title
+       FROM chat_messages m
+       JOIN chat_sessions s ON m.session_id = s.id
+       WHERE s.user_id = ? AND m.content LIKE ? AND m.id != 'welcome'
+       ORDER BY m.created_at DESC LIMIT ?`,
+      [userId, like, limit],
+    );
+  }
+
   deleteMessage(messageId: string): Promise<void> {
     return this._run('DELETE FROM chat_messages WHERE id = ?', [messageId]);
   }

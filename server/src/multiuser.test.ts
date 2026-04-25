@@ -311,6 +311,23 @@ describe('多用户基础设施', () => {
       const bIds = bRes.body.map((m: any) => m.id);
       expect(bIds).not.toContain(m1.body.id);
     });
+
+    it('GET /api/chat/sessions/search 跨会话全文搜索', async () => {
+      resetRateLimitState();
+      const s = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
+      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '香蕉苹果橙子' });
+      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '只包含苹果的消息' });
+      await new Promise((r) => setTimeout(r, 2500));
+      const res = await request(app).get('/api/chat/sessions/search?q=苹果').set('X-User-Id', USER_A);
+      expect(res.status).toBe(200);
+      expect(res.body.length).toBeGreaterThanOrEqual(2);
+      const snippets = res.body.map((m: any) => m.snippet);
+      expect(snippets.every((s: string) => s.includes('苹果'))).toBe(true);
+      // 空查询返回空数组
+      const emptyRes = await request(app).get('/api/chat/sessions/search?q=').set('X-User-Id', USER_A);
+      expect(emptyRes.status).toBe(200);
+      expect(emptyRes.body).toHaveLength(0);
+    });
   });
 
   // ── 文件系统隔离 ──

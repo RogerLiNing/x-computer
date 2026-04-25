@@ -687,6 +687,20 @@ export class SqliteAppDatabase {
       .all(userId, limit) as ChatMessageRow[];
   }
 
+  /** 跨会话全文搜索消息 */
+  searchMessages(userId: string, q: string, limit = 50): Array<ChatMessageRow & { session_title: string | null }> {
+    const like = `%${q}%`;
+    return this.db
+      .prepare(
+        `SELECT m.*, s.title as session_title
+         FROM chat_messages m
+         JOIN chat_sessions s ON m.session_id = s.id
+         WHERE s.user_id = ? AND m.content LIKE ? AND m.id != 'welcome'
+         ORDER BY m.created_at DESC LIMIT ?`,
+      )
+      .all(userId, like, limit) as Array<ChatMessageRow & { session_title: string | null }>;
+  }
+
   deleteMessage(messageId: string): void {
     this.db.prepare('DELETE FROM chat_messages WHERE id = ?').run(messageId);
   }
@@ -1474,6 +1488,9 @@ export class SqliteDatabaseAdapter {
   }
   getBookmarkedMessages(userId: string, limit?: number): Promise<ChatMessageRow[]> {
     return Promise.resolve(this.db.getBookmarkedMessages(userId, limit));
+  }
+  searchMessages(userId: string, q: string, limit?: number): Promise<Array<ChatMessageRow & { session_title: string | null }>> {
+    return Promise.resolve(this.db.searchMessages(userId, q, limit));
   }
   deleteMessage(messageId: string): Promise<void> {
     this.db.deleteMessage(messageId);

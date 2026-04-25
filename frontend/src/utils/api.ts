@@ -1542,6 +1542,20 @@ export const api = {
       }>
     >(`/chat/sessions/bookmarks?limit=${limit}`),
 
+  /** 跨会话全文搜索消息 */
+  searchMessages: (q: string, limit = 50) =>
+    request<
+      Array<{
+        id: string;
+        sessionId: string;
+        sessionTitle: string | null;
+        role: string;
+        content: string;
+        snippet: string;
+        createdAt: string;
+      }>
+    >(`/chat/sessions/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),

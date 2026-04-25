@@ -79,6 +79,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [showStarred, setShowStarred] = useState(false);
   /** 跨会话收藏消息列表 */
   const [allBookmarks, setAllBookmarks] = useState<Array<{ id: string; sessionId: string; role: string; content: string; createdAt: string }>>([]);
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('');
+  const [globalSearchResults, setGlobalSearchResults] = useState<Array<{ id: string; sessionId: string; sessionTitle: string | null; role: string; content: string; snippet: string; createdAt: string }>>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
@@ -136,6 +138,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   useEffect(() => {
     if (showStarred) loadBookmarks();
   }, [showStarred, loadBookmarks]);
+
+  /** 全局消息搜索（防抖 400ms） */
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!globalSearchQuery.trim()) { setGlobalSearchResults([]); return; }
+    searchTimerRef.current = setTimeout(() => {
+      api.searchMessages(globalSearchQuery.trim(), 30)
+        .then((r) => setGlobalSearchResults(r))
+        .catch(() => setGlobalSearchResults([]));
+    }, 400);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [globalSearchQuery]);
+
   const { openApp, setWindowTitle } = useDesktopStore();
   const addNotification = useConnectionStore((s) => s.addNotification);
   const aiDoc = useAiDocumentStore();
@@ -1424,6 +1440,43 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               onChange={(e) => setSessionSearch(e.target.value)}
             />
           </div>
+          <div className="px-2 mb-1">
+            <input
+              type="text"
+              placeholder="搜索所有消息... 🔍"
+              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none focus:border-desktop-accent/40"
+              value={globalSearchQuery}
+              onChange={(e) => setGlobalSearchQuery(e.target.value)}
+            />
+          </div>
+          {globalSearchQuery.trim() && (
+            <div className="px-2 mb-1 max-h-48 overflow-auto">
+              {globalSearchResults.length === 0 ? (
+                <div className="text-[10px] text-desktop-muted/60 px-3 py-2">无结果</div>
+              ) : (
+                globalSearchResults.map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-desktop-muted text-[10px] leading-snug mb-0.5"
+                    onClick={() => {
+                      if (currentSessionId !== r.sessionId) selectSession(r.sessionId);
+                      setTimeout(() => {
+                        document.getElementById(`msg-${r.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        document.getElementById(`msg-${r.id}`)?.classList.add('highlight-flash');
+                      }, 300);
+                      setGlobalSearchQuery('');
+                    }}
+                  >
+                    <div className="text-[9px] text-desktop-accent/70 truncate mb-0.5">
+                      {r.sessionTitle || '会话'} · {r.role === 'user' ? '用户' : '助手'}
+                    </div>
+                    <div className="truncate opacity-80">{r.snippet}</div>
+                  </button>
+                ))
+              )}
+            </div>
+          )}
           {/* Tag filter chips */}
           {(() => {
             const allTags = [...new Set(sessions.flatMap((s) => s.tags))].sort();

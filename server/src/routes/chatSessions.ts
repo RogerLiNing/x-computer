@@ -91,6 +91,32 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     }
   });
 
+  /** GET /api/chat/sessions/search?q=keyword - 跨会话全文搜索消息 */
+  router.get('/search', async (req, res) => {
+    const userId = req.userId;
+    await db.ensureUser(userId);
+    const q = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!q) { res.json([]); return; }
+    const limit = parseInt(req.query.limit as string) || 50;
+    try {
+      const messages = await db.searchMessages(userId, q, limit);
+      res.json(
+        messages.map((m) => ({
+          id: m.id,
+          sessionId: m.session_id,
+          sessionTitle: (m as { session_title?: string | null }).session_title ?? null,
+          role: m.role,
+          content: m.content,
+          snippet: extractSnippet(m.content || '', q),
+          createdAt: m.created_at,
+        })),
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Search failed', detail: msg });
+    }
+  });
+
   /** POST /api/chat/sessions - 创建会话；body.scene 可选：x_direct（X 主脑）、normal_chat（AI 助手） */
   router.post('/', async (req, res) => {
     const userId = req.userId;
