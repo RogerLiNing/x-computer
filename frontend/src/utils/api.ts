@@ -1505,6 +1505,13 @@ export const api = {
       body: JSON.stringify({ reactions }),
     }),
 
+  /** 更新消息内容（用于消息编辑） */
+  updateChatMessage: (msgId: string, content: string) =>
+    request<{ success: boolean }>(`/chat/messages/${msgId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content }),
+    }),
+
   /** 获取当前用户的提醒列表 */
   listReminders: () =>
     request<{ reminders: Array<{ id: string; name?: string; intent: string; runAt: number; runAtISO: string; sessionId?: string; cron?: string }> }>('/reminders'),

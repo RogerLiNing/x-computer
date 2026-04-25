@@ -655,6 +655,10 @@ export class SqliteAppDatabase {
     this.db.prepare('UPDATE chat_messages SET reactions = ? WHERE id = ?').run(reactions, messageId);
   }
 
+  updateMessage(messageId: string, content: string): void {
+    this.db.prepare('UPDATE chat_messages SET content = ? WHERE id = ?').run(content, messageId);
+  }
+
   getMessages(sessionId: string, limit = 200): ChatMessageRow[] {
     return this.db
       .prepare('SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?')
@@ -1452,6 +1456,10 @@ export class SqliteDatabaseAdapter {
   }
   updateMessageReactions(messageId: string, reactions: string): Promise<void> {
     this.db.updateMessageReactions(messageId, reactions);
+    return Promise.resolve();
+  }
+  updateMessage(messageId: string, content: string): Promise<void> {
+    this.db.updateMessage(messageId, content);
     return Promise.resolve();
   }
   getRecentMessages(sessionId: string, limit?: number): Promise<ChatMessageRow[]> {

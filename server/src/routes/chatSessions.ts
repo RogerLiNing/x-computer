@@ -316,6 +316,22 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     res.json({ success: true });
   });
 
+  /** PATCH /api/chat/messages/:msgId - 更新消息内容（用于消息编辑） */
+  router.patch('/messages/:msgId', async (req, res) => {
+    const { content } = req.body ?? {};
+    if (typeof content !== 'string') {
+      res.status(400).json({ error: 'Missing content' });
+      return;
+    }
+    try {
+      await db.updateMessage(req.params.msgId, content);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: 'Failed to update message', detail: msg });
+    }
+  });
+
   /** PATCH /api/chat/messages/:msgId/reactions - 更新消息表情反应 */
   router.patch('/messages/:msgId/reactions', async (req, res) => {
     const { reactions } = req.body ?? {};

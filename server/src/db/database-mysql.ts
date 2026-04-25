@@ -697,6 +697,10 @@ export class MysqlDatabase {
     return this._run('UPDATE chat_messages SET reactions = ? WHERE id = ?', [reactions, messageId]);
   }
 
+  updateMessage(messageId: string, content: string): Promise<void> {
+    return this._run('UPDATE chat_messages SET content = ? WHERE id = ?', [content, messageId]);
+  }
+
   getMessages(sessionId: string, limit = 200): Promise<ChatMessageRow[]> {
     return this.query<ChatMessageRow>(
       'SELECT * FROM chat_messages WHERE session_id = ? ORDER BY created_at ASC LIMIT ?',

@@ -6,7 +6,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2 } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -69,6 +69,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [reminderDate, setReminderDate] = useState('');
   /** 会话统计浮层 */
   const [statsOpen, setStatsOpen] = useState(false);
+  /** 当前正在编辑的消息 ID（仅限 user 角色），null 表示未在编辑 */
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  /** 编辑中的消息内容 */
+  const [editingContent, setEditingContent] = useState('');
   const [reminderTime, setReminderTime] = useState('');
   /** 当前正在录音的语音识别 ID，null 表示未在录音 */
   const [recordingId, setRecordingId] = useState<string | null>(null);
@@ -1164,6 +1168,28 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     [currentSessionId],
   );
 
+  /** 编辑消息并重新生成：更新内容 → 删除后续消息 → 触发重新发送 */
+  const handleEditSubmit = useCallback(async () => {
+    if (!editingMessageId || !editingContent.trim() || isLoading) return;
+    const trimmed = editingContent.trim();
+    const idx = messages.findIndex((m) => m.id === editingMessageId);
+    if (idx < 0) return;
+    // 更新消息内容
+    setMessages((prev) => prev.map((m) => (m.id === editingMessageId ? { ...m, content: trimmed } : m)));
+    if (currentSessionId) await api.updateChatMessage(editingMessageId, trimmed).catch(() => {});
+    // 删除后续所有消息（包括后续的 AI 回复和用户消息）
+    const subsequent = messages.slice(idx + 1);
+    const removal = subsequent.map((m) => {
+      if (currentSessionId && m.id !== 'welcome') api.deleteChatMessage(currentSessionId, m.id).catch(() => {});
+      return m.id;
+    });
+    setMessages((prev) => prev.filter((m) => !removal.includes(m.id)));
+    setEditingMessageId(null);
+    setEditingContent('');
+    // 触发重新发送
+    await sendMessage(trimmed);
+  }, [editingMessageId, editingContent, messages, currentSessionId, isLoading, sendMessage]);
+
   /** 重试：删除当前 AI 消息并用上一条用户消息重新请求 */
   const retryAssistantMessage = useCallback(async (assistantMsg: Message) => {
     if (assistantMsg.role !== 'assistant' || isLoading) return;
@@ -1730,6 +1756,37 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
                       <MarkdownContent content={msg.content} />
                     </div>
+                  ) : editingMessageId === msg.id ? (
+                    <div className="space-y-2">
+                      <textarea
+                        autoFocus
+                        rows={Math.max(2, editingContent.split('\n').length)}
+                        className="w-full bg-white/10 border border-desktop-accent/40 rounded-lg px-3 py-2 text-xs text-desktop-text resize-none focus:outline-none focus:border-desktop-accent"
+                        value={editingContent}
+                        onChange={(e) => setEditingContent(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleEditSubmit(); }
+                          if (e.key === 'Escape') { setEditingMessageId(null); }
+                        }}
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          className="px-3 py-1 rounded-lg bg-desktop-accent hover:bg-desktop-accent/80 text-desktop-highlight text-[11px] font-medium transition-colors disabled:opacity-40"
+                          onClick={handleEditSubmit}
+                          disabled={!editingContent.trim() || isLoading}
+                        >
+                          重新生成
+                        </button>
+                        <button
+                          type="button"
+                          className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-desktop-text/70 text-[11px] transition-colors"
+                          onClick={() => setEditingMessageId(null)}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    </div>
                   ) : (
                     <span className="whitespace-pre-wrap">{msg.content}</span>
                   )}
@@ -1845,6 +1902,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     disabled={isLoading}
                   >
                     <RotateCcw size={10} />
+                  </button>
+                )}
+                {msg.role === 'user' && !isLoading && (
+                  <button
+                    type="button"
+                    className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text transition-colors"
+                    onClick={() => {
+                      setEditingMessageId(msg.id);
+                      setEditingContent(msg.content);
+                    }}
+                    title="编辑"
+                  >
+                    <Edit2 size={10} />
                   </button>
                 )}
                 {msg.id !== 'welcome' && (
