@@ -57,7 +57,8 @@
     "clipboard-manager": "Clipboard",
     "habit-tracker": "Habits",
     "password-generator": "Password",
-    "unit-converter": "Converter"
+    "unit-converter": "Converter",
+    "calculator": "Calculator"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -90,7 +91,8 @@
     "clipboard-manager": "Track clipboard history, pin important items, and search past copies",
     "habit-tracker": "Track daily habits, view streaks, and build consistent routines",
     "password-generator": "Generate secure random passwords with customizable length and character types",
-    "unit-converter": "Convert between units of length, weight, temperature, speed, time, data, area, and volume"
+    "unit-converter": "Convert between units of length, weight, temperature, speed, time, data, area, and volume",
+    "calculator": "Full-featured calculator with keyboard support and calculation history"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

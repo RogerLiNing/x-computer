@@ -223,6 +223,7 @@ export type BuiltinAppId =
   | 'habit-tracker'
   | 'password-generator'
   | 'unit-converter'
+  | 'calculator'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
