@@ -58,7 +58,8 @@
     "world-clock": "世界时钟",
     "bookmarks": "书签管理器",
     "clipboard-manager": "剪贴板",
-    "habit-tracker": "习惯追踪"
+    "habit-tracker": "习惯追踪",
+    "password-generator": "密码生成器"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -92,7 +93,8 @@
     "world-clock": "同时查看多个时区的当前时间",
     "bookmarks": "保存、整理和搜索书签",
     "clipboard-manager": "记录剪贴板历史，固定重要内容，搜索过往复制记录",
-    "habit-tracker": "追踪每日习惯，查看连续记录，培养持续规律"
+    "habit-tracker": "追踪每日习惯，查看连续记录，培养持续规律",
+    "password-generator": "生成随机密码，支持长度、字符类型和强度检测"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",

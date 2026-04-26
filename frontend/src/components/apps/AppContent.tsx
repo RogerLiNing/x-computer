@@ -28,6 +28,7 @@ import { WorldClockApp } from './WorldClockApp';
 import { BookmarkManagerApp } from './BookmarkManagerApp';
 import { ClipboardManagerApp } from './ClipboardManagerApp';
 import { HabitTrackerApp } from './HabitTrackerApp';
+import { PasswordGeneratorApp } from './PasswordGeneratorApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -84,6 +85,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <WorldClockApp windowId={windowId} />;
     case 'bookmarks':
       return <BookmarkManagerApp windowId={windowId} />;
+    case 'password-generator':
+      return <PasswordGeneratorApp windowId={windowId} />;
     case 'habit-tracker':
       return <HabitTrackerApp windowId={windowId} />;
     case 'clipboard-manager':

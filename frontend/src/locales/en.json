@@ -55,7 +55,8 @@
     "world-clock": "World Clock",
     "bookmarks": "Bookmarks",
     "clipboard-manager": "Clipboard",
-    "habit-tracker": "Habits"
+    "habit-tracker": "Habits",
+    "password-generator": "Password"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -86,7 +87,8 @@
     "world-clock": "View current time in multiple timezones",
     "bookmarks": "Save, organize, and search your bookmarks",
     "clipboard-manager": "Track clipboard history, pin important items, and search past copies",
-    "habit-tracker": "Track daily habits, view streaks, and build consistent routines"
+    "habit-tracker": "Track daily habits, view streaks, and build consistent routines",
+    "password-generator": "Generate secure random passwords with customizable length and character types"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

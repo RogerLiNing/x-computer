@@ -221,6 +221,7 @@ export type BuiltinAppId =
   | 'bookmarks'
   | 'clipboard-manager'
   | 'habit-tracker'
+  | 'password-generator'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
