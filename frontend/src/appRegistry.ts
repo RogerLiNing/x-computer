@@ -46,6 +46,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'system-monitor', name: getAppName('system-monitor'), description: getAppDescription('system-monitor'), source: 'builtin', icon: 'Activity' },
   { id: 'quick-notes', name: getAppName('quick-notes'), description: getAppDescription('quick-notes'), source: 'builtin', icon: 'StickyNote' },
   { id: 'pomodoro', name: getAppName('pomodoro'), description: getAppDescription('pomodoro'), source: 'builtin', icon: 'Timer' },
+  { id: 'world-clock', name: getAppName('world-clock'), description: getAppDescription('world-clock'), source: 'builtin', icon: 'Globe' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -75,6 +76,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'system-monitor': { width: 680, height: 560 },
   'quick-notes': { width: 720, height: 540 },
   'pomodoro': { width: 400, height: 560 },
+  'world-clock': { width: 560, height: 500 },
 };
 
 function loadInstalled(): AppManifest[] {

@@ -51,7 +51,8 @@
     "diff": "Diff",
     "system-monitor": "System Monitor",
     "quick-notes": "Quick Notes",
-    "pomodoro": "Pomodoro"
+    "pomodoro": "Pomodoro",
+    "world-clock": "World Clock"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -78,7 +79,8 @@
     "diff": "Compare two text or code files, highlighting additions, deletions, and changes",
     "system-monitor": "Real-time system monitoring: CPU, memory, disk, and task stats",
     "quick-notes": "Quickly capture ideas, todos, and inspirations",
-    "pomodoro": "Focus timer using the Pomodoro technique"
+    "pomodoro": "Focus timer using the Pomodoro technique",
+    "world-clock": "View current time in multiple timezones"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

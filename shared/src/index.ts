@@ -217,6 +217,7 @@ export type BuiltinAppId =
   | 'system-monitor'
   | 'quick-notes'
   | 'pomodoro'
+  | 'world-clock'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

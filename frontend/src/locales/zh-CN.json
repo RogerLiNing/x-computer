@@ -54,7 +54,8 @@
     "diff": "文件对比",
     "system-monitor": "系统监控",
     "quick-notes": "快捷笔记",
-    "pomodoro": "番茄钟"
+    "pomodoro": "番茄钟",
+    "world-clock": "世界时钟"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -84,7 +85,8 @@
     "miniapp": "X 制作的应用",
     "system-monitor": "实时监控系统资源：CPU、内存、磁盘和任务状态",
     "quick-notes": "快速记录想法、待办事项和灵感",
-    "pomodoro": "专注计时器：番茄工作法，提高专注力"
+    "pomodoro": "专注计时器：番茄工作法，提高专注力",
+    "world-clock": "同时查看多个时区的当前时间"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",
