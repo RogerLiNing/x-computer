@@ -1926,6 +1926,7 @@ export const api = {
       cpu: { loadavg: number[]; cores: number };
       tasks: { total: number; pending: number; running: number; completed: number; failed: number };
       database: { dialect: string; status: string; error?: string };
+      disk: Array<{ mount: string; total: number; free: number; usedPercent: number }>;
       version: string;
       pid: number;
       timestamp: number;
@@ -1941,6 +1942,7 @@ export const api = {
       cores: number;
       tasks: { total: number; pending: number; running: number };
       dbStatus: string;
+      disk: Array<{ mount: string; total: number; free: number; usedPercent: number }>;
     }>('/admin/health/stats'),
 
   // ── Lifecycle Hooks ─────────────────────────────────────────────

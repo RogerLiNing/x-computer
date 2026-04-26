@@ -43,6 +43,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'admin', name: getAppName('admin'), description: getAppDescription('admin'), source: 'builtin', icon: 'Shield' },
   { id: 'canvas', name: getAppName('canvas'), description: getAppDescription('canvas'), source: 'builtin', icon: 'Image' },
   { id: 'diff', name: getAppName('diff'), description: getAppDescription('diff'), source: 'builtin', icon: 'GitCompare' },
+  { id: 'system-monitor', name: getAppName('system-monitor'), description: getAppDescription('system-monitor'), source: 'builtin', icon: 'Activity' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -69,6 +70,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   admin: { width: 1000, height: 680 },
   canvas: { width: 900, height: 640 },
   diff: { width: 900, height: 640 },
+  'system-monitor': { width: 680, height: 560 },
 };
 
 function loadInstalled(): AppManifest[] {

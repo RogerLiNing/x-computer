@@ -51,7 +51,8 @@
     "skills": "技能管理",
     "mcp": "MCP 扩展",
     "channels": "渠道管理",
-    "diff": "文件对比"
+    "diff": "文件对比",
+    "system-monitor": "系统监控"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -78,7 +79,8 @@
     "skills": "管理 AI 技能与插件",
     "mcp": "管理 MCP 服务器扩展",
     "channels": "管理邮件、WhatsApp、QQ 等通信渠道",
-    "miniapp": "X 制作的应用"
+    "miniapp": "X 制作的应用",
+    "system-monitor": "实时监控系统资源：CPU、内存、磁盘和任务状态"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",

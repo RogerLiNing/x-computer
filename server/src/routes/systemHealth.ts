@@ -1,7 +1,22 @@
 import os from 'os';
+import fs from 'fs';
 import { Router } from 'express';
 import type { AsyncDatabase } from '../db/database.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+
+function getDiskUsage(): Array<{ mount: string; total: number; free: number; usedPercent: number }> {
+  try {
+    // Node 18+ statfs
+    if ('statfs' in fs) {
+      const stats = (fs as typeof fs & { statfs(path: string): { bsize: number; blocks: number; bfree: number } }).statfs('/');
+      const total = stats.blocks * stats.bsize;
+      const free = stats.bfree * stats.bsize;
+      const used = total - free;
+      return [{ mount: '/', total, free, usedPercent: Math.round((used / total) * 100) }];
+    }
+  } catch { /* ignore */ }
+  return [];
+}
 
 export function createSystemHealthRouter(db: AsyncDatabase): Router {
   const router = Router();
@@ -64,6 +79,7 @@ export function createSystemHealthRouter(db: AsyncDatabase): Router {
           status: dbStatus,
           error: dbError,
         },
+        disk: getDiskUsage(),
         version: process.version,
         pid: process.pid,
         timestamp: Date.now(),
@@ -101,6 +117,7 @@ export function createSystemHealthRouter(db: AsyncDatabase): Router {
             running: taskRow?.running ?? 0,
           },
           dbStatus: 'ok',
+          disk: getDiskUsage(),
         },
       });
     } catch (err) {
