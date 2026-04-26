@@ -57,7 +57,8 @@
     "pomodoro": "番茄钟",
     "world-clock": "世界时钟",
     "bookmarks": "书签管理器",
-    "clipboard-manager": "剪贴板"
+    "clipboard-manager": "剪贴板",
+    "habit-tracker": "习惯追踪"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -90,7 +91,8 @@
     "pomodoro": "专注计时器：番茄工作法，提高专注力",
     "world-clock": "同时查看多个时区的当前时间",
     "bookmarks": "保存、整理和搜索书签",
-    "clipboard-manager": "记录剪贴板历史，固定重要内容，搜索过往复制记录"
+    "clipboard-manager": "记录剪贴板历史，固定重要内容，搜索过往复制记录",
+    "habit-tracker": "追踪每日习惯，查看连续记录，培养持续规律"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",

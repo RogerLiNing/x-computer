@@ -54,7 +54,8 @@
     "pomodoro": "Pomodoro",
     "world-clock": "World Clock",
     "bookmarks": "Bookmarks",
-    "clipboard-manager": "Clipboard"
+    "clipboard-manager": "Clipboard",
+    "habit-tracker": "Habits"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -84,7 +85,8 @@
     "pomodoro": "Focus timer using the Pomodoro technique",
     "world-clock": "View current time in multiple timezones",
     "bookmarks": "Save, organize, and search your bookmarks",
-    "clipboard-manager": "Track clipboard history, pin important items, and search past copies"
+    "clipboard-manager": "Track clipboard history, pin important items, and search past copies",
+    "habit-tracker": "Track daily habits, view streaks, and build consistent routines"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",
