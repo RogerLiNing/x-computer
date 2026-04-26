@@ -55,6 +55,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'calculator', name: getAppName('calculator'), description: getAppDescription('calculator'), source: 'builtin', icon: 'Calculator' },
   { id: 'color-picker', name: getAppName('color-picker'), description: getAppDescription('color-picker'), source: 'builtin', icon: 'Palette' },
   { id: 'dice-roller', name: getAppName('dice-roller'), description: getAppDescription('dice-roller'), source: 'builtin', icon: 'Dices' },
+  { id: 'decision-journal', name: getAppName('decision-journal'), description: getAppDescription('decision-journal'), source: 'builtin', icon: 'BookOpen' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -93,6 +94,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'calculator': { width: 320, height: 520 },
   'color-picker': { width: 480, height: 560 },
   'dice-roller': { width: 380, height: 540 },
+  'decision-journal': { width: 680, height: 620 },
 };
 
 function loadInstalled(): AppManifest[] {

@@ -68,6 +68,7 @@ import { createEmailRouter } from './email.js';
 import { createCalendarRouter } from './calendar.js';
 import { createNotesRouter } from './notes.js';
 import { createBookmarksRouter } from './bookmarks.js';
+import { createDecisionsRouter } from './decisions.js';
 import { createSlackRouter } from './messaging/slack.js';
 import { aiCallsQuota, tasksQuota } from '../subscription/quotaMiddleware.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
@@ -1015,6 +1016,7 @@ export function createApiRouter(
   router.use('/calendar', createCalendarRouter(db));
   router.use('/notes', createNotesRouter(db));
   router.use('/bookmarks', createBookmarksRouter(db));
+  router.use('/decisions', createDecisionsRouter(db));
 
   if (db && signalFireDeps) {
     const doneLogService = new DoneLogService(db);

@@ -396,6 +396,27 @@ export class MysqlDatabase {
 - [ ] 如有重要发现，写入 heartbeat/latest.md
 - [ ] 仅在发现可操作事项时通知用户
 `], true);
+
+    // decision_journals 表
+    await this._run(`CREATE TABLE IF NOT EXISTS decision_journals (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      title TEXT NOT NULL,
+      context TEXT,
+      decision_text TEXT NOT NULL,
+      rationale TEXT,
+      alternatives TEXT,
+      outcome TEXT,
+      outcome_positive TINYINT(1),
+      tags TEXT,
+      status VARCHAR(32) NOT NULL DEFAULT 'open',
+      follow_up_at DATETIME,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`, [], true);
+    await this.ensureIndex('decision_journals', 'idx_decision_journal_user', 'CREATE INDEX idx_decision_journal_user ON decision_journals(user_id)', true);
+    await this.ensureIndex('decision_journals', 'idx_decision_journal_status', 'CREATE INDEX idx_decision_journal_status ON decision_journals(user_id, status)', true);
+    await this.ensureIndex('decision_journals', 'idx_decision_journal_followup', 'CREATE INDEX idx_decision_journal_followup ON decision_journals(user_id, follow_up_at)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1807,6 +1828,80 @@ export class MysqlDatabase {
       [userId, content, now],
     );
     return { user_id: userId, content, updated_at: now };
+  }
+
+  // ── Decision Journals ─────────────────────────────────────────
+
+  async createDecisionJournal(params: {
+    id?: string; userId: string; title: string; context?: string; decisionText: string;
+    rationale?: string; alternatives?: string[]; tags?: string[]; followUpAt?: string;
+  }): Promise<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string }> {
+    const id = params.id ?? uuid();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    await this._run(
+      `INSERT INTO decision_journals (id, user_id, title, context, decision_text, rationale, alternatives, tags, status, follow_up_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
+      [id, params.userId, params.title, params.context ?? null, params.decisionText,
+        params.rationale ?? null, JSON.stringify(params.alternatives ?? []),
+        JSON.stringify(params.tags ?? []), params.followUpAt ?? null, now, now],
+    );
+    return (await this.getDecisionJournal(id, params.userId))!;
+  }
+
+  async listDecisionJournals(userId: string, options?: { status?: string; search?: string }): Promise<Array<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string }>> {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.search) { conditions.push('(title LIKE ? OR decision_text LIKE ? OR rationale LIKE ?)'); const q = `%${options.search}%`; args.push(q, q, q); }
+    const rows = await this._query(`SELECT * FROM decision_journals WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`, args);
+    return (rows as any[]).map(r => ({
+      ...r,
+      alternatives: r.alternatives ? JSON.parse(r.alternatives) : [],
+      tags: r.tags ? JSON.parse(r.tags) : [],
+    }));
+  }
+
+  async getDecisionJournal(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } | undefined> {
+    const rows = await this._query('SELECT * FROM decision_journals WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!rows[0]) return undefined;
+    const r = rows[0] as any;
+    return { ...r, alternatives: r.alternatives ? JSON.parse(r.alternatives) : [], tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async updateDecisionJournal(id: string, userId: string, fields: {
+    title?: string; context?: string | null; decisionText?: string; rationale?: string | null;
+    alternatives?: string[]; outcome?: string | null; outcomePositive?: boolean | null;
+    tags?: string[]; status?: string; followUpAt?: string | null;
+  }): Promise<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } | undefined> {
+    const sets: string[] = ['updated_at = NOW()'];
+    const args: (string | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.context !== undefined) { sets.push('context = ?'); args.push(fields.context); }
+    if (fields.decisionText !== undefined) { sets.push('decision_text = ?'); args.push(fields.decisionText); }
+    if (fields.rationale !== undefined) { sets.push('rationale = ?'); args.push(fields.rationale); }
+    if (fields.alternatives !== undefined) { sets.push('alternatives = ?'); args.push(JSON.stringify(fields.alternatives)); }
+    if (fields.outcome !== undefined) { sets.push('outcome = ?'); args.push(fields.outcome); }
+    if (fields.outcomePositive !== undefined) { sets.push('outcome_positive = ?'); args.push(fields.outcomePositive ? '1' : '0'); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.followUpAt !== undefined) { sets.push('follow_up_at = ?'); args.push(fields.followUpAt); }
+    args.push(id, userId);
+    await this._run(`UPDATE decision_journals SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    return this.getDecisionJournal(id, userId);
+  }
+
+  async deleteDecisionJournal(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM decision_journals WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
+  async getDecisionJournalsForFollowUp(userId: string): Promise<Array<{ id: string; title: string; follow_up_at: string | null; created_at: string }>> {
+    const rows = await this._query(
+      `SELECT id, title, follow_up_at, created_at FROM decision_journals
+       WHERE user_id = ? AND status = 'open' AND follow_up_at IS NOT NULL AND follow_up_at <= NOW()
+       ORDER BY follow_up_at ASC`,
+      [userId],
+    );
+    return rows as any[];
   }
 
   close(): void {

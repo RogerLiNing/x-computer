@@ -33,6 +33,7 @@ import { UnitConverterApp } from './UnitConverterApp';
 import { CalculatorApp } from './CalculatorApp';
 import { ColorPickerApp } from './ColorPickerApp';
 import { DiceRollerApp } from './DiceRollerApp';
+import { DecisionJournalApp } from './DecisionJournalApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -91,6 +92,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <BookmarkManagerApp windowId={windowId} />;
     case 'dice-roller':
       return <DiceRollerApp windowId={windowId} />;
+    case 'decision-journal':
+      return <DecisionJournalApp windowId={windowId} />;
     case 'color-picker':
       return <ColorPickerApp windowId={windowId} />;
     case 'calculator':

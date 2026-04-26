@@ -389,6 +389,53 @@ export const api = {
     }>(url);
   },
 
+  /** 列出决策日志 */
+  decisionsList: (options?: { status?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.search) params.set('search', options.search);
+    const qs = params.toString();
+    return request<Array<{
+      id: string; title: string; context: string | null; decisionText: string;
+      rationale: string | null; alternatives: string[]; outcome: string | null;
+      outcomePositive: boolean | null; tags: string[]; status: string;
+      followUpAt: string | null; createdAt: string; updatedAt: string;
+    }>>(`/decisions${qs ? `?${qs}` : ''}`);
+  },
+
+  /** 创建决策日志 */
+  decisionsCreate: (data: {
+    title: string; decisionText: string; context?: string; rationale?: string;
+    alternatives?: string[]; tags?: string[]; followUpAt?: string;
+  }) =>
+    request<{
+      id: string; title: string; decisionText: string; context: string | null;
+      rationale: string | null; alternatives: string[]; outcome: string | null;
+      outcomePositive: boolean | null; tags: string[]; status: string;
+      followUpAt: string | null; createdAt: string; updatedAt: string;
+    }>('/decisions', { method: 'POST', body: JSON.stringify(data) }),
+
+  /** 更新决策日志 */
+  decisionsUpdate: (id: string, data: {
+    title?: string; context?: string | null; decisionText?: string; rationale?: string | null;
+    alternatives?: string[]; outcome?: string | null; outcomePositive?: boolean | null;
+    tags?: string[]; status?: string; followUpAt?: string | null;
+  }) =>
+    request<{
+      id: string; title: string; decisionText: string; context: string | null;
+      rationale: string | null; alternatives: string[]; outcome: string | null;
+      outcomePositive: boolean | null; tags: string[]; status: string;
+      followUpAt: string | null; createdAt: string; updatedAt: string;
+    }>(`/decisions/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  /** 删除决策日志 */
+  decisionsDelete: (id: string) =>
+    request<void>(`/decisions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 获取待回顾的决策 */
+  decisionsFollowup: () =>
+    request<{ journals: Array<{ id: string; title: string; follow_up_at: string | null; created_at: string }> }>('/decisions/followup'),
+
   /** 获取 OAuth 提供商配置状态（前端据此决定是否显示 OAuth 按钮） */
   oauthGetStatus: () =>
     request<{ google: boolean; github: boolean }>('/auth/oauth/status'),

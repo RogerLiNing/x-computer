@@ -506,6 +506,28 @@ export class SqliteAppDatabase {
 - [ ] 仅在发现可操作事项时通知用户
 ', datetime('now'));
     `);
+    // decision_journals 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS decision_journals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        context TEXT,
+        decision_text TEXT NOT NULL,
+        rationale TEXT,
+        alternatives TEXT,
+        outcome TEXT,
+        outcome_positive INTEGER,
+        tags TEXT,
+        status TEXT NOT NULL DEFAULT 'open',
+        follow_up_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_decision_journal_user ON decision_journals(user_id);
+      CREATE INDEX IF NOT EXISTS idx_decision_journal_status ON decision_journals(user_id, status);
+      CREATE INDEX IF NOT EXISTS idx_decision_journal_followup ON decision_journals(user_id, follow_up_at);
+    `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -1827,6 +1849,80 @@ export class SqliteAppDatabase {
     return { user_id: userId, content, updated_at: now };
   }
 
+  // ── Decision Journals ─────────────────────────────────────────
+
+  createDecisionJournal(params: {
+    id?: string; userId: string; title: string; context?: string; decisionText: string;
+    rationale?: string; alternatives?: string[]; tags?: string[]; followUpAt?: string;
+  }): { id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } {
+    const id = params.id ?? uuid();
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO decision_journals (id, user_id, title, context, decision_text, rationale, alternatives, tags, status, follow_up_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)`,
+    ).run(
+      id, params.userId, params.title, params.context ?? null, params.decisionText,
+      params.rationale ?? null, JSON.stringify(params.alternatives ?? []),
+      JSON.stringify(params.tags ?? []), params.followUpAt ?? null, now, now,
+    );
+    return this.getDecisionJournal(id, params.userId)!;
+  }
+
+  listDecisionJournals(userId: string, options?: { status?: string; search?: string }): Array<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string }> {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.search) { conditions.push('(title LIKE ? OR decision_text LIKE ? OR rationale LIKE ?)'); const q = `%${options.search}%`; args.push(q, q, q); }
+    const rows = this.db.prepare(`SELECT * FROM decision_journals WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`).all(...args) as any[];
+    return rows.map(r => ({
+      ...r,
+      alternatives: r.alternatives ? JSON.parse(r.alternatives) : [],
+      tags: r.tags ? JSON.parse(r.tags) : [],
+      outcome_positive: r.outcome_positive,
+    }));
+  }
+
+  getDecisionJournal(id: string, userId: string): { id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } | undefined {
+    const row = this.db.prepare('SELECT * FROM decision_journals WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    if (!row) return undefined;
+    return { ...row, alternatives: row.alternatives ? JSON.parse(row.alternatives) : [], tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  updateDecisionJournal(id: string, userId: string, fields: {
+    title?: string; context?: string | null; decisionText?: string; rationale?: string | null;
+    alternatives?: string[]; outcome?: string | null; outcomePositive?: boolean | null;
+    tags?: string[]; status?: string; followUpAt?: string | null;
+  }): { id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } | undefined {
+    const sets: string[] = ['updated_at = ?'];
+    const args: (string | null)[] = [new Date().toISOString()];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.context !== undefined) { sets.push('context = ?'); args.push(fields.context); }
+    if (fields.decisionText !== undefined) { sets.push('decision_text = ?'); args.push(fields.decisionText); }
+    if (fields.rationale !== undefined) { sets.push('rationale = ?'); args.push(fields.rationale); }
+    if (fields.alternatives !== undefined) { sets.push('alternatives = ?'); args.push(JSON.stringify(fields.alternatives)); }
+    if (fields.outcome !== undefined) { sets.push('outcome = ?'); args.push(fields.outcome); }
+    if (fields.outcomePositive !== undefined) { sets.push('outcome_positive = ?'); args.push(fields.outcomePositive ? '1' : '0'); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.followUpAt !== undefined) { sets.push('follow_up_at = ?'); args.push(fields.followUpAt); }
+    args.push(id, userId);
+    this.db.prepare(`UPDATE decision_journals SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getDecisionJournal(id, userId);
+  }
+
+  deleteDecisionJournal(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM decision_journals WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
+  getDecisionJournalsForFollowUp(userId: string): Array<{ id: string; title: string; follow_up_at: string | null; created_at: string }> {
+    const now = new Date().toISOString();
+    return this.db.prepare(
+      `SELECT id, title, follow_up_at, created_at FROM decision_journals
+       WHERE user_id = ? AND status = 'open' AND follow_up_at IS NOT NULL AND follow_up_at <= ?
+       ORDER BY follow_up_at ASC`,
+    ).all(userId, now) as any[];
+  }
+
   close(): void {
     this.db.close();
   }
@@ -2386,6 +2482,32 @@ export class SqliteDatabaseAdapter {
   }
   setHeartbeatChecklist(userId: string, content: string): Promise<{ user_id: string; content: string; updated_at: string }> {
     return Promise.resolve(this.db.setHeartbeatChecklist(userId, content));
+  }
+  createDecisionJournal(params: {
+    id?: string; userId: string; title: string; context?: string; decisionText: string;
+    rationale?: string; alternatives?: string[]; tags?: string[]; followUpAt?: string;
+  }): Promise<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.createDecisionJournal(params));
+  }
+  listDecisionJournals(userId: string, options?: { status?: string; search?: string }): Promise<Array<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string }>> {
+    return Promise.resolve(this.db.listDecisionJournals(userId, options));
+  }
+  getDecisionJournal(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.getDecisionJournal(id, userId));
+  }
+  updateDecisionJournal(id: string, userId: string, fields: {
+    title?: string; context?: string | null; decisionText?: string; rationale?: string | null;
+    alternatives?: string[]; outcome?: string | null; outcomePositive?: boolean | null;
+    tags?: string[]; status?: string; followUpAt?: string | null;
+  }): Promise<{ id: string; user_id: string; title: string; context: string | null; decision_text: string; rationale: string | null; alternatives: string[]; outcome: string | null; outcome_positive: number | null; tags: string[]; status: string; follow_up_at: string | null; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.updateDecisionJournal(id, userId, fields));
+  }
+  deleteDecisionJournal(id: string, userId: string): Promise<void> {
+    this.db.deleteDecisionJournal(id, userId);
+    return Promise.resolve();
+  }
+  getDecisionJournalsForFollowUp(userId: string): Promise<Array<{ id: string; title: string; follow_up_at: string | null; created_at: string }>> {
+    return Promise.resolve(this.db.getDecisionJournalsForFollowUp(userId));
   }
   close(): void {
     this.db.close();
