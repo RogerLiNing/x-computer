@@ -228,6 +228,7 @@ export type BuiltinAppId =
   | 'dice-roller'
   | 'decision-journal'
   | 'delegation-tracker'
+  | 'weekly-planner'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

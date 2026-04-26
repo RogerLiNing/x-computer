@@ -550,6 +550,41 @@ export class SqliteAppDatabase {
       CREATE INDEX IF NOT EXISTS idx_delegations_status ON delegations(user_id, status);
       CREATE INDEX IF NOT EXISTS idx_delegations_due ON delegations(user_id, due_at);
     `);
+
+    // weekly_plans 表
+    this.db.exec(`
+        CREATE TABLE IF NOT EXISTS weekly_plans (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          week_start TEXT NOT NULL,
+          week_end TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active',
+          goals TEXT,
+          reflection TEXT,
+          rating INTEGER,
+          tags TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_weekly_plans_user ON weekly_plans(user_id);
+        CREATE INDEX IF NOT EXISTS idx_weekly_plans_status ON weekly_plans(user_id, status);
+        CREATE INDEX IF NOT EXISTS idx_weekly_plans_week ON weekly_plans(user_id, week_start);
+
+        CREATE TABLE IF NOT EXISTS weekly_plan_entries (
+          id TEXT PRIMARY KEY,
+          plan_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          date TEXT NOT NULL,
+          completed INTEGER NOT NULL DEFAULT 0,
+          notes TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+          FOREIGN KEY (plan_id) REFERENCES weekly_plans(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_weekly_entries_plan ON weekly_plan_entries(plan_id);
+        CREATE INDEX IF NOT EXISTS idx_weekly_entries_user ON weekly_plan_entries(user_id);
+      `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -2010,6 +2045,92 @@ export class SqliteAppDatabase {
        ORDER BY due_at ASC`,
     ).all(userId, now) as any[];
   }
+
+  // ── Weekly Plans ────────────────────────────────────────────
+
+  createWeeklyPlan(params: {
+    userId: string; title: string; weekStart: string; weekEnd: string;
+    goals?: string[]; tags?: string[];
+  }): { id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO weekly_plans (id, user_id, title, week_start, week_end, status, goals, tags, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`
+    ).run(id, params.userId, params.title, params.weekStart, params.weekEnd,
+      params.goals ? JSON.stringify(params.goals) : null,
+      params.tags ? JSON.stringify(params.tags) : null,
+      now, now);
+    return { id, user_id: params.userId, title: params.title, week_start: params.weekStart, week_end: params.weekEnd, status: 'active', goals: params.goals ?? [], reflection: null, rating: null, tags: params.tags ?? [], created_at: now, updated_at: now };
+  }
+
+  listWeeklyPlans(userId: string, options?: { status?: string; year?: number }): Array<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string }> {
+    const conditions = ['user_id = ?'];
+    const args: (string | number)[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.year) { conditions.push("strftime('%Y', week_start) = ?"); args.push(String(options.year)); }
+    const rows = this.db.prepare(`SELECT * FROM weekly_plans WHERE ${conditions.join(' AND ')} ORDER BY week_start DESC`).all(...args) as any[];
+    return rows.map(r => ({ ...r, goals: r.goals ? JSON.parse(r.goals) : [], tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  getWeeklyPlan(id: string, userId: string): { id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } | undefined {
+    const row = this.db.prepare('SELECT * FROM weekly_plans WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    if (!row) return undefined;
+    return { ...row, goals: row.goals ? JSON.parse(row.goals) : [], tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  updateWeeklyPlan(id: string, userId: string, fields: {
+    title?: string; weekStart?: string; weekEnd?: string; status?: string;
+    goals?: string[]; reflection?: string | null; rating?: number | null; tags?: string[];
+  }): { id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } | undefined {
+    const sets: string[] = ['updated_at = ?'];
+    const args: (string | number | null)[] = [new Date().toISOString()];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.weekStart !== undefined) { sets.push('week_start = ?'); args.push(fields.weekStart); }
+    if (fields.weekEnd !== undefined) { sets.push('week_end = ?'); args.push(fields.weekEnd); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.goals !== undefined) { sets.push('goals = ?'); args.push(JSON.stringify(fields.goals)); }
+    if (fields.reflection !== undefined) { sets.push('reflection = ?'); args.push(fields.reflection); }
+    if (fields.rating !== undefined) { sets.push('rating = ?'); args.push(fields.rating ?? null); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    args.push(id, userId);
+    this.db.prepare(`UPDATE weekly_plans SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getWeeklyPlan(id, userId);
+  }
+
+  deleteWeeklyPlan(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM weekly_plan_entries WHERE plan_id = ?').run(id);
+    this.db.prepare('DELETE FROM weekly_plans WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
+  // ── Weekly Plan Entries ─────────────────────────────────────
+
+  upsertWeeklyPlanEntry(params: {
+    planId: string; userId: string; date: string; completed?: boolean; notes?: string;
+  }): { id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string } {
+    const existing = this.db.prepare('SELECT * FROM weekly_plan_entries WHERE plan_id = ? AND date = ?').get(params.planId, params.date) as any;
+    const now = new Date().toISOString();
+    if (existing) {
+      const sets: string[] = ['updated_at = ?'];
+      const args: (string | number)[] = [now];
+      if (params.completed !== undefined) { sets.push('completed = ?'); args.push(params.completed ? 1 : 0); }
+      if (params.notes !== undefined) { sets.push('notes = ?'); args.push(params.notes ?? null); }
+      args.push(existing.id);
+      this.db.prepare(`UPDATE weekly_plan_entries SET ${sets.join(', ')} WHERE id = ?`).run(...args);
+      return { ...existing, completed: params.completed ?? !!existing.completed, notes: params.notes !== undefined ? (params.notes ?? null) : existing.notes, updated_at: now };
+    }
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    this.db.prepare(
+      `INSERT INTO weekly_plan_entries (id, plan_id, user_id, date, completed, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, params.planId, params.userId, params.date, params.completed ? 1 : 0, params.notes ?? null, now, now);
+    return { id, plan_id: params.planId, user_id: params.userId, date: params.date, completed: !!params.completed, notes: params.notes ?? null, created_at: now, updated_at: now };
+  }
+
+  listWeeklyPlanEntries(planId: string): Array<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }> {
+    const rows = this.db.prepare('SELECT * FROM weekly_plan_entries WHERE plan_id = ? ORDER BY date ASC').all(planId) as any[];
+    return rows.map(r => ({ ...r, completed: !!r.completed }));
+  }
 }
 
 /**
@@ -2617,6 +2738,28 @@ export class SqliteDatabaseAdapter {
   }
   getDelegationsForFollowUp(userId: string): Promise<Array<{ id: string; title: string; delegated_to: string; due_at: string | null; created_at: string }>> {
     return Promise.resolve(this.db.getDelegationsForFollowUp(userId));
+  }
+  createWeeklyPlan(params: { userId: string; title: string; weekStart: string; weekEnd: string; goals?: string[]; tags?: string[] }): Promise<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.createWeeklyPlan(params));
+  }
+  listWeeklyPlans(userId: string, options?: { status?: string; year?: number }): Promise<Array<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string }>> {
+    return Promise.resolve(this.db.listWeeklyPlans(userId, options));
+  }
+  getWeeklyPlan(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.getWeeklyPlan(id, userId));
+  }
+  updateWeeklyPlan(id: string, userId: string, fields: { title?: string; weekStart?: string; weekEnd?: string; status?: string; goals?: string[]; reflection?: string | null; rating?: number | null; tags?: string[] }): Promise<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.updateWeeklyPlan(id, userId, fields));
+  }
+  deleteWeeklyPlan(id: string, userId: string): Promise<void> {
+    this.db.deleteWeeklyPlan(id, userId);
+    return Promise.resolve();
+  }
+  upsertWeeklyPlanEntry(params: { planId: string; userId: string; date: string; completed?: boolean; notes?: string }): Promise<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.upsertWeeklyPlanEntry(params));
+  }
+  listWeeklyPlanEntries(planId: string): Promise<Array<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }>> {
+    return Promise.resolve(this.db.listWeeklyPlanEntries(planId));
   }
   close(): void {
     this.db.close();

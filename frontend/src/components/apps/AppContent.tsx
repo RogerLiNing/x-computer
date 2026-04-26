@@ -35,6 +35,7 @@ import { ColorPickerApp } from './ColorPickerApp';
 import { DiceRollerApp } from './DiceRollerApp';
 import DecisionJournalApp from './DecisionJournalApp';
 import DelegationTrackerApp from './DelegationTrackerApp';
+import WeeklyPlannerApp from './WeeklyPlannerApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -97,6 +98,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <DecisionJournalApp windowId={windowId} />;
     case 'delegation-tracker':
       return <DelegationTrackerApp windowId={windowId} />;
+    case 'weekly-planner':
+      return <WeeklyPlannerApp windowId={windowId} />;
     case 'color-picker':
       return <ColorPickerApp windowId={windowId} />;
     case 'calculator':

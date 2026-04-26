@@ -372,7 +372,7 @@ export class MysqlDatabase {
     // heartbeat_checklist 表
     await this._run(`CREATE TABLE IF NOT EXISTS heartbeat_checklist (
       user_id VARCHAR(128) PRIMARY KEY,
-      content TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
     )`, [], true);
 
@@ -438,6 +438,40 @@ export class MysqlDatabase {
     await this.ensureIndex('delegations', 'idx_delegations_user', 'CREATE INDEX idx_delegations_user ON delegations(user_id)', true);
     await this.ensureIndex('delegations', 'idx_delegations_status', 'CREATE INDEX idx_delegations_status ON delegations(user_id, status)', true);
     await this.ensureIndex('delegations', 'idx_delegations_due', 'CREATE INDEX idx_delegations_due ON delegations(user_id, due_at)', true);
+
+    // weekly_plans 表
+    await this._run(`CREATE TABLE IF NOT EXISTS weekly_plans (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      title TEXT NOT NULL,
+      week_start DATE NOT NULL,
+      week_end DATE NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'active',
+      goals TEXT,
+      reflection TEXT,
+      rating INT,
+      tags TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`, [], true);
+    await this.ensureIndex('weekly_plans', 'idx_weekly_plans_user', 'CREATE INDEX idx_weekly_plans_user ON weekly_plans(user_id)', true);
+    await this.ensureIndex('weekly_plans', 'idx_weekly_plans_status', 'CREATE INDEX idx_weekly_plans_status ON weekly_plans(user_id, status)', true);
+    await this.ensureIndex('weekly_plans', 'idx_weekly_plans_week', 'CREATE INDEX idx_weekly_plans_week ON weekly_plans(user_id, week_start)', true);
+
+    // weekly_plan_entries 表
+    await this._run(`CREATE TABLE IF NOT EXISTS weekly_plan_entries (
+      id VARCHAR(64) PRIMARY KEY,
+      plan_id VARCHAR(64) NOT NULL,
+      user_id VARCHAR(128) NOT NULL,
+      date DATE NOT NULL,
+      completed TINYINT(1) NOT NULL DEFAULT 0,
+      notes TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (plan_id) REFERENCES weekly_plans(id) ON DELETE CASCADE
+    )`, [], true);
+    await this.ensureIndex('weekly_plan_entries', 'idx_weekly_entries_plan', 'CREATE INDEX idx_weekly_entries_plan ON weekly_plan_entries(plan_id)', true);
+    await this.ensureIndex('weekly_plan_entries', 'idx_weekly_entries_user', 'CREATE INDEX idx_weekly_entries_user ON weekly_plan_entries(user_id)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1988,6 +2022,92 @@ export class MysqlDatabase {
       [userId],
     );
     return rows as any[];
+  }
+
+  // ── Weekly Plans ────────────────────────────────────────────
+
+  async createWeeklyPlan(params: {
+    userId: string; title: string; weekStart: string; weekEnd: string;
+    goals?: string[]; tags?: string[];
+  }): Promise<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string }> {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    await this._run(
+      `INSERT INTO weekly_plans (id, user_id, title, week_start, week_end, status, goals, tags)
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?)`,
+      [id, params.userId, params.title, params.weekStart, params.weekEnd,
+       params.goals ? JSON.stringify(params.goals) : null,
+       params.tags ? JSON.stringify(params.tags) : null],
+    );
+    const row = await this.getWeeklyPlan(id, params.userId);
+    return row!;
+  }
+
+  async listWeeklyPlans(userId: string, options?: { status?: string; year?: number }): Promise<Array<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string }>> {
+    const conditions = ['user_id = ?'];
+    const args: (string | number)[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.year) { conditions.push('YEAR(week_start) = ?'); args.push(options.year); }
+    const rows = await this._query(`SELECT * FROM weekly_plans WHERE ${conditions.join(' AND ')} ORDER BY week_start DESC`, args);
+    return (rows as any[]).map(r => ({ ...r, goals: r.goals ? JSON.parse(r.goals) : [], tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  async getWeeklyPlan(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    const rows = await this._query('SELECT * FROM weekly_plans WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!rows[0]) return undefined;
+    const r = rows[0] as any;
+    return { ...r, goals: r.goals ? JSON.parse(r.goals) : [], tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async updateWeeklyPlan(id: string, userId: string, fields: {
+    title?: string; weekStart?: string; weekEnd?: string; status?: string;
+    goals?: string[]; reflection?: string | null; rating?: number | null; tags?: string[];
+  }): Promise<{ id: string; user_id: string; title: string; week_start: string; week_end: string; status: string; goals: string[]; reflection: string | null; rating: number | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    const sets: string[] = ['updated_at = NOW()'];
+    const args: (string | number | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.weekStart !== undefined) { sets.push('week_start = ?'); args.push(fields.weekStart); }
+    if (fields.weekEnd !== undefined) { sets.push('week_end = ?'); args.push(fields.weekEnd); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.goals !== undefined) { sets.push('goals = ?'); args.push(JSON.stringify(fields.goals)); }
+    if (fields.reflection !== undefined) { sets.push('reflection = ?'); args.push(fields.reflection); }
+    if (fields.rating !== undefined) { sets.push('rating = ?'); args.push(fields.rating ?? null); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    args.push(id, userId);
+    await this._run(`UPDATE weekly_plans SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    return this.getWeeklyPlan(id, userId);
+  }
+
+  async deleteWeeklyPlan(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM weekly_plan_entries WHERE plan_id = ?', [id]);
+    await this._run('DELETE FROM weekly_plans WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
+  async upsertWeeklyPlanEntry(params: {
+    planId: string; userId: string; date: string; completed?: boolean; notes?: string;
+  }): Promise<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }> {
+    const existing = await this._query('SELECT * FROM weekly_plan_entries WHERE plan_id = ? AND date = ?', [params.planId, params.date]);
+    if (existing[0]) {
+      const sets: string[] = ['updated_at = NOW()'];
+      const args: (string | number | null)[] = [];
+      if (params.completed !== undefined) { sets.push('completed = ?'); args.push(params.completed ? 1 : 0); }
+      if (params.notes !== undefined) { sets.push('notes = ?'); args.push(params.notes ?? null); }
+      args.push(existing[0].id as string);
+      await this._run(`UPDATE weekly_plan_entries SET ${sets.join(', ')} WHERE id = ?`, args);
+      return { ...(existing[0] as any), completed: params.completed ?? !!existing[0].completed, notes: params.notes !== undefined ? (params.notes ?? null) : existing[0].notes };
+    }
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    await this._run(
+      `INSERT INTO weekly_plan_entries (id, plan_id, user_id, date, completed, notes) VALUES (?, ?, ?, ?, ?, ?)`,
+      [id, params.planId, params.userId, params.date, params.completed ? 1 : 0, params.notes ?? null],
+    );
+    const rows = await this._query('SELECT * FROM weekly_plan_entries WHERE id = ?', [id]);
+    const r = rows[0] as any;
+    return { ...r, completed: !!r.completed };
+  }
+
+  async listWeeklyPlanEntries(planId: string): Promise<Array<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }>> {
+    const rows = await this._query('SELECT * FROM weekly_plan_entries WHERE plan_id = ? ORDER BY date ASC', [planId]);
+    return (rows as any[]).map(r => ({ ...r, completed: !!r.completed }));
   }
 
   close(): void {

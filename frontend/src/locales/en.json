@@ -62,7 +62,8 @@
     "color-picker": "Colors",
     "dice-roller": "Dice",
     "decision-journal": "Decisions",
-    "delegation-tracker": "Delegations"
+    "delegation-tracker": "Delegations",
+    "weekly-planner": "Weekly Planner"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -100,7 +101,8 @@
     "color-picker": "Visual color picker with HEX, RGB, HSL values, complementary colors, and history",
     "dice-roller": "Roll dice (D4, D6, D8, D10, D12, D20, D100) with modifier support and history",
     "decision-journal": "Record decisions with context, rationale, and track outcomes over time",
-    "delegation-tracker": "Track delegated tasks and follow up on commitments"
+    "delegation-tracker": "Track delegated tasks and follow up on commitments",
+    "weekly-planner": "Plan your week with goals, daily check-ins, and weekly reviews"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

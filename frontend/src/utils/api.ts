@@ -486,6 +486,63 @@ export const api = {
       id: string; title: string; delegatedTo: string; dueAt: string | null; status: string;
     }> }>('/delegations/overdue'),
 
+  // ── Weekly Planner ──────────────────────────────────────────
+
+  /** 列出周计划 */
+  weeklyPlansList: (options?: { status?: string; year?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.year != null) params.set('year', String(options.year));
+    const qs = params.toString();
+    return request<Array<{
+      id: string; title: string; weekStart: string; weekEnd: string; status: string;
+      goals: string[]; reflection: string | null; rating: number | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+    }>>(`/weekly-plans${qs ? `?${qs}` : ''}`);
+  },
+
+  /** 获取单个周计划（含条目） */
+  weeklyPlansGet: (id: string) =>
+    request<{
+      id: string; title: string; weekStart: string; weekEnd: string; status: string;
+      goals: string[]; reflection: string | null; rating: number | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+      entries: Array<{ id: string; planId: string; date: string; completed: boolean; notes: string | null; createdAt: string; updatedAt: string }>;
+    }>(`/weekly-plans/${encodeURIComponent(id)}`),
+
+  /** 创建周计划 */
+  weeklyPlansCreate: (data: {
+    title: string; weekStart: string; weekEnd: string;
+    goals?: string[]; tags?: string[];
+  }) =>
+    request<{
+      id: string; title: string; weekStart: string; weekEnd: string; status: string;
+      goals: string[]; reflection: string | null; rating: number | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+    }>('/weekly-plans', { method: 'POST', body: JSON.stringify(data) }),
+
+  /** 更新周计划 */
+  weeklyPlansUpdate: (id: string, data: {
+    title?: string; weekStart?: string; weekEnd?: string; status?: string;
+    goals?: string[]; reflection?: string | null; rating?: number | null; tags?: string[];
+  }) =>
+    request<{
+      id: string; title: string; weekStart: string; weekEnd: string; status: string;
+      goals: string[]; reflection: string | null; rating: number | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+    }>(`/weekly-plans/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  /** 删除周计划 */
+  weeklyPlansDelete: (id: string) =>
+    request<void>(`/weekly-plans/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 更新日条目 */
+  weeklyPlansUpdateEntry: (planId: string, data: { date: string; completed?: boolean; notes?: string }) =>
+    request<{ id: string; planId: string; date: string; completed: boolean; notes: string | null; createdAt: string; updatedAt: string }>(
+      `/weekly-plans/${encodeURIComponent(planId)}/entries`,
+      { method: 'PUT', body: JSON.stringify(data) },
+    ),
+
   /** 获取 OAuth 提供商配置状态（前端据此决定是否显示 OAuth 按钮） */
   oauthGetStatus: () =>
     request<{ google: boolean; github: boolean }>('/auth/oauth/status'),
