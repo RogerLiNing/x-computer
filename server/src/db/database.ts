@@ -1694,6 +1694,56 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM quick_notes WHERE id = ? AND user_id = ?').run(id, userId);
   }
 
+  // ── Bookmarks ─────────────────────────────────────────────────
+
+  createBookmark(params: {
+    id?: string; userId: string; title: string; url: string; description?: string; folder?: string; tags?: string[]; favicon?: string;
+  }): { id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } {
+    const id = params.id ?? uuid();
+    const tags = JSON.stringify(params.tags ?? []);
+    this.db.prepare(
+      `INSERT INTO bookmarks (id, user_id, title, url, description, folder, tags, favicon) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, params.userId, params.title, params.url, params.description ?? null, params.folder ?? '/', tags, params.favicon ?? null);
+    const row = this.db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id) as any;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  listBookmarks(userId: string, options?: { folder?: string; search?: string }): { id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string }[] {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.folder) { conditions.push('folder = ?'); args.push(options.folder); }
+    if (options?.search) { conditions.push('(title LIKE ? OR url LIKE ?)'); const q = `%${options.search}%`; args.push(q, q); }
+    const rows = this.db.prepare(`SELECT * FROM bookmarks WHERE ${conditions.join(' AND ')} ORDER BY title ASC`).all(...args) as any[];
+    return rows.map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  getBookmark(id: string, userId: string): { id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } | undefined {
+    const row = this.db.prepare('SELECT * FROM bookmarks WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    if (!row) return undefined;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  updateBookmark(id: string, userId: string, fields: {
+    title?: string; url?: string; description?: string | null; folder?: string; tags?: string[]; favicon?: string | null;
+  }): { id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } | undefined {
+    const sets: string[] = [];
+    const args: (string | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.url !== undefined) { sets.push('url = ?'); args.push(fields.url); }
+    if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description ?? null); }
+    if (fields.folder !== undefined) { sets.push('folder = ?'); args.push(fields.folder); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    if (fields.favicon !== undefined) { sets.push('favicon = ?'); args.push(fields.favicon ?? null); }
+    if (sets.length === 0) return this.getBookmark(id, userId);
+    args.push(id, userId);
+    this.db.prepare(`UPDATE bookmarks SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getBookmark(id, userId);
+  }
+
+  deleteBookmark(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM bookmarks WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -2214,6 +2264,26 @@ export class SqliteDatabaseAdapter {
   }
   deleteQuickNote(id: string, userId: string): Promise<void> {
     this.db.deleteQuickNote(id, userId);
+    return Promise.resolve();
+  }
+  createBookmark(params: {
+    id?: string; userId: string; title: string; url: string; description?: string; folder?: string; tags?: string[]; favicon?: string;
+  }): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.createBookmark(params));
+  }
+  listBookmarks(userId: string, options?: { folder?: string; search?: string }): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string }[]> {
+    return Promise.resolve(this.db.listBookmarks(userId, options));
+  }
+  getBookmark(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.getBookmark(id, userId));
+  }
+  updateBookmark(id: string, userId: string, fields: {
+    title?: string; url?: string; description?: string | null; folder?: string; tags?: string[]; favicon?: string | null;
+  }): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.updateBookmark(id, userId, fields));
+  }
+  deleteBookmark(id: string, userId: string): Promise<void> {
+    this.db.deleteBookmark(id, userId);
     return Promise.resolve();
   }
   close(): void {

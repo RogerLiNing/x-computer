@@ -25,6 +25,7 @@ import { SystemMonitorApp } from './SystemMonitorApp';
 import { QuickNotesApp } from './QuickNotesApp';
 import { PomodoroTimerApp } from './PomodoroTimerApp';
 import { WorldClockApp } from './WorldClockApp';
+import { BookmarkManagerApp } from './BookmarkManagerApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -79,6 +80,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <PomodoroTimerApp windowId={windowId} />;
     case 'world-clock':
       return <WorldClockApp windowId={windowId} />;
+    case 'bookmarks':
+      return <BookmarkManagerApp windowId={windowId} />;
     case 'image-viewer':
       return <ImageViewerApp windowId={windowId} metadata={metadata} />;
     case 'office-viewer':

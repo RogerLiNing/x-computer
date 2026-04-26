@@ -1671,6 +1671,58 @@ export class MysqlDatabase {
     await this._run('DELETE FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
   }
 
+  // ── Bookmarks ───────────────────────────────────────────────
+
+  async createBookmark(params: {
+    id?: string; userId: string; title: string; url: string; description?: string; folder?: string; tags?: string[]; favicon?: string;
+  }): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string }> {
+    const id = params.id ?? uuid();
+    await this._run(
+      'INSERT INTO bookmarks (id, user_id, title, url, description, folder, tags, favicon) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, params.userId, params.title, params.url, params.description ?? null, params.folder ?? '/', JSON.stringify(params.tags ?? []), params.favicon ?? null],
+    );
+    const rows = await this._query('SELECT * FROM bookmarks WHERE id = ?', [id]);
+    const row = rows[0] as any;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  async listBookmarks(userId: string, options?: { folder?: string; search?: string }): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string }[]> {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.folder) { conditions.push('folder = ?'); args.push(options.folder); }
+    if (options?.search) { conditions.push('(title LIKE ? OR url LIKE ?)'); const q = `%${options.search}%`; args.push(q, q); }
+    const rows = await this._query(`SELECT * FROM bookmarks WHERE ${conditions.join(' AND ')} ORDER BY title ASC`, args);
+    return (rows as any[]).map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  async getBookmark(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } | undefined> {
+    const rows = await this._query('SELECT * FROM bookmarks WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!rows[0]) return undefined;
+    const row = rows[0] as any;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  async updateBookmark(id: string, userId: string, fields: {
+    title?: string; url?: string; description?: string | null; folder?: string; tags?: string[]; favicon?: string | null;
+  }): Promise<{ id: string; user_id: string; title: string; url: string; description: string | null; folder: string; tags: string[]; favicon: string | null; created_at: string; updated_at: string } | undefined> {
+    const sets: string[] = [];
+    const args: (string | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.url !== undefined) { sets.push('url = ?'); args.push(fields.url); }
+    if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description ?? null); }
+    if (fields.folder !== undefined) { sets.push('folder = ?'); args.push(fields.folder); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    if (fields.favicon !== undefined) { sets.push('favicon = ?'); args.push(fields.favicon ?? null); }
+    if (sets.length === 0) return this.getBookmark(id, userId);
+    args.push(id, userId);
+    await this._run(`UPDATE bookmarks SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    return this.getBookmark(id, userId);
+  }
+
+  async deleteBookmark(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM bookmarks WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
   close(): void {
     this.pool.end();
   }

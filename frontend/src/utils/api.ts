@@ -2177,4 +2177,39 @@ export const api = {
 
   notesDelete: (id: string) =>
     request<void>(`/notes/${id}`, { method: 'DELETE' }),
+
+  // ── Bookmarks ──────────────────────────────────────────────────
+
+  bookmarksList: (options?: { folder?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.folder) params.set('folder', options.folder);
+    if (options?.search) params.set('search', options.search);
+    const qs = params.toString();
+    return request<Array<{
+      id: string; title: string; url: string; description: string | null;
+      folder: string; tags: string[]; favicon: string | null;
+      createdAt: string; updatedAt: string;
+    }>>(`/bookmarks${qs ? `?${qs}` : ''}`);
+  },
+
+  bookmarksCreate: (params: {
+    title?: string; url?: string; description?: string; folder?: string; tags?: string[]; favicon?: string;
+  }) =>
+    request<{
+      id: string; title: string; url: string; description: string | null;
+      folder: string; tags: string[]; favicon: string | null;
+      createdAt: string; updatedAt: string;
+    }>('/bookmarks', { method: 'POST', body: JSON.stringify(params) }),
+
+  bookmarksUpdate: (id: string, fields: {
+    title?: string; url?: string; description?: string | null; folder?: string; tags?: string[]; favicon?: string | null;
+  }) =>
+    request<{
+      id: string; title: string; url: string; description: string | null;
+      folder: string; tags: string[]; favicon: string | null;
+      createdAt: string; updatedAt: string;
+    }>(`/bookmarks/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
+
+  bookmarksDelete: (id: string) =>
+    request<void>(`/bookmarks/${id}`, { method: 'DELETE' }),
 };

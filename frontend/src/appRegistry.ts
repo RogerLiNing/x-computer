@@ -47,6 +47,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'quick-notes', name: getAppName('quick-notes'), description: getAppDescription('quick-notes'), source: 'builtin', icon: 'StickyNote' },
   { id: 'pomodoro', name: getAppName('pomodoro'), description: getAppDescription('pomodoro'), source: 'builtin', icon: 'Timer' },
   { id: 'world-clock', name: getAppName('world-clock'), description: getAppDescription('world-clock'), source: 'builtin', icon: 'Globe' },
+  { id: 'bookmarks', name: getAppName('bookmarks'), description: getAppDescription('bookmarks'), source: 'builtin', icon: 'Bookmark' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -77,6 +78,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'quick-notes': { width: 720, height: 540 },
   'pomodoro': { width: 400, height: 560 },
   'world-clock': { width: 560, height: 500 },
+  'bookmarks': { width: 800, height: 600 },
 };
 
 function loadInstalled(): AppManifest[] {

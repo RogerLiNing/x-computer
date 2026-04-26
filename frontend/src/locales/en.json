@@ -52,7 +52,8 @@
     "system-monitor": "System Monitor",
     "quick-notes": "Quick Notes",
     "pomodoro": "Pomodoro",
-    "world-clock": "World Clock"
+    "world-clock": "World Clock",
+    "bookmarks": "Bookmarks"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -80,7 +81,8 @@
     "system-monitor": "Real-time system monitoring: CPU, memory, disk, and task stats",
     "quick-notes": "Quickly capture ideas, todos, and inspirations",
     "pomodoro": "Focus timer using the Pomodoro technique",
-    "world-clock": "View current time in multiple timezones"
+    "world-clock": "View current time in multiple timezones",
+    "bookmarks": "Save, organize, and search your bookmarks"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

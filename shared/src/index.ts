@@ -218,6 +218,7 @@ export type BuiltinAppId =
   | 'quick-notes'
   | 'pomodoro'
   | 'world-clock'
+  | 'bookmarks'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
