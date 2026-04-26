@@ -53,6 +53,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'password-generator', name: getAppName('password-generator'), description: getAppDescription('password-generator'), source: 'builtin', icon: 'Key' },
   { id: 'unit-converter', name: getAppName('unit-converter'), description: getAppDescription('unit-converter'), source: 'builtin', icon: 'ArrowLeftRight' },
   { id: 'calculator', name: getAppName('calculator'), description: getAppDescription('calculator'), source: 'builtin', icon: 'Calculator' },
+  { id: 'color-picker', name: getAppName('color-picker'), description: getAppDescription('color-picker'), source: 'builtin', icon: 'Palette' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -89,6 +90,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'password-generator': { width: 480, height: 560 },
   'unit-converter': { width: 480, height: 580 },
   'calculator': { width: 320, height: 520 },
+  'color-picker': { width: 480, height: 560 },
 };
 
 function loadInstalled(): AppManifest[] {

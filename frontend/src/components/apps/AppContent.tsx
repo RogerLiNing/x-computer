@@ -31,6 +31,7 @@ import { HabitTrackerApp } from './HabitTrackerApp';
 import { PasswordGeneratorApp } from './PasswordGeneratorApp';
 import { UnitConverterApp } from './UnitConverterApp';
 import { CalculatorApp } from './CalculatorApp';
+import { ColorPickerApp } from './ColorPickerApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -87,6 +88,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <WorldClockApp windowId={windowId} />;
     case 'bookmarks':
       return <BookmarkManagerApp windowId={windowId} />;
+    case 'color-picker':
+      return <ColorPickerApp windowId={windowId} />;
     case 'calculator':
       return <CalculatorApp windowId={windowId} />;
     case 'unit-converter':

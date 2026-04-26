@@ -61,7 +61,8 @@
     "habit-tracker": "习惯追踪",
     "password-generator": "密码生成器",
     "unit-converter": "单位换算",
-    "calculator": "计算器"
+    "calculator": "计算器",
+    "color-picker": "颜色"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -98,7 +99,8 @@
     "habit-tracker": "追踪每日习惯，查看连续记录，培养持续规律",
     "password-generator": "生成随机密码，支持长度、字符类型和强度检测",
     "unit-converter": "长度、重量、温度、速度、时间、数据、面积、体积单位换算",
-    "calculator": "全功能计算器，支持键盘输入和计算历史"
+    "calculator": "全功能计算器，支持键盘输入和计算历史",
+    "color-picker": "可视化颜色选择器，支持 HEX、RGB、HSL 显示和互补色、历史记录"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",
@@ -176,6 +178,7 @@
     "stopSpeaking": "停止",
     "readAloud": "朗读",
     "calculator": "计算器",
+    "color-picker": "颜色",
     "calcResult": "结果"
   },
   "templates": {

@@ -58,7 +58,8 @@
     "habit-tracker": "Habits",
     "password-generator": "Password",
     "unit-converter": "Converter",
-    "calculator": "Calculator"
+    "calculator": "Calculator",
+    "color-picker": "Colors"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -92,7 +93,8 @@
     "habit-tracker": "Track daily habits, view streaks, and build consistent routines",
     "password-generator": "Generate secure random passwords with customizable length and character types",
     "unit-converter": "Convert between units of length, weight, temperature, speed, time, data, area, and volume",
-    "calculator": "Full-featured calculator with keyboard support and calculation history"
+    "calculator": "Full-featured calculator with keyboard support and calculation history",
+    "color-picker": "Visual color picker with HEX, RGB, HSL values, complementary colors, and history"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",
@@ -170,6 +172,7 @@
     "stopSpeaking": "Stop",
     "readAloud": "Read aloud",
     "calculator": "Calculator",
+    "color-picker": "Colors",
     "calcResult": "Result"
   },
   "templates": {
