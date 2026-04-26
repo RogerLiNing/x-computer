@@ -66,7 +66,9 @@
     "dice-roller": "骰子",
     "decision-journal": "决策日志",
     "delegation-tracker": "委托追踪",
-    "weekly-planner": "周计划"
+    "weekly-planner": "周计划",
+    "changelog": "更新日志",
+    "reading-list": "阅读清单"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -108,7 +110,9 @@
     "dice-roller": "投掷骰子（D4、D6、D8、D10、D12、D20、D100），支持调整值和历史记录",
     "decision-journal": "记录决策背景、理由和备选方案，追踪结果与后续回顾",
     "delegation-tracker": "追踪委托事项，跟进承诺与逾期提醒",
-    "weekly-planner": "制定周目标、每日打卡追踪、周回顾与反思"
+    "weekly-planner": "制定周目标、每日打卡追踪、周回顾与反思",
+    "changelog": "查看与记录版本更新日志，支持中英文双语显示",
+    "reading-list": "管理阅读清单，追踪阅读进度与评分"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",

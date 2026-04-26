@@ -2397,4 +2397,78 @@ export const api = {
 
   bookmarksDelete: (id: string) =>
     request<void>(`/bookmarks/${id}`, { method: 'DELETE' }),
+
+  // ── Reading List ─────────────────────────────────────────────────
+  readingListList: (options?: { status?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.search) params.set('search', options.search);
+    const qs = params.toString();
+    return request<Array<{
+      id: string; title: string; author: string | null; url: string | null;
+      notes: string | null; priority: string | null; status: string | null;
+      rating: number | null; tags: string[]; source: string | null;
+      createdAt: string; updatedAt: string;
+    }>>(`/reading-list${qs ? `?${qs}` : ''}`);
+  },
+
+  readingListCreate: (data: {
+    title: string; author?: string; url?: string; notes?: string;
+    priority?: string; status?: string; rating?: number; tags?: string[]; source?: string;
+  }) =>
+    request<{
+      id: string; title: string; author: string | null; url: string | null;
+      notes: string | null; priority: string | null; status: string | null;
+      rating: number | null; tags: string[]; source: string | null;
+      createdAt: string; updatedAt: string;
+    }>('/reading-list', { method: 'POST', body: JSON.stringify(data) }),
+
+  readingListUpdate: (id: string, data: {
+    title?: string; author?: string | null; url?: string | null; notes?: string | null;
+    priority?: string | null; status?: string | null; rating?: number | null; tags?: string[]; source?: string | null;
+  }) =>
+    request<{
+      id: string; title: string; author: string | null; url: string | null;
+      notes: string | null; priority: string | null; status: string | null;
+      rating: number | null; tags: string[]; source: string | null;
+      createdAt: string; updatedAt: string;
+    }>(`/reading-list/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  readingListDelete: (id: string) =>
+    request<void>(`/reading-list/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ── Changelog ────────────────────────────────────────────────────
+  changelogList: (options?: { year?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.year) params.set('year', String(options.year));
+    const qs = params.toString();
+    return request<Array<{
+      id: string; version: string; title: string; titleEn: string | null;
+      content: string; contentEn: string | null; tags: string[];
+      releasedAt: string | null; createdAt: string;
+    }>>(`/changelog${qs ? `?${qs}` : ''}`);
+  },
+
+  changelogCreate: (data: {
+    version: string; title: string; titleEn?: string; content: string;
+    contentEn?: string; tags?: string[]; releasedAt?: string;
+  }) =>
+    request<{
+      id: string; version: string; title: string; titleEn: string | null;
+      content: string; contentEn: string | null; tags: string[];
+      releasedAt: string | null; createdAt: string;
+    }>('/changelog', { method: 'POST', body: JSON.stringify(data) }),
+
+  changelogUpdate: (id: string, data: {
+    version?: string; title?: string; titleEn?: string | null; content?: string;
+    contentEn?: string | null; tags?: string[]; releasedAt?: string | null;
+  }) =>
+    request<{
+      id: string; version: string; title: string; titleEn: string | null;
+      content: string; contentEn: string | null; tags: string[];
+      releasedAt: string | null; createdAt: string;
+    }>(`/changelog/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  changelogDelete: (id: string) =>
+    request<void>(`/changelog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 };

@@ -71,6 +71,8 @@ import { createBookmarksRouter } from './bookmarks.js';
 import { createDecisionsRouter } from './decisions.js';
 import { createDelegationsRouter } from './delegations.js';
 import { createWeeklyPlannerRouter } from './weeklyPlanner.js';
+import { createChangelogRouter } from './changelog.js';
+import { createReadingListRouter } from './readingList.js';
 import { createSlackRouter } from './messaging/slack.js';
 import { aiCallsQuota, tasksQuota } from '../subscription/quotaMiddleware.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
@@ -1021,6 +1023,8 @@ export function createApiRouter(
   router.use('/decisions', createDecisionsRouter(db));
   router.use('/delegations', createDelegationsRouter(db));
   router.use('/weekly-plans', createWeeklyPlannerRouter(db));
+  router.use('/changelog', createChangelogRouter(db));
+  router.use('/reading-list', createReadingListRouter(db));
 
   if (db && signalFireDeps) {
     const doneLogService = new DoneLogService(db);

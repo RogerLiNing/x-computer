@@ -229,6 +229,8 @@ export type BuiltinAppId =
   | 'decision-journal'
   | 'delegation-tracker'
   | 'weekly-planner'
+  | 'changelog'
+  | 'reading-list'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

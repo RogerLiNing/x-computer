@@ -36,6 +36,8 @@ import { DiceRollerApp } from './DiceRollerApp';
 import DecisionJournalApp from './DecisionJournalApp';
 import DelegationTrackerApp from './DelegationTrackerApp';
 import WeeklyPlannerApp from './WeeklyPlannerApp';
+import ChangelogApp from './ChangelogApp';
+import ReadingListApp from './ReadingListApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -112,6 +114,10 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <HabitTrackerApp windowId={windowId} />;
     case 'clipboard-manager':
       return <ClipboardManagerApp windowId={windowId} />;
+    case 'changelog':
+      return <ChangelogApp windowId={windowId} />;
+    case 'reading-list':
+      return <ReadingListApp windowId={windowId} />;
     case 'image-viewer':
       return <ImageViewerApp windowId={windowId} metadata={metadata} />;
     case 'office-viewer':

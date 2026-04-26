@@ -472,6 +472,43 @@ export class MysqlDatabase {
     )`, [], true);
     await this.ensureIndex('weekly_plan_entries', 'idx_weekly_entries_plan', 'CREATE INDEX idx_weekly_entries_plan ON weekly_plan_entries(plan_id)', true);
     await this.ensureIndex('weekly_plan_entries', 'idx_weekly_entries_user', 'CREATE INDEX idx_weekly_entries_user ON weekly_plan_entries(user_id)', true);
+
+    // reading_list 表
+    await this._run(`CREATE TABLE IF NOT EXISTS reading_list (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      title TEXT NOT NULL,
+      author TEXT,
+      url TEXT,
+      notes TEXT,
+      priority VARCHAR(16) NOT NULL DEFAULT 'medium',
+      status VARCHAR(16) NOT NULL DEFAULT 'unread',
+      rating INT,
+      tags TEXT,
+      source TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`, [], true);
+    await this.ensureIndex('reading_list', 'idx_reading_list_user', 'CREATE INDEX idx_reading_list_user ON reading_list(user_id)', true);
+    await this.ensureIndex('reading_list', 'idx_reading_list_status', 'CREATE INDEX idx_reading_list_status ON reading_list(user_id, status)', true);
+    await this.ensureIndex('reading_list', 'idx_reading_list_priority', 'CREATE INDEX idx_reading_list_priority ON reading_list(user_id, priority)', true);
+
+    // changelog 表
+    await this._run(`CREATE TABLE IF NOT EXISTS changelog (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      version VARCHAR(32) NOT NULL,
+      title TEXT NOT NULL,
+      title_en TEXT,
+      content TEXT NOT NULL,
+      content_en TEXT,
+      tags TEXT,
+      released_at DATE,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`, [], true);
+    await this.ensureIndex('changelog', 'idx_changelog_user', 'CREATE INDEX idx_changelog_user ON changelog(user_id)', true);
+    await this.ensureIndex('changelog', 'idx_changelog_version', 'CREATE INDEX idx_changelog_version ON changelog(version DESC)', true);
+    await this.ensureIndex('changelog', 'idx_changelog_released', 'CREATE INDEX idx_changelog_released ON changelog(released_at DESC)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -2108,6 +2145,126 @@ export class MysqlDatabase {
   async listWeeklyPlanEntries(planId: string): Promise<Array<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }>> {
     const rows = await this._query('SELECT * FROM weekly_plan_entries WHERE plan_id = ? ORDER BY date ASC', [planId]);
     return (rows as any[]).map(r => ({ ...r, completed: !!r.completed }));
+  }
+
+  // ── Reading List ───────────────────────────────────────────────────────────
+  async createReadingItem(params: {
+    userId: string; title: string; author?: string; url?: string;
+    notes?: string; priority?: string; status?: string; rating?: number; tags?: string[]; source?: string;
+  }): Promise<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string }> {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    await this._run(
+      'INSERT INTO reading_list (id, user_id, title, author, url, notes, priority, status, rating, tags, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, params.userId, params.title, params.author ?? null, params.url ?? null, params.notes ?? null, params.priority ?? null, params.status ?? null, params.rating ?? null, params.tags ? JSON.stringify(params.tags) : null, params.source ?? null],
+    );
+    const rows = await this._query('SELECT * FROM reading_list WHERE id = ?', [id]);
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async listReadingItems(userId: string, _options?: { status?: string; search?: string }): Promise<Array<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string | null; status: string | null; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string }>> {
+    let sql = 'SELECT * FROM reading_list WHERE user_id = ?';
+    const args: any[] = [userId];
+    if (_options?.status) { sql += ' AND status = ?'; args.push(_options.status); }
+    sql += ' ORDER BY created_at DESC';
+    const rows = await this._query(sql, args) as any[];
+    return rows.map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  async getReadingItem(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string | null; status: string | null; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } | null> {
+    const rows = await this._query('SELECT * FROM reading_list WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!rows.length) return null;
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async updateReadingItem(id: string, userId: string, params: Partial<{
+    title: string; author: string | null; url: string | null; notes: string | null;
+    priority: string | null; status: string | null; rating: number | null; tags: string[]; source: string | null;
+  }>): Promise<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string | null; status: string | null; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } | null> {
+    const existing = await this._query('SELECT * FROM reading_list WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!existing.length) return null;
+    const sets: string[] = []; const args: any[] = [];
+    if (params.title !== undefined) { sets.push('title = ?'); args.push(params.title); }
+    if (params.author !== undefined) { sets.push('author = ?'); args.push(params.author); }
+    if (params.url !== undefined) { sets.push('url = ?'); args.push(params.url); }
+    if (params.notes !== undefined) { sets.push('notes = ?'); args.push(params.notes); }
+    if (params.priority !== undefined) { sets.push('priority = ?'); args.push(params.priority); }
+    if (params.status !== undefined) { sets.push('status = ?'); args.push(params.status); }
+    if (params.rating !== undefined) { sets.push('rating = ?'); args.push(params.rating); }
+    if (params.tags !== undefined) { sets.push('tags = ?'); args.push(params.tags ? JSON.stringify(params.tags) : null); }
+    if (params.source !== undefined) { sets.push('source = ?'); args.push(params.source); }
+    if (sets.length > 0) {
+      args.push(id, userId);
+      await this._run(`UPDATE reading_list SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    }
+    const rows = await this._query('SELECT * FROM reading_list WHERE id = ?', [id]);
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async deleteReadingItem(id: string, userId: string): Promise<boolean> {
+    const result = await this._run('DELETE FROM reading_list WHERE id = ? AND user_id = ?', [id, userId]);
+    return result.affectedRows > 0;
+  }
+
+  // ── Changelog ─────────────────────────────────────────────────────────────
+  async createChangelogEntry(params: {
+    userId: string; version: string; title: string; titleEn?: string;
+    content: string; contentEn?: string; tags?: string[]; releasedAt?: string;
+  }): Promise<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string }> {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    await this._run(
+      'INSERT INTO changelog (id, user_id, version, title, title_en, content, content_en, tags, released_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, params.userId, params.version, params.title, params.titleEn ?? null, params.content, params.contentEn ?? null, params.tags ? JSON.stringify(params.tags) : null, params.releasedAt ?? null],
+    );
+    const rows = await this._query('SELECT * FROM changelog WHERE id = ?', [id]);
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async listChangelogEntries(userId: string, options?: { year?: number }): Promise<Array<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string }>> {
+    let sql = 'SELECT * FROM changelog WHERE user_id = ?';
+    const args: any[] = [userId];
+    if (options?.year) { sql += ' AND strftime(\'%Y\', released_at) = ?'; args.push(String(options.year)); }
+    sql += ' ORDER BY released_at DESC, created_at DESC';
+    const rows = await this._query(sql, args) as any[];
+    return rows.map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  async getChangelogEntry(id: string, userId: string): Promise<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } | null> {
+    const rows = await this._query('SELECT * FROM changelog WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!rows.length) return null;
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async updateChangelogEntry(id: string, userId: string, params: Partial<{
+    version: string; title: string; titleEn: string | null; content: string; contentEn: string | null;
+    tags: string[]; releasedAt: string | null;
+  }>): Promise<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } | null> {
+    const existing = await this._query('SELECT * FROM changelog WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!existing.length) return null;
+    const sets: string[] = []; const args: any[] = [];
+    if (params.version !== undefined) { sets.push('version = ?'); args.push(params.version); }
+    if (params.title !== undefined) { sets.push('title = ?'); args.push(params.title); }
+    if (params.titleEn !== undefined) { sets.push('title_en = ?'); args.push(params.titleEn); }
+    if (params.content !== undefined) { sets.push('content = ?'); args.push(params.content); }
+    if (params.contentEn !== undefined) { sets.push('content_en = ?'); args.push(params.contentEn); }
+    if (params.tags !== undefined) { sets.push('tags = ?'); args.push(params.tags ? JSON.stringify(params.tags) : null); }
+    if (params.releasedAt !== undefined) { sets.push('released_at = ?'); args.push(params.releasedAt); }
+    if (sets.length > 0) {
+      args.push(id, userId);
+      await this._run(`UPDATE changelog SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    }
+    const rows = await this._query('SELECT * FROM changelog WHERE id = ?', [id]);
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async deleteChangelogEntry(id: string, userId: string): Promise<boolean> {
+    const result = await this._run('DELETE FROM changelog WHERE id = ? AND user_id = ?', [id, userId]);
+    return result.affectedRows > 0;
   }
 
   close(): void {

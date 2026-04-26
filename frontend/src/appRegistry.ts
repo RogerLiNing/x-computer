@@ -58,6 +58,8 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'decision-journal', name: getAppName('decision-journal'), description: getAppDescription('decision-journal'), source: 'builtin', icon: 'BookOpen' },
   { id: 'delegation-tracker', name: getAppName('delegation-tracker'), description: getAppDescription('delegation-tracker'), source: 'builtin', icon: 'UserCheck' },
   { id: 'weekly-planner', name: getAppName('weekly-planner'), description: getAppDescription('weekly-planner'), source: 'builtin', icon: 'Calendar' },
+  { id: 'changelog', name: getAppName('changelog'), description: getAppDescription('changelog'), source: 'builtin', icon: 'History' },
+  { id: 'reading-list', name: getAppName('reading-list'), description: getAppDescription('reading-list'), source: 'builtin', icon: 'BookMarked' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -99,6 +101,8 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'decision-journal': { width: 680, height: 620 },
   'delegation-tracker': { width: 680, height: 620 },
   'weekly-planner': { width: 780, height: 640 },
+  'changelog': { width: 720, height: 640 },
+  'reading-list': { width: 720, height: 640 },
 };
 
 function loadInstalled(): AppManifest[] {

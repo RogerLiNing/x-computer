@@ -585,6 +585,47 @@ export class SqliteAppDatabase {
         CREATE INDEX IF NOT EXISTS idx_weekly_entries_plan ON weekly_plan_entries(plan_id);
         CREATE INDEX IF NOT EXISTS idx_weekly_entries_user ON weekly_plan_entries(user_id);
       `);
+
+      // reading_list 表
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS reading_list (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          author TEXT,
+          url TEXT,
+          notes TEXT,
+          priority TEXT NOT NULL DEFAULT 'medium',
+          status TEXT NOT NULL DEFAULT 'unread',
+          rating INTEGER,
+          tags TEXT,
+          source TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_reading_list_user ON reading_list(user_id);
+        CREATE INDEX IF NOT EXISTS idx_reading_list_status ON reading_list(user_id, status);
+        CREATE INDEX IF NOT EXISTS idx_reading_list_priority ON reading_list(user_id, priority);
+      `);
+
+      // changelog 表
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS changelog (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          version TEXT NOT NULL,
+          title TEXT NOT NULL,
+          title_en TEXT,
+          content TEXT NOT NULL,
+          content_en TEXT,
+          tags TEXT,
+          released_at TEXT,
+          created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_changelog_user ON changelog(user_id);
+        CREATE INDEX IF NOT EXISTS idx_changelog_version ON changelog(version DESC);
+        CREATE INDEX IF NOT EXISTS idx_changelog_released ON changelog(released_at DESC);
+      `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -2131,6 +2172,120 @@ export class SqliteAppDatabase {
     const rows = this.db.prepare('SELECT * FROM weekly_plan_entries WHERE plan_id = ? ORDER BY date ASC').all(planId) as any[];
     return rows.map(r => ({ ...r, completed: !!r.completed }));
   }
+
+  // ── Reading List ────────────────────────────────────────────
+
+  createReadingItem(params: {
+    userId: string; title: string; author?: string; url?: string; notes?: string;
+    priority?: string; status?: string; rating?: number; tags?: string[]; source?: string;
+  }): { id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO reading_list (id, user_id, title, author, url, notes, priority, status, rating, tags, source, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, params.userId, params.title,
+      params.author ?? null, params.url ?? null, params.notes ?? null,
+      params.priority ?? 'medium', params.status ?? 'unread',
+      params.rating ?? null,
+      params.tags ? JSON.stringify(params.tags) : null,
+      params.source ?? null, now, now);
+    return { id, user_id: params.userId, title: params.title, author: params.author ?? null, url: params.url ?? null, notes: params.notes ?? null, priority: params.priority ?? 'medium', status: params.status ?? 'unread', rating: params.rating ?? null, tags: params.tags ?? [], source: params.source ?? null, created_at: now, updated_at: now };
+  }
+
+  listReadingItems(userId: string, options?: { status?: string; search?: string }): Array<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string }> {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.search) { conditions.push('(title LIKE ? OR author LIKE ?)'); args.push(`%${options.search}%`, `%${options.search}%`); }
+    const rows = this.db.prepare(`SELECT * FROM reading_list WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC`).all(...args) as any[];
+    return rows.map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  getReadingItem(id: string, userId: string): { id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } | undefined {
+    const row = this.db.prepare('SELECT * FROM reading_list WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    if (!row) return undefined;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  updateReadingItem(id: string, userId: string, fields: {
+    title?: string; author?: string | null; url?: string | null; notes?: string | null;
+    priority?: string; status?: string; rating?: number | null; tags?: string[]; source?: string | null;
+  }): { id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } | undefined {
+    const sets: string[] = ['updated_at = ?'];
+    const args: (string | number | null)[] = [new Date().toISOString()];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.author !== undefined) { sets.push('author = ?'); args.push(fields.author); }
+    if (fields.url !== undefined) { sets.push('url = ?'); args.push(fields.url); }
+    if (fields.notes !== undefined) { sets.push('notes = ?'); args.push(fields.notes); }
+    if (fields.priority !== undefined) { sets.push('priority = ?'); args.push(fields.priority); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.rating !== undefined) { sets.push('rating = ?'); args.push(fields.rating ?? null); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    if (fields.source !== undefined) { sets.push('source = ?'); args.push(fields.source); }
+    args.push(id, userId);
+    this.db.prepare(`UPDATE reading_list SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getReadingItem(id, userId);
+  }
+
+  deleteReadingItem(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM reading_list WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
+  // ── Changelog ─────────────────────────────────────────────
+
+  createChangelogEntry(params: {
+    userId: string; version: string; title: string; titleEn?: string;
+    content: string; contentEn?: string; tags?: string[]; releasedAt?: string;
+  }): { id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO changelog (id, user_id, version, title, title_en, content, content_en, tags, released_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, params.userId, params.version, params.title,
+      params.titleEn ?? null, params.content, params.contentEn ?? null,
+      params.tags ? JSON.stringify(params.tags) : null,
+      params.releasedAt ?? null, now);
+    return { id, user_id: params.userId, version: params.version, title: params.title, title_en: params.titleEn ?? null, content: params.content, content_en: params.contentEn ?? null, tags: params.tags ?? [], released_at: params.releasedAt ?? null, created_at: now };
+  }
+
+  listChangelogEntries(userId: string, options?: { year?: number }): Array<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string }> {
+    const conditions = ['user_id = ?'];
+    const args: (string | number)[] = [userId];
+    if (options?.year) { conditions.push("strftime('%Y', released_at) = ?"); args.push(String(options.year)); }
+    const rows = this.db.prepare(`SELECT * FROM changelog WHERE ${conditions.join(' AND ')} ORDER BY released_at DESC, version DESC`).all(...args) as any[];
+    return rows.map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  getChangelogEntry(id: string, userId: string): { id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } | undefined {
+    const row = this.db.prepare('SELECT * FROM changelog WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    if (!row) return undefined;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  updateChangelogEntry(id: string, userId: string, fields: {
+    version?: string; title?: string; titleEn?: string | null;
+    content?: string; contentEn?: string | null; tags?: string[]; releasedAt?: string | null;
+  }): { id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } | undefined {
+    const sets: string[] = [];
+    const args: (string | null)[] = [];
+    if (fields.version !== undefined) { sets.push('version = ?'); args.push(fields.version); }
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.titleEn !== undefined) { sets.push('title_en = ?'); args.push(fields.titleEn); }
+    if (fields.content !== undefined) { sets.push('content = ?'); args.push(fields.content); }
+    if (fields.contentEn !== undefined) { sets.push('content_en = ?'); args.push(fields.contentEn); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    if (fields.releasedAt !== undefined) { sets.push('released_at = ?'); args.push(fields.releasedAt); }
+    if (sets.length === 0) return this.getChangelogEntry(id, userId);
+    args.push(id, userId);
+    this.db.prepare(`UPDATE changelog SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getChangelogEntry(id, userId);
+  }
+
+  deleteChangelogEntry(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM changelog WHERE id = ? AND user_id = ?').run(id, userId);
+  }
 }
 
 /**
@@ -2760,6 +2915,38 @@ export class SqliteDatabaseAdapter {
   }
   listWeeklyPlanEntries(planId: string): Promise<Array<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }>> {
     return Promise.resolve(this.db.listWeeklyPlanEntries(planId));
+  }
+  createReadingItem(params: { userId: string; title: string; author?: string; url?: string; notes?: string; priority?: string; status?: string; rating?: number; tags?: string[]; source?: string }): Promise<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.createReadingItem(params));
+  }
+  listReadingItems(userId: string, options?: { status?: string; search?: string }): Promise<Array<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string }>> {
+    return Promise.resolve(this.db.listReadingItems(userId, options));
+  }
+  getReadingItem(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.getReadingItem(id, userId));
+  }
+  updateReadingItem(id: string, userId: string, fields: { title?: string; author?: string | null; url?: string | null; notes?: string | null; priority?: string; status?: string; rating?: number | null; tags?: string[]; source?: string | null }): Promise<{ id: string; user_id: string; title: string; author: string | null; url: string | null; notes: string | null; priority: string; status: string; rating: number | null; tags: string[]; source: string | null; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.updateReadingItem(id, userId, fields));
+  }
+  deleteReadingItem(id: string, userId: string): Promise<void> {
+    this.db.deleteReadingItem(id, userId);
+    return Promise.resolve();
+  }
+  createChangelogEntry(params: { userId: string; version: string; title: string; titleEn?: string; content: string; contentEn?: string; tags?: string[]; releasedAt?: string }): Promise<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string }> {
+    return Promise.resolve(this.db.createChangelogEntry(params));
+  }
+  listChangelogEntries(userId: string, options?: { year?: number }): Promise<Array<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string }>> {
+    return Promise.resolve(this.db.listChangelogEntries(userId, options));
+  }
+  getChangelogEntry(id: string, userId: string): Promise<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } | undefined> {
+    return Promise.resolve(this.db.getChangelogEntry(id, userId));
+  }
+  updateChangelogEntry(id: string, userId: string, fields: { version?: string; title?: string; titleEn?: string | null; content?: string; contentEn?: string | null; tags?: string[]; releasedAt?: string | null }): Promise<{ id: string; user_id: string; version: string; title: string; title_en: string | null; content: string; content_en: string | null; tags: string[]; released_at: string | null; created_at: string } | undefined> {
+    return Promise.resolve(this.db.updateChangelogEntry(id, userId, fields));
+  }
+  deleteChangelogEntry(id: string, userId: string): Promise<void> {
+    this.db.deleteChangelogEntry(id, userId);
+    return Promise.resolve();
   }
   close(): void {
     this.db.close();
