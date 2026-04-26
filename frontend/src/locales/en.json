@@ -59,7 +59,8 @@
     "password-generator": "Password",
     "unit-converter": "Converter",
     "calculator": "Calculator",
-    "color-picker": "Colors"
+    "color-picker": "Colors",
+    "dice-roller": "Dice"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -94,7 +95,8 @@
     "password-generator": "Generate secure random passwords with customizable length and character types",
     "unit-converter": "Convert between units of length, weight, temperature, speed, time, data, area, and volume",
     "calculator": "Full-featured calculator with keyboard support and calculation history",
-    "color-picker": "Visual color picker with HEX, RGB, HSL values, complementary colors, and history"
+    "color-picker": "Visual color picker with HEX, RGB, HSL values, complementary colors, and history",
+    "dice-roller": "Roll dice (D4, D6, D8, D10, D12, D20, D100) with modifier support and history"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",
@@ -173,6 +175,7 @@
     "readAloud": "Read aloud",
     "calculator": "Calculator",
     "color-picker": "Colors",
+    "dice-roller": "Dice",
     "calcResult": "Result"
   },
   "templates": {

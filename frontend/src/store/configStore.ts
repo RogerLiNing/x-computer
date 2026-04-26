@@ -7,7 +7,7 @@ import { api } from '@/utils/api';
 export const DESKTOP_APP_ORDER: AppIdentifier[] = [
   'file-manager', 'terminal', 'browser', 'chat', 'x', 'code-editor', 'text-editor',
   'spreadsheet', 'email', 'calendar', 'settings', 'task-timeline', 'canvas', 'diff',
-  'system-monitor', 'quick-notes', 'pomodoro', 'world-clock', 'bookmarks', 'clipboard-manager', 'habit-tracker', 'password-generator', 'unit-converter', 'calculator', 'color-picker',
+  'system-monitor', 'quick-notes', 'pomodoro', 'world-clock', 'bookmarks', 'clipboard-manager', 'habit-tracker', 'password-generator', 'unit-converter', 'calculator', 'color-picker', 'dice-roller',
 ];
 const GRID_COLS = 6;
 const DESKTOP_ICON_LAYOUT_KEY = 'x-computer-desktop-icon-layout';

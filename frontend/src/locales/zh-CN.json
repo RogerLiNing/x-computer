@@ -62,7 +62,8 @@
     "password-generator": "密码生成器",
     "unit-converter": "单位换算",
     "calculator": "计算器",
-    "color-picker": "颜色"
+    "color-picker": "颜色",
+    "dice-roller": "骰子"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -100,7 +101,8 @@
     "password-generator": "生成随机密码，支持长度、字符类型和强度检测",
     "unit-converter": "长度、重量、温度、速度、时间、数据、面积、体积单位换算",
     "calculator": "全功能计算器，支持键盘输入和计算历史",
-    "color-picker": "可视化颜色选择器，支持 HEX、RGB、HSL 显示和互补色、历史记录"
+    "color-picker": "可视化颜色选择器，支持 HEX、RGB、HSL 显示和互补色、历史记录",
+    "dice-roller": "投掷骰子（D4、D6、D8、D10、D12、D20、D100），支持调整值和历史记录"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",
@@ -179,6 +181,7 @@
     "readAloud": "朗读",
     "calculator": "计算器",
     "color-picker": "颜色",
+    "dice-roller": "骰子",
     "calcResult": "结果"
   },
   "templates": {

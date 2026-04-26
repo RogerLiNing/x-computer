@@ -225,6 +225,7 @@ export type BuiltinAppId =
   | 'unit-converter'
   | 'calculator'
   | 'color-picker'
+  | 'dice-roller'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
