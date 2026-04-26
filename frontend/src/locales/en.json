@@ -53,7 +53,8 @@
     "quick-notes": "Quick Notes",
     "pomodoro": "Pomodoro",
     "world-clock": "World Clock",
-    "bookmarks": "Bookmarks"
+    "bookmarks": "Bookmarks",
+    "clipboard-manager": "Clipboard"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -82,7 +83,8 @@
     "quick-notes": "Quickly capture ideas, todos, and inspirations",
     "pomodoro": "Focus timer using the Pomodoro technique",
     "world-clock": "View current time in multiple timezones",
-    "bookmarks": "Save, organize, and search your bookmarks"
+    "bookmarks": "Save, organize, and search your bookmarks",
+    "clipboard-manager": "Track clipboard history, pin important items, and search past copies"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

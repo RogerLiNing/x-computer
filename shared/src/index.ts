@@ -219,6 +219,7 @@ export type BuiltinAppId =
   | 'pomodoro'
   | 'world-clock'
   | 'bookmarks'
+  | 'clipboard-manager'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */
