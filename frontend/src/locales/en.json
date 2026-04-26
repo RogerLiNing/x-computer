@@ -56,7 +56,8 @@
     "bookmarks": "Bookmarks",
     "clipboard-manager": "Clipboard",
     "habit-tracker": "Habits",
-    "password-generator": "Password"
+    "password-generator": "Password",
+    "unit-converter": "Converter"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -88,7 +89,8 @@
     "bookmarks": "Save, organize, and search your bookmarks",
     "clipboard-manager": "Track clipboard history, pin important items, and search past copies",
     "habit-tracker": "Track daily habits, view streaks, and build consistent routines",
-    "password-generator": "Generate secure random passwords with customizable length and character types"
+    "password-generator": "Generate secure random passwords with customizable length and character types",
+    "unit-converter": "Convert between units of length, weight, temperature, speed, time, data, area, and volume"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

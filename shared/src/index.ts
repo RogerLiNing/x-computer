@@ -222,6 +222,7 @@ export type BuiltinAppId =
   | 'clipboard-manager'
   | 'habit-tracker'
   | 'password-generator'
+  | 'unit-converter'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

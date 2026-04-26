@@ -51,6 +51,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'clipboard-manager', name: getAppName('clipboard-manager'), description: getAppDescription('clipboard-manager'), source: 'builtin', icon: 'Clipboard' },
   { id: 'habit-tracker', name: getAppName('habit-tracker'), description: getAppDescription('habit-tracker'), source: 'builtin', icon: 'Target' },
   { id: 'password-generator', name: getAppName('password-generator'), description: getAppDescription('password-generator'), source: 'builtin', icon: 'Key' },
+  { id: 'unit-converter', name: getAppName('unit-converter'), description: getAppDescription('unit-converter'), source: 'builtin', icon: 'ArrowLeftRight' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -85,6 +86,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'clipboard-manager': { width: 560, height: 620 },
   'habit-tracker': { width: 560, height: 600 },
   'password-generator': { width: 480, height: 560 },
+  'unit-converter': { width: 480, height: 580 },
 };
 
 function loadInstalled(): AppManifest[] {
