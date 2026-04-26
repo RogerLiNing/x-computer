@@ -50,7 +50,8 @@
     "canvas": "Canvas",
     "diff": "Diff",
     "system-monitor": "System Monitor",
-    "quick-notes": "Quick Notes"
+    "quick-notes": "Quick Notes",
+    "pomodoro": "Pomodoro"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -76,7 +77,8 @@
     "miniapp": "App created by X",
     "diff": "Compare two text or code files, highlighting additions, deletions, and changes",
     "system-monitor": "Real-time system monitoring: CPU, memory, disk, and task stats",
-    "quick-notes": "Quickly capture ideas, todos, and inspirations"
+    "quick-notes": "Quickly capture ideas, todos, and inspirations",
+    "pomodoro": "Focus timer using the Pomodoro technique"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

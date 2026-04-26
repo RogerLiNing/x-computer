@@ -23,6 +23,7 @@ import { CanvasApp } from './CanvasApp';
 import { DiffApp } from './DiffApp';
 import { SystemMonitorApp } from './SystemMonitorApp';
 import { QuickNotesApp } from './QuickNotesApp';
+import { PomodoroTimerApp } from './PomodoroTimerApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -73,6 +74,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <SystemMonitorApp windowId={windowId} />;
     case 'quick-notes':
       return <QuickNotesApp windowId={windowId} />;
+    case 'pomodoro':
+      return <PomodoroTimerApp windowId={windowId} />;
     case 'image-viewer':
       return <ImageViewerApp windowId={windowId} metadata={metadata} />;
     case 'office-viewer':
