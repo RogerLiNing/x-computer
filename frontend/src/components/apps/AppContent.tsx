@@ -33,7 +33,8 @@ import { UnitConverterApp } from './UnitConverterApp';
 import { CalculatorApp } from './CalculatorApp';
 import { ColorPickerApp } from './ColorPickerApp';
 import { DiceRollerApp } from './DiceRollerApp';
-import { DecisionJournalApp } from './DecisionJournalApp';
+import DecisionJournalApp from './DecisionJournalApp';
+import DelegationTrackerApp from './DelegationTrackerApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -94,6 +95,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <DiceRollerApp windowId={windowId} />;
     case 'decision-journal':
       return <DecisionJournalApp windowId={windowId} />;
+    case 'delegation-tracker':
+      return <DelegationTrackerApp windowId={windowId} />;
     case 'color-picker':
       return <ColorPickerApp windowId={windowId} />;
     case 'calculator':

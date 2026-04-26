@@ -64,7 +64,8 @@
     "calculator": "计算器",
     "color-picker": "颜色",
     "dice-roller": "骰子",
-    "decision-journal": "决策日志"
+    "decision-journal": "决策日志",
+    "delegation-tracker": "委托追踪"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -104,7 +105,8 @@
     "calculator": "全功能计算器，支持键盘输入和计算历史",
     "color-picker": "可视化颜色选择器，支持 HEX、RGB、HSL 显示和互补色、历史记录",
     "dice-roller": "投掷骰子（D4、D6、D8、D10、D12、D20、D100），支持调整值和历史记录",
-    "decision-journal": "记录决策背景、理由和备选方案，追踪结果与后续回顾"
+    "decision-journal": "记录决策背景、理由和备选方案，追踪结果与后续回顾",
+    "delegation-tracker": "追踪委托事项，跟进承诺与逾期提醒"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",

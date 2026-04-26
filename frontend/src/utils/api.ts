@@ -436,6 +436,56 @@ export const api = {
   decisionsFollowup: () =>
     request<{ journals: Array<{ id: string; title: string; follow_up_at: string | null; created_at: string }> }>('/decisions/followup'),
 
+  // ── Delegations ────────────────────────────────────────────────
+
+  /** 列出委托 */
+  delegationsList: (options?: { status?: string; search?: string }) => {
+    const params = new URLSearchParams();
+    if (options?.status) params.set('status', options.status);
+    if (options?.search) params.set('search', options.search);
+    const qs = params.toString();
+    return request<Array<{
+      id: string; title: string; description: string | null; delegatedTo: string;
+      dueAt: string | null; lastCheckedAt: string | null; status: string;
+      followUpCount: number; notes: string | null; source: string | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+    }>>(`/delegations${qs ? `?${qs}` : ''}`);
+  },
+
+  /** 创建委托 */
+  delegationsCreate: (data: {
+    title: string; delegatedTo: string; description?: string;
+    dueAt?: string; source?: string; tags?: string[];
+  }) =>
+    request<{
+      id: string; title: string; description: string | null; delegatedTo: string;
+      dueAt: string | null; lastCheckedAt: string | null; status: string;
+      followUpCount: number; notes: string | null; source: string | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+    }>('/delegations', { method: 'POST', body: JSON.stringify(data) }),
+
+  /** 更新委托 */
+  delegationsUpdate: (id: string, data: {
+    title?: string; description?: string | null; delegatedTo?: string;
+    dueAt?: string | null; status?: string; notes?: string | null; tags?: string[];
+  }) =>
+    request<{
+      id: string; title: string; description: string | null; delegatedTo: string;
+      dueAt: string | null; lastCheckedAt: string | null; status: string;
+      followUpCount: number; notes: string | null; source: string | null;
+      tags: string[]; createdAt: string; updatedAt: string;
+    }>(`/delegations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+
+  /** 删除委托 */
+  delegationsDelete: (id: string) =>
+    request<void>(`/delegations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** 获取逾期委托 */
+  delegationsOverdue: () =>
+    request<{ delegations: Array<{
+      id: string; title: string; delegatedTo: string; dueAt: string | null; status: string;
+    }> }>('/delegations/overdue'),
+
   /** 获取 OAuth 提供商配置状态（前端据此决定是否显示 OAuth 按钮） */
   oauthGetStatus: () =>
     request<{ google: boolean; github: boolean }>('/auth/oauth/status'),

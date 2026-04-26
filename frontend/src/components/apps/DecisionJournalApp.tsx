@@ -46,7 +46,7 @@ export default function DecisionJournalApp({ windowId }: Props) {
 
   const loadDecisions = useCallback(async () => {
     try {
-      const data = await api.decisionsList({ search: search || undefined, status: filterStatus === 'all' ? undefined : filterStatus });
+      const data = (await api.decisionsList({ search: search || undefined, status: filterStatus === 'all' ? undefined : filterStatus })) as Decision[];
       setDecisions(data);
       setError(null);
     } catch (e) {

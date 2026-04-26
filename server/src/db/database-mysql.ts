@@ -417,6 +417,27 @@ export class MysqlDatabase {
     await this.ensureIndex('decision_journals', 'idx_decision_journal_user', 'CREATE INDEX idx_decision_journal_user ON decision_journals(user_id)', true);
     await this.ensureIndex('decision_journals', 'idx_decision_journal_status', 'CREATE INDEX idx_decision_journal_status ON decision_journals(user_id, status)', true);
     await this.ensureIndex('decision_journals', 'idx_decision_journal_followup', 'CREATE INDEX idx_decision_journal_followup ON decision_journals(user_id, follow_up_at)', true);
+
+    // delegations 表
+    await this._run(`CREATE TABLE IF NOT EXISTS delegations (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      delegated_to VARCHAR(255) NOT NULL,
+      due_at DATETIME,
+      last_checked_at DATETIME,
+      status VARCHAR(32) NOT NULL DEFAULT 'waiting',
+      follow_up_count INT NOT NULL DEFAULT 0,
+      notes TEXT,
+      source TEXT,
+      tags TEXT,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`, [], true);
+    await this.ensureIndex('delegations', 'idx_delegations_user', 'CREATE INDEX idx_delegations_user ON delegations(user_id)', true);
+    await this.ensureIndex('delegations', 'idx_delegations_status', 'CREATE INDEX idx_delegations_status ON delegations(user_id, status)', true);
+    await this.ensureIndex('delegations', 'idx_delegations_due', 'CREATE INDEX idx_delegations_due ON delegations(user_id, due_at)', true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1899,6 +1920,71 @@ export class MysqlDatabase {
       `SELECT id, title, follow_up_at, created_at FROM decision_journals
        WHERE user_id = ? AND status = 'open' AND follow_up_at IS NOT NULL AND follow_up_at <= NOW()
        ORDER BY follow_up_at ASC`,
+      [userId],
+    );
+    return rows as any[];
+  }
+
+  // ── Delegations ──────────────────────────────────────────────
+
+  async createDelegation(params: {
+    id?: string; userId: string; title: string; description?: string;
+    delegatedTo: string; dueAt?: string; source?: string; tags?: string[];
+  }): Promise<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string }> {
+    const id = params.id ?? uuid();
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    await this._run(
+      `INSERT INTO delegations (id, user_id, title, description, delegated_to, due_at, last_checked_at, status, follow_up_count, notes, source, tags, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, 'waiting', 0, NULL, ?, ?, ?, ?)`,
+      [id, params.userId, params.title, params.description ?? null, params.delegatedTo,
+        params.dueAt ?? null, params.source ?? null, JSON.stringify(params.tags ?? []), now, now],
+    );
+    return (await this.getDelegation(id, params.userId))!;
+  }
+
+  async listDelegations(userId: string, options?: { status?: string; search?: string }): Promise<Array<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string }>> {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.search) { conditions.push('(title LIKE ? OR delegated_to LIKE ? OR description LIKE ?)'); const q = `%${options.search}%`; args.push(q, q, q); }
+    const rows = await this._query(`SELECT * FROM delegations WHERE ${conditions.join(' AND ')} ORDER BY due_at ASC, created_at DESC`, args);
+    return (rows as any[]).map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  async getDelegation(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    const rows = await this._query('SELECT * FROM delegations WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!rows[0]) return undefined;
+    const r = rows[0] as any;
+    return { ...r, tags: r.tags ? JSON.parse(r.tags) : [] };
+  }
+
+  async updateDelegation(id: string, userId: string, fields: {
+    title?: string; description?: string | null; delegatedTo?: string; dueAt?: string | null;
+    status?: string; notes?: string | null; tags?: string[];
+  }): Promise<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    const sets: string[] = ['updated_at = NOW()'];
+    const args: (string | null)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description); }
+    if (fields.delegatedTo !== undefined) { sets.push('delegated_to = ?'); args.push(fields.delegatedTo); }
+    if (fields.dueAt !== undefined) { sets.push('due_at = ?'); args.push(fields.dueAt); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.notes !== undefined) { sets.push('notes = ?'); args.push(fields.notes); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    args.push(id, userId);
+    await this._run(`UPDATE delegations SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    return this.getDelegation(id, userId);
+  }
+
+  async deleteDelegation(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM delegations WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
+  async getDelegationsForFollowUp(userId: string): Promise<Array<{ id: string; title: string; delegated_to: string; due_at: string | null; created_at: string }>> {
+    const rows = await this._query(
+      `SELECT id, title, delegated_to, due_at, created_at FROM delegations
+       WHERE user_id = ? AND status = 'waiting' AND due_at IS NOT NULL AND due_at <= NOW()
+       ORDER BY due_at ASC`,
       [userId],
     );
     return rows as any[];

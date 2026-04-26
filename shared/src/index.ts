@@ -227,6 +227,7 @@ export type BuiltinAppId =
   | 'color-picker'
   | 'dice-roller'
   | 'decision-journal'
+  | 'delegation-tracker'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

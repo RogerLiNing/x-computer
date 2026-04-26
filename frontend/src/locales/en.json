@@ -61,7 +61,8 @@
     "calculator": "Calculator",
     "color-picker": "Colors",
     "dice-roller": "Dice",
-    "decision-journal": "Decisions"
+    "decision-journal": "Decisions",
+    "delegation-tracker": "Delegations"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -98,7 +99,8 @@
     "calculator": "Full-featured calculator with keyboard support and calculation history",
     "color-picker": "Visual color picker with HEX, RGB, HSL values, complementary colors, and history",
     "dice-roller": "Roll dice (D4, D6, D8, D10, D12, D20, D100) with modifier support and history",
-    "decision-journal": "Record decisions with context, rationale, and track outcomes over time"
+    "decision-journal": "Record decisions with context, rationale, and track outcomes over time",
+    "delegation-tracker": "Track delegated tasks and follow up on commitments"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

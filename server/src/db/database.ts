@@ -528,6 +528,28 @@ export class SqliteAppDatabase {
       CREATE INDEX IF NOT EXISTS idx_decision_journal_status ON decision_journals(user_id, status);
       CREATE INDEX IF NOT EXISTS idx_decision_journal_followup ON decision_journals(user_id, follow_up_at);
     `);
+    // delegations 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS delegations (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        delegated_to TEXT NOT NULL,
+        due_at TEXT,
+        last_checked_at TEXT,
+        status TEXT NOT NULL DEFAULT 'waiting',
+        follow_up_count INTEGER NOT NULL DEFAULT 0,
+        notes TEXT,
+        source TEXT,
+        tags TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_delegations_user ON delegations(user_id);
+      CREATE INDEX IF NOT EXISTS idx_delegations_status ON delegations(user_id, status);
+      CREATE INDEX IF NOT EXISTS idx_delegations_due ON delegations(user_id, due_at);
+    `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -1926,6 +1948,68 @@ export class SqliteAppDatabase {
   close(): void {
     this.db.close();
   }
+
+  // ── Delegations ──────────────────────────────────────────────
+
+  createDelegation(params: {
+    id?: string; userId: string; title: string; description?: string;
+    delegatedTo: string; dueAt?: string; source?: string; tags?: string[];
+  }): { id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } {
+    const id = params.id ?? uuid();
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO delegations (id, user_id, title, description, delegated_to, due_at, last_checked_at, status, follow_up_count, notes, source, tags, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, NULL, ?, ?, ?)`,
+    ).run(id, params.userId, params.title, params.description ?? null, params.delegatedTo,
+      params.dueAt ?? null, null, params.source ?? null, JSON.stringify(params.tags ?? []), now, now);
+    return this.getDelegation(id, params.userId)!;
+  }
+
+  listDelegations(userId: string, options?: { status?: string; search?: string }): Array<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string }> {
+    const conditions = ['user_id = ?'];
+    const args: string[] = [userId];
+    if (options?.status) { conditions.push('status = ?'); args.push(options.status); }
+    if (options?.search) { conditions.push('(title LIKE ? OR delegated_to LIKE ? OR description LIKE ?)'); const q = `%${options.search}%`; args.push(q, q, q); }
+    const rows = this.db.prepare(`SELECT * FROM delegations WHERE ${conditions.join(' AND ')} ORDER BY due_at ASC NULLS LAST, created_at DESC`).all(...args) as any[];
+    return rows.map(r => ({ ...r, tags: r.tags ? JSON.parse(r.tags) : [] }));
+  }
+
+  getDelegation(id: string, userId: string): { id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } | undefined {
+    const row = this.db.prepare('SELECT * FROM delegations WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    if (!row) return undefined;
+    return { ...row, tags: row.tags ? JSON.parse(row.tags) : [] };
+  }
+
+  updateDelegation(id: string, userId: string, fields: {
+    title?: string; description?: string | null; delegatedTo?: string; dueAt?: string | null;
+    status?: string; notes?: string | null; tags?: string[];
+  }): { id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } | undefined {
+    const sets: string[] = ['updated_at = ?'];
+    const args: (string | null)[] = [new Date().toISOString()];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.description !== undefined) { sets.push('description = ?'); args.push(fields.description); }
+    if (fields.delegatedTo !== undefined) { sets.push('delegated_to = ?'); args.push(fields.delegatedTo); }
+    if (fields.dueAt !== undefined) { sets.push('due_at = ?'); args.push(fields.dueAt); }
+    if (fields.status !== undefined) { sets.push('status = ?'); args.push(fields.status); }
+    if (fields.notes !== undefined) { sets.push('notes = ?'); args.push(fields.notes); }
+    if (fields.tags !== undefined) { sets.push('tags = ?'); args.push(JSON.stringify(fields.tags)); }
+    args.push(id, userId);
+    this.db.prepare(`UPDATE delegations SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.getDelegation(id, userId);
+  }
+
+  deleteDelegation(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM delegations WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
+  getDelegationsForFollowUp(userId: string): Array<{ id: string; title: string; delegated_to: string; due_at: string | null; created_at: string }> {
+    const now = new Date().toISOString();
+    return this.db.prepare(
+      `SELECT id, title, delegated_to, due_at, created_at FROM delegations
+       WHERE user_id = ? AND status = 'waiting' AND due_at IS NOT NULL AND due_at <= ?
+       ORDER BY due_at ASC`,
+    ).all(userId, now) as any[];
+  }
 }
 
 /**
@@ -2508,6 +2592,31 @@ export class SqliteDatabaseAdapter {
   }
   getDecisionJournalsForFollowUp(userId: string): Promise<Array<{ id: string; title: string; follow_up_at: string | null; created_at: string }>> {
     return Promise.resolve(this.db.getDecisionJournalsForFollowUp(userId));
+  }
+  createDelegation(params: {
+    id?: string; userId: string; title: string; description?: string;
+    delegatedTo: string; dueAt?: string; source?: string; tags?: string[];
+  }): Promise<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.createDelegation(params));
+  }
+  listDelegations(userId: string, options?: { status?: string; search?: string }): Promise<Array<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string }>> {
+    return Promise.resolve(this.db.listDelegations(userId, options));
+  }
+  getDelegation(id: string, userId: string): Promise<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.getDelegation(id, userId));
+  }
+  updateDelegation(id: string, userId: string, fields: {
+    title?: string; description?: string | null; delegatedTo?: string; dueAt?: string | null;
+    status?: string; notes?: string | null; tags?: string[];
+  }): Promise<{ id: string; user_id: string; title: string; description: string | null; delegated_to: string; due_at: string | null; last_checked_at: string | null; status: string; follow_up_count: number; notes: string | null; source: string | null; tags: string[]; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.updateDelegation(id, userId, fields));
+  }
+  deleteDelegation(id: string, userId: string): Promise<void> {
+    this.db.deleteDelegation(id, userId);
+    return Promise.resolve();
+  }
+  getDelegationsForFollowUp(userId: string): Promise<Array<{ id: string; title: string; delegated_to: string; due_at: string | null; created_at: string }>> {
+    return Promise.resolve(this.db.getDelegationsForFollowUp(userId));
   }
   close(): void {
     this.db.close();
