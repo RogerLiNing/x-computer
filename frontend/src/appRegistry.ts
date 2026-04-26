@@ -44,6 +44,7 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'canvas', name: getAppName('canvas'), description: getAppDescription('canvas'), source: 'builtin', icon: 'Image' },
   { id: 'diff', name: getAppName('diff'), description: getAppDescription('diff'), source: 'builtin', icon: 'GitCompare' },
   { id: 'system-monitor', name: getAppName('system-monitor'), description: getAppDescription('system-monitor'), source: 'builtin', icon: 'Activity' },
+  { id: 'quick-notes', name: getAppName('quick-notes'), description: getAppDescription('quick-notes'), source: 'builtin', icon: 'StickyNote' },
 ];
 
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
@@ -71,6 +72,7 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   canvas: { width: 900, height: 640 },
   diff: { width: 900, height: 640 },
   'system-monitor': { width: 680, height: 560 },
+  'quick-notes': { width: 720, height: 540 },
 };
 
 function loadInstalled(): AppManifest[] {

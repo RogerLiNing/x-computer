@@ -1653,6 +1653,47 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM calendar_events WHERE id = ? AND user_id = ?').run(id, userId);
   }
 
+  // ── Quick Notes ────────────────────────────────────────────────
+
+  createQuickNote(params: {
+    id?: string; userId: string; title?: string; content?: string; color?: string; pinned?: boolean;
+  }): { id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string } {
+    const id = params.id ?? uuid();
+    const title = params.title ?? '';
+    const content = params.content ?? '';
+    const color = params.color ?? '#fef3c7';
+    const pinned = params.pinned ? 1 : 0;
+    this.db.prepare(
+      `INSERT INTO quick_notes (id, user_id, title, content, color, pinned) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(id, params.userId, title, content, color, pinned);
+    return this.db.prepare('SELECT * FROM quick_notes WHERE id = ?').get(id) as any;
+  }
+
+  listQuickNotes(userId: string): { id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string }[] {
+    return this.db.prepare(
+      `SELECT * FROM quick_notes WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC`,
+    ).all(userId) as any[];
+  }
+
+  updateQuickNote(id: string, userId: string, fields: {
+    title?: string; content?: string; color?: string; pinned?: boolean;
+  }): { id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string } | undefined {
+    const sets: string[] = [];
+    const args: (string | number)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.content !== undefined) { sets.push('content = ?'); args.push(fields.content); }
+    if (fields.color !== undefined) { sets.push('color = ?'); args.push(fields.color); }
+    if (fields.pinned !== undefined) { sets.push('pinned = ?'); args.push(fields.pinned ? 1 : 0); }
+    if (sets.length === 0) return this.db.prepare('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?').get(id, userId) as any;
+    args.push(id, userId);
+    this.db.prepare(`UPDATE quick_notes SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`).run(...args);
+    return this.db.prepare('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?').get(id, userId) as any;
+  }
+
+  deleteQuickNote(id: string, userId: string): void {
+    this.db.prepare('DELETE FROM quick_notes WHERE id = ? AND user_id = ?').run(id, userId);
+  }
+
   close(): void {
     this.db.close();
   }
@@ -2156,6 +2197,23 @@ export class SqliteDatabaseAdapter {
   }
   deleteCalendarEvent(id: string, userId: string): Promise<void> {
     this.db.deleteCalendarEvent(id, userId);
+    return Promise.resolve();
+  }
+  createQuickNote(params: {
+    id?: string; userId: string; title?: string; content?: string; color?: string; pinned?: boolean;
+  }): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string }> {
+    return Promise.resolve(this.db.createQuickNote(params));
+  }
+  listQuickNotes(userId: string): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string }[]> {
+    return Promise.resolve(this.db.listQuickNotes(userId));
+  }
+  updateQuickNote(id: string, userId: string, fields: {
+    title?: string; content?: string; color?: string; pinned?: boolean;
+  }): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.updateQuickNote(id, userId, fields));
+  }
+  deleteQuickNote(id: string, userId: string): Promise<void> {
+    this.db.deleteQuickNote(id, userId);
     return Promise.resolve();
   }
   close(): void {

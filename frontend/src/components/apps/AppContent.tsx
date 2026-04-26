@@ -22,6 +22,7 @@ import { AdminApp } from './AdminApp';
 import { CanvasApp } from './CanvasApp';
 import { DiffApp } from './DiffApp';
 import { SystemMonitorApp } from './SystemMonitorApp';
+import { QuickNotesApp } from './QuickNotesApp';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -70,6 +71,8 @@ function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: Built
       return <DiffApp windowId={windowId} />;
     case 'system-monitor':
       return <SystemMonitorApp windowId={windowId} />;
+    case 'quick-notes':
+      return <QuickNotesApp windowId={windowId} />;
     case 'image-viewer':
       return <ImageViewerApp windowId={windowId} metadata={metadata} />;
     case 'office-viewer':

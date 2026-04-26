@@ -52,7 +52,8 @@
     "mcp": "MCP 扩展",
     "channels": "渠道管理",
     "diff": "文件对比",
-    "system-monitor": "系统监控"
+    "system-monitor": "系统监控",
+    "quick-notes": "快捷笔记"
   },
   "appDescriptions": {
     "file-manager": "浏览与管理沙箱文件",
@@ -80,7 +81,8 @@
     "mcp": "管理 MCP 服务器扩展",
     "channels": "管理邮件、WhatsApp、QQ 等通信渠道",
     "miniapp": "X 制作的应用",
-    "system-monitor": "实时监控系统资源：CPU、内存、磁盘和任务状态"
+    "system-monitor": "实时监控系统资源：CPU、内存、磁盘和任务状态",
+    "quick-notes": "快速记录想法、待办事项和灵感"
   },
   "desktop": {
     "searchPlaceholder": "搜索应用...",

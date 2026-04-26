@@ -1,0 +1,13 @@
+-- Migration: Add quick_notes table
+CREATE TABLE IF NOT EXISTS quick_notes (
+  id VARCHAR(36) PRIMARY KEY,
+  user_id VARCHAR(36) NOT NULL,
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  content TEXT NOT NULL DEFAULT '',
+  color VARCHAR(20) DEFAULT '#fef3c7',
+  pinned TINYINT(1) NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_quick_notes_user ON quick_notes(user_id);

@@ -215,6 +215,7 @@ export type BuiltinAppId =
   | 'canvas'
   | 'diff'
   | 'system-monitor'
+  | 'quick-notes'
 ;
 
 /** 兼容旧用法：AppId 与 BuiltinAppId 同义 */

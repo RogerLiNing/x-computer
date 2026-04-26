@@ -1630,6 +1630,47 @@ export class MysqlDatabase {
     await this._run('DELETE FROM calendar_events WHERE id = ? AND user_id = ?', [id, userId]);
   }
 
+  // ── Quick Notes ────────────────────────────────────────────────
+
+  async createQuickNote(params: {
+    id?: string; userId: string; title?: string; content?: string; color?: string; pinned?: boolean;
+  }): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string }> {
+    const id = params.id ?? uuid();
+    await this._run(
+      'INSERT INTO quick_notes (id, user_id, title, content, color, pinned) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, params.userId, params.title ?? '', params.content ?? '', params.color ?? '#fef3c7', params.pinned ? 1 : 0],
+    );
+    const rows = await this._query('SELECT * FROM quick_notes WHERE id = ?', [id]);
+    return rows[0];
+  }
+
+  async listQuickNotes(userId: string): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string }[]> {
+    return this._query('SELECT * FROM quick_notes WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC', [userId]);
+  }
+
+  async updateQuickNote(id: string, userId: string, fields: {
+    title?: string; content?: string; color?: string; pinned?: boolean;
+  }): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string } | undefined> {
+    const sets: string[] = [];
+    const args: (string | number)[] = [];
+    if (fields.title !== undefined) { sets.push('title = ?'); args.push(fields.title); }
+    if (fields.content !== undefined) { sets.push('content = ?'); args.push(fields.content); }
+    if (fields.color !== undefined) { sets.push('color = ?'); args.push(fields.color); }
+    if (fields.pinned !== undefined) { sets.push('pinned = ?'); args.push(fields.pinned ? 1 : 0); }
+    if (sets.length === 0) {
+      const rows = await this._query('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
+      return rows[0];
+    }
+    args.push(id, userId);
+    await this._run(`UPDATE quick_notes SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
+    const rows = await this._query('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
+    return rows[0];
+  }
+
+  async deleteQuickNote(id: string, userId: string): Promise<void> {
+    await this._run('DELETE FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
   close(): void {
     this.pool.end();
   }

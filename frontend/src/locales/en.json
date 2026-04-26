@@ -49,7 +49,8 @@
     "admin": "Admin",
     "canvas": "Canvas",
     "diff": "Diff",
-    "system-monitor": "System Monitor"
+    "system-monitor": "System Monitor",
+    "quick-notes": "Quick Notes"
   },
   "appDescriptions": {
     "file-manager": "Browse and manage sandbox files",
@@ -74,7 +75,8 @@
     "canvas": "Free drawing and whiteboard tool",
     "miniapp": "App created by X",
     "diff": "Compare two text or code files, highlighting additions, deletions, and changes",
-    "system-monitor": "Real-time system monitoring: CPU, memory, disk, and task stats"
+    "system-monitor": "Real-time system monitoring: CPU, memory, disk, and task stats",
+    "quick-notes": "Quickly capture ideas, todos, and inspirations"
   },
   "desktop": {
     "searchPlaceholder": "Search apps...",

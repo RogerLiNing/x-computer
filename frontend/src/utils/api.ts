@@ -2154,4 +2154,27 @@ export const api = {
 
   calendarDeleteEvent: (id: string) =>
     request<void>(`/calendar/events/${id}`, { method: 'DELETE' }),
+
+  // ── Quick Notes ──────────────────────────────────────────────────
+
+  notesList: () =>
+    request<Array<{
+      id: string; title: string; content: string; color: string;
+      pinned: boolean; createdAt: string; updatedAt: string;
+    }>>('/notes'),
+
+  notesCreate: (params: { title?: string; content?: string; color?: string; pinned?: boolean }) =>
+    request<{
+      id: string; title: string; content: string; color: string;
+      pinned: boolean; createdAt: string; updatedAt: string;
+    }>('/notes', { method: 'POST', body: JSON.stringify(params) }),
+
+  notesUpdate: (id: string, fields: { title?: string; content?: string; color?: string; pinned?: boolean }) =>
+    request<{
+      id: string; title: string; content: string; color: string;
+      pinned: boolean; createdAt: string; updatedAt: string;
+    }>(`/notes/${id}`, { method: 'PUT', body: JSON.stringify(fields) }),
+
+  notesDelete: (id: string) =>
+    request<void>(`/notes/${id}`, { method: 'DELETE' }),
 };

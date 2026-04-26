@@ -19,6 +19,7 @@ export { createChatSessionRouter } from './chatSessions.js';
 export { createWorkflowRouter } from './workflow.js';
 export { createEmailRouter } from './email.js';
 export { createCalendarRouter } from './calendar.js';
+export { createNotesRouter } from './notes.js';
 export { createWhatsAppRouter } from './messaging/whatsapp.js';
 export { createTelegramRouter } from './messaging/telegram.js';
 export { createDiscordRouter } from './messaging/discord.js';
