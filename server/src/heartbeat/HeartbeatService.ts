@@ -18,6 +18,8 @@ import type { SubscriptionService } from '../subscription/SubscriptionService.js
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import { broadcastToUser } from '../wsBroadcast.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { callLLM } from '../chat/chatService.js';
+import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 
 // ── 类型定义 ─────────────────────────────────────────────────────
 
@@ -481,5 +483,107 @@ export class HeartbeatService {
       'UPDATE heartbeat_notifications SET dismissed = 1 WHERE id = ? AND user_id = ?',
       [notificationId, userId],
     );
+  }
+
+  // ── HEARTBEAT.md Checklist ─────────────────────────────────────
+
+  /** 获取用户的 HEARTBEAT.md 检查清单内容 */
+  async getChecklist(userId: string): Promise<string> {
+    const row = await this.db.getHeartbeatChecklist(userId);
+    return row?.content ?? '';
+  }
+
+  /** 保存用户的 HEARTBEAT.md 检查清单内容 */
+  async setChecklist(userId: string, content: string): Promise<void> {
+    await this.db.setHeartbeatChecklist(userId, content);
+  }
+
+  /** 执行一次 HEARTBEAT.md 清单检查 */
+  async executeHeartbeatCheck(userId: string): Promise<{
+    findings: Array<{ item: string; output: string; status: 'success' | 'skipped' | 'error' }>;
+    summary: string;
+  }> {
+    const content = await this.getChecklist(userId);
+    if (!content.trim()) {
+      return { findings: [], summary: '检查清单为空，跳过执行。' };
+    }
+
+    const findings: Array<{ item: string; output: string; status: 'success' | 'skipped' | 'error' }> = [];
+    const lines = content.split('\n');
+    const now = new Date().toISOString();
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // 只处理任务项（- [ ] 或 - [x] 或 - [X]）
+      if (!trimmed.startsWith('- [')) continue;
+      const checked = trimmed.startsWith('- [x]') || trimmed.startsWith('- [X]');
+      const itemMatch = trimmed.match(/^-\s+\[[ xX]\]\s+(.+)/);
+      if (!itemMatch) continue;
+      const item = itemMatch[1].trim();
+
+      try {
+        const llmCreds = await resolveLLMCredentials(userId, this.db, this.subscriptionService);
+        if (!llmCreds) {
+          findings.push({ item, output: '未配置 LLM，无法执行此检查项', status: 'error' });
+          continue;
+        }
+        const prompt = `你正在执行心跳检查任务：${item}\n\n请执行此任务并返回简要结果（1-3句话）。如果无法执行，说明原因。`;
+        const result = await callLLM({
+          messages: [{ role: 'user', content: prompt }],
+          providerId: llmCreds.providerId,
+          modelId: llmCreds.modelId,
+          baseUrl: llmCreds.baseUrl,
+          apiKey: llmCreds.apiKey,
+          apiType: llmCreds.apiType,
+        });
+        findings.push({ item, output: result.slice(0, 500), status: 'success' });
+      } catch (err) {
+        findings.push({ item, output: err instanceof Error ? err.message : '执行失败', status: 'error' });
+      }
+    }
+
+    // 生成摘要
+    const total = findings.length;
+    const success = findings.filter((f) => f.status === 'success').length;
+    const skipped = findings.filter((f) => f.status === 'skipped').length;
+    const errors = findings.filter((f) => f.status === 'error').length;
+    const summary = `检查完成：${total} 项任务，${success} 成功${errors > 0 ? `，${errors} 失败` : ''}${skipped > 0 ? `，${skipped} 跳过` : ''}。`;
+
+    // 持久化结果
+    const findingId = uuid();
+    await this.db.createHeartbeatFinding({
+      id: findingId,
+      userId,
+      runAt: now,
+      findings: JSON.stringify(findings),
+      summary,
+    });
+
+    // 如果有错误，通知用户
+    if (errors > 0 || total === 0) {
+      const actionable = findings.filter((f) => f.status === 'error');
+      if (actionable.length > 0) {
+        const msg = `Heartbeat 检查发现 ${actionable.length} 个问题：${actionable.map((f) => f.item).join('、')}。`;
+        await this.notify(userId, 'daily_summary', msg, { findings, findingId });
+      }
+    }
+
+    return { findings, summary };
+  }
+
+  /** 获取历史检查记录 */
+  async getCheckFindings(userId: string, limit = 10): Promise<Array<{
+    id: string; runAt: string; findings: Array<{ item: string; output: string; status: string }>;
+    summary: string; notificationSent: boolean; createdAt: string;
+  }>> {
+    const rows = await this.db.listHeartbeatFindings(userId, limit);
+    return rows.map((r) => ({
+      id: r.id,
+      runAt: r.run_at,
+      findings: JSON.parse(r.findings),
+      summary: r.summary ?? '',
+      notificationSent: r.notification_sent === 1,
+      createdAt: r.created_at,
+    }));
   }
 }

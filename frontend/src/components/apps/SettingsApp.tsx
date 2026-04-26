@@ -25,7 +25,7 @@ interface Props {
   windowId: string;
 }
 
-type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets' | 'history';
+type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets' | 'history' | 'heartbeat';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -512,6 +512,133 @@ function HeartbeatSettings() {
       >
         {loading ? t('settings.saving', '保存中…') : saved ? t('settings.saved', '已保存 ✓') : t('settings.save', '保存设置')}
       </button>
+    </div>
+  );
+}
+
+function HeartbeatChecklistSettings() {
+  const { t } = useTranslation();
+  const [content, setContent] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [lastResult, setLastResult] = useState<{ findings: Array<{ item: string; output: string; status: string }>; summary: string } | null>(null);
+  const [history, setHistory] = useState<Array<{ id: string; runAt: string; summary: string; findings: Array<{ item: string; output: string; status: string }> }>>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    api.heartbeatGetChecklist().then((r) => {
+      setContent(r.content);
+      setLoading(false);
+    }).catch(() => setLoading(false));
+
+    api.heartbeatGetCheckHistory(5).then((r) => {
+      setHistory(r.history);
+    }).catch(() => {});
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await api.heartbeatSetChecklist(content);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleRun = async () => {
+    setRunning(true);
+    try {
+      const result = await api.heartbeatRunChecklist();
+      setLastResult({ findings: result.findings, summary: result.summary });
+      const updated = await api.heartbeatGetCheckHistory(5);
+      setHistory(updated.history);
+    } catch {
+      // ignore
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.heartbeatChecklistTitle', 'Heartbeat 检查清单')}</h3>
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-desktop-accent/20 text-desktop-muted">AI</span>
+      </div>
+      <p className="text-[11px] text-desktop-muted leading-relaxed">
+        {t('settings.heartbeatChecklistDesc', '定义定期执行的检查任务，心跳服务会自动执行并通知结果。使用 Markdown 任务列表格式（- [ ]）。')}
+      </p>
+
+      {loading ? (
+        <p className="text-xs text-desktop-muted">{t('settings.loading', '加载中…')}</p>
+      ) : (
+        <>
+          <textarea
+            ref={textareaRef}
+            className="w-full h-64 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text font-mono outline-none resize-y"
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            placeholder={'# Heartbeat Checklist\n\n## 每日任务\n- [ ] 检查是否有未处理的事项\n\n## 每周任务\n- [ ] 生成工作周报'}
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={saving}
+              className="px-3 py-1.5 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 disabled:opacity-50 text-xs text-desktop-text transition-colors"
+            >
+              {saving ? t('settings.saving', '保存中…') : t('settings.save', '保存')}
+            </button>
+            <button
+              type="button"
+              onClick={handleRun}
+              disabled={running}
+              className="px-3 py-1.5 rounded-lg bg-green-600/30 hover:bg-green-600/50 disabled:opacity-50 text-xs text-green-300 transition-colors flex items-center gap-1"
+            >
+              {running && <Loader2 className="w-3 h-3 animate-spin" />}
+              {running ? t('settings.running', '执行中…') : t('settings.heartbeatRunChecklist', '立即执行')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowHistory(!showHistory)}
+              className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-desktop-muted transition-colors"
+            >
+              {showHistory ? t('settings.hideHistory', '隐藏历史') : t('settings.showHistory', `历史 (${history.length})`)}
+            </button>
+          </div>
+        </>
+      )}
+
+      {lastResult && (
+        <div className="rounded-lg border border-white/10 bg-white/5 p-3 space-y-2">
+          <p className="text-xs font-medium text-desktop-text">{lastResult.summary}</p>
+          {lastResult.findings.map((f, i) => (
+            <div key={i} className="flex gap-2 text-[11px]">
+              <span className={f.status === 'success' ? 'text-green-400' : f.status === 'error' ? 'text-red-400' : 'text-yellow-400'}>
+                {f.status === 'success' ? '✓' : f.status === 'error' ? '✗' : '○'}
+              </span>
+              <div>
+                <span className="text-desktop-text font-medium">{f.item}</span>
+                <p className="text-desktop-muted">{f.output}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {showHistory && history.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-desktop-muted">{t('settings.checkHistory', '检查历史')}</p>
+          {history.map((h) => (
+            <div key={h.id} className="rounded-lg border border-white/10 bg-white/5 p-2">
+              <p className="text-[11px] text-desktop-muted mb-1">{new Date(h.runAt).toLocaleString()}</p>
+              <p className="text-xs text-desktop-text">{h.summary}</p>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2365,6 +2492,7 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'shortcuts', labelKey: 'settings.shortcuts', icon: Keyboard },
     { id: 'tools', labelKey: 'settings.tools', icon: Wrench },
     { id: 'channels', labelKey: 'settings.channels', icon: MessageSquare },
+    { id: 'heartbeat', labelKey: 'settings.heartbeatChecklist', icon: Activity },
     { id: 'about', labelKey: 'settings.about', icon: Info },
     { id: 'history', labelKey: 'settings.taskHistory', icon: History },
   ];
@@ -2585,6 +2713,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'history' && (
           <TaskHistorySettings />
+        )}
+
+        {tab === 'heartbeat' && (
+          <HeartbeatChecklistSettings />
         )}
 
         {tab === 'webhooks' && (

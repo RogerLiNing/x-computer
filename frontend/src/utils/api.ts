@@ -358,6 +358,37 @@ export const api = {
       method: 'DELETE',
     }),
 
+  /** 获取 HEARTBEAT.md 检查清单内容 */
+  heartbeatGetChecklist: () =>
+    request<{ content: string }>('/heartbeat/checklist'),
+
+  /** 保存 HEARTBEAT.md 检查清单内容 */
+  heartbeatSetChecklist: (content: string) =>
+    request<{ success: boolean }>('/heartbeat/checklist', {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    }),
+
+  /** 手动执行一次检查清单 */
+  heartbeatRunChecklist: () =>
+    request<{
+      success: boolean;
+      findings: Array<{ item: string; output: string; status: string }>;
+      summary: string;
+    }>('/heartbeat/checklist/run', { method: 'POST' }),
+
+  /** 获取历史检查记录 */
+  heartbeatGetCheckHistory: (limit?: number) => {
+    const url = limit ? `/heartbeat/checklist/history?limit=${limit}` : '/heartbeat/checklist/history';
+    return request<{
+      history: Array<{
+        id: string; runAt: string; summary: string;
+        findings: Array<{ item: string; output: string; status: string }>;
+        notificationSent: boolean; createdAt: string;
+      }>;
+    }>(url);
+  },
+
   /** 获取 OAuth 提供商配置状态（前端据此决定是否显示 OAuth 按钮） */
   oauthGetStatus: () =>
     request<{ google: boolean; github: boolean }>('/auth/oauth/status'),

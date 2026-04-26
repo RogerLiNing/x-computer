@@ -463,6 +463,49 @@ export class SqliteAppDatabase {
       CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
       CREATE INDEX IF NOT EXISTS idx_notifications_created ON notifications(created_at DESC);
     `);
+    // heartbeat_findings 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS heartbeat_findings (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        run_at TEXT NOT NULL,
+        findings TEXT NOT NULL,
+        summary TEXT,
+        notification_sent INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_hb_findings_user ON heartbeat_findings(user_id);
+      CREATE INDEX IF NOT EXISTS idx_hb_findings_run ON heartbeat_findings(user_id, run_at DESC);
+    `);
+    // heartbeat_checklist 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS heartbeat_checklist (
+        user_id TEXT PRIMARY KEY,
+        content TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    // 插入默认检查清单
+    this.db.exec(`
+      INSERT OR IGNORE INTO heartbeat_checklist (user_id, content, updated_at) VALUES ('default', '# Heartbeat Checklist
+
+<!--
+保持此文件为空将跳过心跳检查。
+在下方添加周期性检查任务，心跳服务会按配置间隔自动执行。
+-->
+
+## 每日任务
+- [ ] 检查是否有未处理的提醒或待办事项
+- [ ] 查看今日会话摘要，整理重要信息
+
+## 每周任务（周一）
+- [ ] 生成上周工作周报摘要
+
+## 始终
+- [ ] 如有重要发现，写入 heartbeat/latest.md
+- [ ] 仅在发现可操作事项时通知用户
+', datetime('now'));
+    `);
   }
 
   // ── Users ──────────────────────────────────────────────────
@@ -1744,6 +1787,46 @@ export class SqliteAppDatabase {
     this.db.prepare('DELETE FROM bookmarks WHERE id = ? AND user_id = ?').run(id, userId);
   }
 
+  // ── Heartbeat Findings ─────────────────────────────────────────
+
+  createHeartbeatFinding(params: {
+    id?: string; userId: string; runAt: string; findings: string; summary?: string;
+  }): { id: string; user_id: string; run_at: string; findings: string; summary: string | null; notification_sent: number; created_at: string } {
+    const id = params.id ?? uuid();
+    this.db.prepare(
+      'INSERT INTO heartbeat_findings (id, user_id, run_at, findings, summary, notification_sent) VALUES (?, ?, ?, ?, ?, 0)',
+    ).run(id, params.userId, params.runAt, params.findings, params.summary ?? null);
+    const row = this.db.prepare('SELECT * FROM heartbeat_findings WHERE id = ?').get(id) as any;
+    return row;
+  }
+
+  listHeartbeatFindings(userId: string, limit = 20): { id: string; user_id: string; run_at: string; findings: string; summary: string | null; notification_sent: number; created_at: string }[] {
+    return this.db.prepare(
+      'SELECT * FROM heartbeat_findings WHERE user_id = ? ORDER BY run_at DESC LIMIT ?',
+    ).all(userId, limit) as any[];
+  }
+
+  markHeartbeatFindingNotified(id: string): void {
+    this.db.prepare('UPDATE heartbeat_findings SET notification_sent = 1 WHERE id = ?').run(id);
+  }
+
+  // ── Heartbeat Checklist ───────────────────────────────────────
+
+  getHeartbeatChecklist(userId: string): { user_id: string; content: string; updated_at: string } | undefined {
+    return this.db.prepare('SELECT * FROM heartbeat_checklist WHERE user_id = ?').get(userId) as any
+      ?? this.db.prepare('SELECT * FROM heartbeat_checklist WHERE user_id = ?').get('default') as any
+      ?? undefined;
+  }
+
+  setHeartbeatChecklist(userId: string, content: string): { user_id: string; content: string; updated_at: string } {
+    const now = new Date().toISOString();
+    this.db.prepare(
+      `INSERT INTO heartbeat_checklist (user_id, content, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`,
+    ).run(userId, content, now);
+    return { user_id: userId, content, updated_at: now };
+  }
+
   close(): void {
     this.db.close();
   }
@@ -2285,6 +2368,24 @@ export class SqliteDatabaseAdapter {
   deleteBookmark(id: string, userId: string): Promise<void> {
     this.db.deleteBookmark(id, userId);
     return Promise.resolve();
+  }
+  createHeartbeatFinding(params: {
+    id?: string; userId: string; runAt: string; findings: string; summary?: string;
+  }): Promise<{ id: string; user_id: string; run_at: string; findings: string; summary: string | null; notification_sent: number; created_at: string }> {
+    return Promise.resolve(this.db.createHeartbeatFinding(params));
+  }
+  listHeartbeatFindings(userId: string, limit?: number): Promise<{ id: string; user_id: string; run_at: string; findings: string; summary: string | null; notification_sent: number; created_at: string }[]> {
+    return Promise.resolve(this.db.listHeartbeatFindings(userId, limit));
+  }
+  markHeartbeatFindingNotified(id: string): Promise<void> {
+    this.db.markHeartbeatFindingNotified(id);
+    return Promise.resolve();
+  }
+  getHeartbeatChecklist(userId: string): Promise<{ user_id: string; content: string; updated_at: string } | undefined> {
+    return Promise.resolve(this.db.getHeartbeatChecklist(userId));
+  }
+  setHeartbeatChecklist(userId: string, content: string): Promise<{ user_id: string; content: string; updated_at: string }> {
+    return Promise.resolve(this.db.setHeartbeatChecklist(userId, content));
   }
   close(): void {
     this.db.close();

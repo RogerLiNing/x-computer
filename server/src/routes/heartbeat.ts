@@ -98,6 +98,74 @@ export function createHeartbeatRouter(
     }
   });
 
+  // ── Checklist 端点 ───────────────────────────────────────────
+
+  /** GET /api/heartbeat/checklist - 获取当前用户的 HEARTBEAT.md 检查清单 */
+  router.get('/checklist', async (req, res) => {
+    try {
+      const userId = (req as { userId?: string }).userId;
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: '需要登录' });
+        return;
+      }
+      const content = await heartbeatService.getChecklist(userId);
+      res.json({ content });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : '读取失败' });
+    }
+  });
+
+  /** PUT /api/heartbeat/checklist - 保存 HEARTBEAT.md 检查清单 */
+  router.put('/checklist', async (req, res) => {
+    try {
+      const userId = (req as { userId?: string }).userId;
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: '需要登录' });
+        return;
+      }
+      const { content } = req.body ?? {};
+      if (typeof content !== 'string') {
+        res.status(400).json({ error: 'content 字段必填' });
+        return;
+      }
+      await heartbeatService.setChecklist(userId, content);
+      res.json({ success: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : '保存失败' });
+    }
+  });
+
+  /** POST /api/heartbeat/checklist/run - 手动执行一次检查清单 */
+  router.post('/checklist/run', async (req, res) => {
+    try {
+      const userId = (req as { userId?: string }).userId;
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: '需要登录' });
+        return;
+      }
+      const result = await heartbeatService.executeHeartbeatCheck(userId);
+      res.json({ success: true, ...result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : '执行失败' });
+    }
+  });
+
+  /** GET /api/heartbeat/checklist/history - 获取历史检查记录 */
+  router.get('/checklist/history', async (req, res) => {
+    try {
+      const userId = (req as { userId?: string }).userId;
+      if (!userId || userId === 'anonymous') {
+        res.status(401).json({ error: '需要登录' });
+        return;
+      }
+      const limit = Math.min(50, Math.max(1, parseInt(String(req.query?.limit)) || 10));
+      const history = await heartbeatService.getCheckFindings(userId, limit);
+      res.json({ history });
+    } catch (err: unknown) {
+      res.status(500).json({ error: err instanceof Error ? err.message : '读取失败' });
+    }
+  });
+
   // ── 状态端点（仅管理员） ────────────────────────────────────
 
   /** GET /api/heartbeat/stats - 获取心跳服务状态（仅管理员） */

@@ -355,6 +355,47 @@ export class MysqlDatabase {
     )`, [], true);
     await this.ensureIndex('notifications', 'idx_notifications_user', 'CREATE INDEX idx_notifications_user ON notifications(user_id)', true);
     await this.ensureIndex('notifications', 'idx_notifications_created', 'CREATE INDEX idx_notifications_created ON notifications(created_at DESC)', true);
+
+    // heartbeat_findings 表
+    await this._run(`CREATE TABLE IF NOT EXISTS heartbeat_findings (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id VARCHAR(128) NOT NULL,
+      run_at DATETIME NOT NULL,
+      findings TEXT NOT NULL,
+      summary TEXT,
+      notification_sent TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`, [], true);
+    await this.ensureIndex('heartbeat_findings', 'idx_hb_findings_user', 'CREATE INDEX idx_hb_findings_user ON heartbeat_findings(user_id)', true);
+    await this.ensureIndex('heartbeat_findings', 'idx_hb_findings_run', 'CREATE INDEX idx_hb_findings_run ON heartbeat_findings(user_id, run_at DESC)', true);
+
+    // heartbeat_checklist 表
+    await this._run(`CREATE TABLE IF NOT EXISTS heartbeat_checklist (
+      user_id VARCHAR(128) PRIMARY KEY,
+      content TEXT NOT NULL DEFAULT '',
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )`, [], true);
+
+    // 插入默认检查清单
+    await this._run(`INSERT IGNORE INTO heartbeat_checklist (user_id, content, updated_at) VALUES ('default', ?, NOW())`, [
+      `# Heartbeat Checklist
+
+<!--
+保持此文件为空将跳过心跳检查。
+在下方添加周期性检查任务，心跳服务会按配置间隔自动执行。
+-->
+
+## 每日任务
+- [ ] 检查是否有未处理的提醒或待办事项
+- [ ] 查看今日会话摘要，整理重要信息
+
+## 每周任务（周一）
+- [ ] 生成上周工作周报摘要
+
+## 始终
+- [ ] 如有重要发现，写入 heartbeat/latest.md
+- [ ] 仅在发现可操作事项时通知用户
+`], true);
   }
 
   private async waitForInit(): Promise<void> {
@@ -1721,6 +1762,51 @@ export class MysqlDatabase {
 
   async deleteBookmark(id: string, userId: string): Promise<void> {
     await this._run('DELETE FROM bookmarks WHERE id = ? AND user_id = ?', [id, userId]);
+  }
+
+  // ── Heartbeat Findings ─────────────────────────────────────────
+
+  async createHeartbeatFinding(params: {
+    id?: string; userId: string; runAt: string; findings: string; summary?: string;
+  }): Promise<{ id: string; user_id: string; run_at: string; findings: string; summary: string | null; notification_sent: number; created_at: string }> {
+    const id = params.id ?? uuid();
+    await this._run(
+      'INSERT INTO heartbeat_findings (id, user_id, run_at, findings, summary, notification_sent) VALUES (?, ?, ?, ?, ?, 0)',
+      [id, params.userId, params.runAt, params.findings, params.summary ?? null],
+    );
+    const rows = await this._query('SELECT * FROM heartbeat_findings WHERE id = ?', [id]);
+    return rows[0] as any;
+  }
+
+  async listHeartbeatFindings(userId: string, limit = 20): Promise<{ id: string; user_id: string; run_at: string; findings: string; summary: string | null; notification_sent: number; created_at: string }[]> {
+    const rows = await this._query(
+      'SELECT * FROM heartbeat_findings WHERE user_id = ? ORDER BY run_at DESC LIMIT ?',
+      [userId, limit],
+    );
+    return rows as any[];
+  }
+
+  async markHeartbeatFindingNotified(id: string): Promise<void> {
+    await this._run('UPDATE heartbeat_findings SET notification_sent = 1 WHERE id = ?', [id]);
+  }
+
+  // ── Heartbeat Checklist ───────────────────────────────────────
+
+  async getHeartbeatChecklist(userId: string): Promise<{ user_id: string; content: string; updated_at: string } | undefined> {
+    const rows = await this._query('SELECT * FROM heartbeat_checklist WHERE user_id = ?', [userId]);
+    if (rows[0]) return rows[0] as any;
+    const defaultRows = await this._query('SELECT * FROM heartbeat_checklist WHERE user_id = ?', ['default']);
+    return defaultRows[0] as any;
+  }
+
+  async setHeartbeatChecklist(userId: string, content: string): Promise<{ user_id: string; content: string; updated_at: string }> {
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    await this._run(
+      `INSERT INTO heartbeat_checklist (user_id, content, updated_at) VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE content = VALUES(content), updated_at = VALUES(updated_at)`,
+      [userId, content, now],
+    );
+    return { user_id: userId, content, updated_at: now };
   }
 
   close(): void {
