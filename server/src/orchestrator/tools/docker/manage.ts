@@ -6,9 +6,10 @@
 import type { ToolDefinition } from '@x-computer/shared';
 import type { ToolExecutorDeps, ToolHandler } from '../types.js';
 import Docker from 'dockerode';
+import { createDockerClient } from '../../../docker/dockerSocket.js';
 import { serverLogger } from '../../../observability/ServerLogger.js';
 
-const docker = new Docker({ socketPath: '/var/run/docker.sock' });
+const docker = createDockerClient();
 
 /**
  * 创建并运行 Docker 容器

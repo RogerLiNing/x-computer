@@ -13,6 +13,7 @@ import { mkdir } from 'node:fs/promises';
  */
 
 import Docker from 'dockerode';
+import { createDockerClient } from '../docker/dockerSocket.js';
 import path from 'path';
 import { createHash } from 'node:crypto';
 import { PassThrough, Transform } from 'node:stream';
@@ -93,7 +94,7 @@ export class UserContainerManager {
   private mcpManager?: UserContainerManager;
 
   constructor(workspaceBasePath: string, options: UserContainerManagerOptions = {}, private mcp = false) {
-    this.docker = new Docker();
+    this.docker = createDockerClient();
     this.workspaceBasePath = workspaceBasePath;
     this.browserDnsMode = options.browserDnsMode ?? 'system';
     this.browserAllowedOrigins = options.browserAllowedOrigins ?? [];

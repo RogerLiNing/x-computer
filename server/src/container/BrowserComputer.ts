@@ -2,6 +2,7 @@ import type {BrowserUploadStore} from './BrowserUploadStore.js';
 import type { BrowserDownloadStore } from './BrowserDownloadStore.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import Docker from 'dockerode';
+import { createDockerClient } from '../docker/dockerSocket.js';
 import { PassThrough } from 'node:stream';
 import type { UserContainerManager } from './UserContainerManager.js';
 
@@ -12,7 +13,7 @@ export function assertBrowserAction(input:Record<string,unknown>){
 /** Docker exec is the transport; no browser port is published on the host. */
 export class BrowserComputer {
   private provisioning = new Map<string,Promise<string>>();
-  private docker = new Docker();
+  private docker = createDockerClient();
   constructor(private containers: Pick<UserContainerManager,'getOrCreateContainer'|'findRunningContainer'>, private downloads?: BrowserDownloadStore, private uploads?: BrowserUploadStore) {}
   async waitForControl(userId:string, signal?:AbortSignal):Promise<void> {
     for (;;) {

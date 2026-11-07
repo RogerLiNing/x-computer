@@ -4,6 +4,7 @@
  */
 
 import Docker from 'dockerode';
+import { createDockerClient } from './dockerSocket.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
 export interface DockerTaskConfig {
@@ -32,7 +33,7 @@ export class DockerTaskRunner {
   private docker: Docker;
 
   constructor() {
-    this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+    this.docker = createDockerClient();
   }
 
   /**
@@ -77,6 +78,7 @@ export class DockerTaskRunner {
     });
 
     try {
+      await this.ensureImage(config.image);
       // 使用 Promise.race 实现超时
       const [result, container] = await Promise.race([
         this.docker.run(
@@ -134,6 +136,23 @@ export class DockerTaskRunner {
       serverLogger.error('docker-task', `任务失败`, error instanceof Error ? error.message : String(error));
       throw error;
     }
+  }
+
+  /**
+   * 镜像不在本地时拉取一次；已存在则不访问镜像仓库。
+   */
+  private async ensureImage(image: string): Promise<void> {
+    try {
+      await this.docker.getImage(image).inspect();
+      return;
+    } catch (error: unknown) {
+      if ((error as { statusCode?: number }).statusCode !== 404) throw error;
+    }
+    serverLogger.info('docker-task', `本地缺少镜像，开始拉取 ${image}`);
+    const stream = await this.docker.pull(image);
+    await new Promise<void>((resolve, reject) => {
+      this.docker.modem.followProgress(stream, (err: Error | null) => (err ? reject(err) : resolve()));
+    });
   }
 
   /**

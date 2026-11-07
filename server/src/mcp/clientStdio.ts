@@ -5,11 +5,12 @@ import { createHash } from 'node:crypto';
 import type { McpServerConfig, McpToolSchema, McpCallResult, McpExecutionContext } from './types.js';
 import { MCP_STDIO_RUNNER } from './stdioRunner.js';
 import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
+import { dockerHostArgs } from '../docker/dockerSocket.js';
 
 const exec = promisify(execFile);
 const MAX_BUFFER = 4 * 1024 * 1024;
 const dockerEnv = () => ({ PATH: process.env.PATH, HOME: process.env.HOME });
-const dockerArgs = ['--host', 'unix:///var/run/docker.sock'];
+const dockerArgs = dockerHostArgs();
 interface Pending {
   resolve(value: unknown): void; reject(error: Error): void;
   cleanup(): void; method: string;

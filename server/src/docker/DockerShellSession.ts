@@ -4,6 +4,7 @@
  */
 
 import Docker from 'dockerode';
+import { createDockerClient } from './dockerSocket.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
 export interface ShellSessionConfig {
@@ -44,7 +45,7 @@ export class DockerShellSession {
   private stateFile: string = '/tmp/.shell_session_state';
 
   constructor(private config: ShellSessionConfig) {
-    this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+    this.docker = createDockerClient();
     this.containerId = config.container;
     this.currentWorkdir = config.workdir || '/workspace';
     this.currentEnv = config.env || {};
@@ -91,7 +92,17 @@ export class DockerShellSession {
       AttachStderr: true,
     });
 
-    await exec.start({ Detach: false });
+    const stream = await exec.start({ Detach: false });
+    // 必须等写入完成，否则紧接着的 loadState 可能读到旧状态
+    await new Promise<void>((resolve, reject) => {
+      stream.on('end', () => resolve());
+      stream.on('error', reject);
+      stream.resume();
+    });
+    const { ExitCode } = await exec.inspect();
+    if (ExitCode !== 0 && ExitCode !== null) {
+      throw new Error(`保存 Shell 会话状态失败（exit ${ExitCode}）`);
+    }
   }
 
   /**
