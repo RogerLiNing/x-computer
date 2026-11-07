@@ -26,6 +26,10 @@ describe('server-side default model resolution', () => {
     const db = { getConfig: async () => JSON.stringify(custom) } as never;
     expect(await resolveLLMCredentials('owner', db, undefined)).toMatchObject({ providerId: 'custom', modelId: 'user-model', apiType: 'anthropic' });
     const subscription = { getUserSubscription: async () => ({ planId: 'free' }) } as never;
+    // 默认策略：任何已登录用户都使用自己的配置
+    expect(await resolveLLMCredentials('owner', db, subscription)).toMatchObject({ providerId: 'custom', modelId: 'user-model' });
+    // paid 策略：免费用户回落到平台默认
+    vi.stubEnv('X_COMPUTER_USER_LLM_POLICY', 'paid');
     expect(await resolveLLMCredentials('owner', db, subscription)).toMatchObject({ providerId: 'platform', modelId: 'default-model' });
   });
 });

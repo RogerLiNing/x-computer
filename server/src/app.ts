@@ -438,7 +438,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/code', createCodeExecRouter(sandboxShell, userSandboxManager, db));
   app.use('/api/servers', createServerRouter());
   if (plugins.isEnabled('billing')) {
-    app.use('/api/subscriptions', createSubscriptionRoutes(subscriptionService, stripeService));
+    app.use('/api/subscriptions', createSubscriptionRoutes(subscriptionService, stripeService, db));
   }
   if (plugins.isEnabled('admin')) {
     app.use('/api/admin', createAdminRouter(db, subscriptionService));

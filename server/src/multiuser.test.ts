@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import path from 'path';
 import os from 'os';
@@ -115,13 +115,26 @@ describe('多用户基础设施', () => {
       expect(res.body.success).toBe(true);
     });
 
-    it('非专业版用户 PUT llm_config 返回 403', async () => {
+    it('普通用户默认可以 PUT 自己的 llm_config', async () => {
       const res = await request(app)
         .put('/api/users/me/config')
         .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ llm_config: { providers: [{ id: 'openai' }] } });
-      expect(res.status).toBe(403);
-      expect(res.body.error).toMatch(/专业版|升级/i);
+      expect(res.status).toBe(200);
+    });
+
+    it('paid 策略下非专业版用户 PUT llm_config 返回 403', async () => {
+      vi.stubEnv('X_COMPUTER_USER_LLM_POLICY', 'paid');
+      try {
+        const res = await request(app)
+          .put('/api/users/me/config')
+          .set('Cookie', await app.locals.sessions.createCookie(USER_A))
+          .send({ llm_config: { providers: [{ id: 'openai' }] } });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe('当前账号无权配置个人模型');
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it('GET /api/users/me/config 读取配置', async () => {

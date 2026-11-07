@@ -29,6 +29,7 @@ describe('authenticated user configuration privacy', () => {
   });
   afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); sqlite.close(); });
   it('lets a basic-plan admin save and import from their own provider without returning the key', async () => {
+    vi.stubEnv('X_COMPUTER_USER_LLM_POLICY', 'paid');
     vi.stubEnv('X_COMPUTER_ADMIN_EMAILS', 'admin@example.test');
     await db.ensureUser('alice');
     await db.createAuthAccount('admin@example.test', 'fixture-hash', 'alice');
@@ -118,6 +119,10 @@ describe('authenticated user configuration privacy', () => {
     expect((await request(app).get('/api/users/me/config')).status).toBe(401);
     const free = express(); free.locals.sessions = app.locals.sessions; free.use(express.json()); free.use(userContextMiddleware(false));
     free.use('/api/users', createUserRouter(db, { getUserSubscription: async () => ({ planId: 'free' }) } as never));
+    // 默认策略：免费用户也能配置自己的模型
+    expect((await request(free).put('/api/users/me/config/llm_config').set('Cookie', alice).send({ value: { providers: [] } })).status).toBe(200);
+    // paid 策略：免费用户被拒绝，并看到平台默认配置
+    vi.stubEnv('X_COMPUTER_USER_LLM_POLICY', 'paid');
     expect((await request(free).put('/api/users/me/config/llm_config').set('Cookie', alice).send({ value: { providers: [] } })).status).toBe(403);
     expect((await request(free).get('/api/users/me/config/llm_config').set('Cookie', alice)).body.value.providers[0].id).toBe('platform');
   });
