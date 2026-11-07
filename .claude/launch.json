@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "server-mysql-4200",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd server && PORT=4200 npx tsx src/index.ts"],
+      "port": 4200
+    }
+  ]
+}
