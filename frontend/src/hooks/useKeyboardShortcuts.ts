@@ -28,7 +28,23 @@ const DEFAULT_SHORTCUTS: Record<string, () => string> = {
 function loadCustomShortcuts(): Record<string, string> {
   try {
     const raw = localStorage.getItem(SHORTCUTS_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as Record<string, string>;
+    if (raw) {
+      const parsed = JSON.parse(raw) as Record<string, string>;
+      // 验证并清理：拒绝没有实际按键（仅修饰键）的快捷键
+      const validated: Record<string, string> = {};
+      let cleaned = false;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && parseShortcut(value) !== null) {
+          validated[key] = value;
+        } else {
+          cleaned = true;
+        }
+      }
+      if (cleaned) {
+        localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(validated));
+      }
+      return validated;
+    }
   } catch { /* ignore */ }
   return {};
 }
@@ -63,6 +79,9 @@ export function useKeyboardShortcuts() {
     const shortcuts = loadCustomShortcuts();
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // 忽略纯修饰键（Cmd/Ctrl/Alt/Shift 单独按下），防止浏览器/IEM 异常触发
+      if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return;
+
       const s = useDesktopStore.getState();
       const config = useConfigStore.getState();
 

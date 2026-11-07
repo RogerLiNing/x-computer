@@ -1,3 +1,4 @@
+import { BrowserComputerView } from './BrowserComputerView';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { ArrowLeft, ArrowRight, RotateCw, Lock, ExternalLink } from 'lucide-react';
 import { useConnectionStore } from '@/store/connectionStore';
@@ -49,7 +50,7 @@ function normalizeUrl(input: string): string {
   return 'https://' + trimmed;
 }
 
-export function BrowserApp({ windowId, metadata }: Props) {
+function BrowserPreview({ windowId, metadata }: Props) {
   const initialUrl = (metadata?.url as string) || 'https://www.google.com';
   const safeInitial = isValidHttpUrl(initialUrl) ? initialUrl : normalizeUrl(initialUrl);
 
@@ -181,10 +182,15 @@ export function BrowserApp({ windowId, metadata }: Props) {
           src={url}
           title="Web page"
           className="w-full h-full border-0 bg-white"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+          sandbox="allow-scripts"
           onLoad={handleIframeLoad}
         />
       </div>
     </div>
   );
+}
+
+export function BrowserApp(props:Props) {
+ const [computer,setComputer]=useState(true);
+ return <div className="h-full flex flex-col"><div className="flex gap-2 p-2 border-b border-white/10"><button aria-pressed={computer} onClick={()=>setComputer(true)} className="px-3 py-2 rounded-lg bg-white/5">助手电脑</button><button aria-pressed={!computer} onClick={()=>setComputer(false)} className="px-3 py-2 rounded-lg bg-white/5">网页预览</button></div><div className="flex-1 min-h-0">{computer?<BrowserComputerView/>:<BrowserPreview {...props}/>}</div></div>;
 }

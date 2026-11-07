@@ -42,6 +42,14 @@ export interface XConfigAuth {
 
 /** 容器隔离配置 */
 export interface XConfigContainer {
+  /** Optional browser image; enabled only with container isolation. */
+  browserEnabled?: boolean;
+  /** Browser network is separate from the shell network; host mode is never allowed. */
+  browserNetworkMode?: 'none' | 'bridge';
+  /** Optional encrypted DNS for VPN fake-IP environments. Default: system resolver. */
+  browserDnsMode?: 'system' | 'cloudflare';
+  imageName?: string;
+  browserAllowedOrigins?: string[];
   /** 是否启用容器隔离，默认 false（开发模式）；生产环境强烈建议设为 true */
   enabled?: boolean;
   /** CPU 核心数限制，默认 1 */
@@ -98,8 +106,10 @@ export interface XConfig {
   container?: XConfigContainer;
   /** 数据库类型：sqlite（默认）或 mysql；MySQL 需配置 MYSQL_* 环境变量 */
   database?: XConfigDatabase;
-  /** 工具加载模式，默认 all；on_demand 可大幅减少系统提示 token */
+  /** 工具加载模式，默认 on_demand；all 会在每次调用中暴露全部工具。 */
   tool_loading_mode?: ToolLoadingMode;
+  /** 服务运行档位：lightweight（默认）、balanced 或 full。 */
+  runtime_profile?: 'lightweight' | 'balanced' | 'full';
   /** 默认 MCP 服务器（联网搜索等），用户无 mcp_config 时使用；格式同 mcp-servers.json 的 servers 或 mcpServers 对象 */
   mcp_servers?: XConfigMcpServer[] | Record<string, Record<string, unknown>>;
   /** 系统邮件配置（发送验证码等系统邮件） */
@@ -130,7 +140,7 @@ export function getToolLoadingMode(): ToolLoadingMode {
   const cfg = loadDefaultConfig();
   const mode = (cfg?.tool_loading_mode as string)?.toLowerCase?.();
   if (mode === 'on_demand' || mode === 'all') return mode;
-  return 'all';
+  return 'on_demand';
 }
 
 function resolveEnvPlaceholders(text: string): string {

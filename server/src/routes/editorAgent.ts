@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { callLLMStream } from '../chat/chatService.js';
 import { getAssembledSystemPrompt } from '../prompts/systemCore.js';
-import { broadcast } from '../wsBroadcast.js';
+import { broadcastToUser } from '../wsBroadcast.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
 type QuotaMiddleware = (req: any, res: any, next: any) => void;
@@ -45,13 +45,13 @@ export function createEditorAgentRouter(aiQuota: QuotaMiddleware): Router {
           baseUrl,
           apiKey,
         })) {
-          broadcast({ type: 'editor_stream', data: { windowId, chunk } });
+          broadcastToUser(req.userId, { type: 'editor_stream', data: { windowId, chunk } });
         }
       } catch (err: any) {
         serverLogger.error('editor-agent-stream', `流式生成失败: ${err.message}`, err.stack);
-        broadcast({ type: 'editor_stream_error', data: { windowId, error: err.message || '生成失败' } });
+        broadcastToUser(req.userId, { type: 'editor_stream_error', data: { windowId, error: err.message || '生成失败' } });
       }
-      broadcast({ type: 'editor_stream_end', data: { windowId } });
+      broadcastToUser(req.userId, { type: 'editor_stream_end', data: { windowId } });
       serverLogger.info('editor-agent-stream', `结束 windowId=${windowId}`);
     } catch (err: any) {
       serverLogger.error('editor-agent-stream', `请求处理失败: ${err.message}`, err.stack);

@@ -1,7 +1,8 @@
 import { Router } from 'express';
+import {randomUUID} from 'node:crypto';
 import { callLLM, callLLMStream, callLLMWithTools, callLLMGenerateImage, type LLMToolDef, type ChatMessage } from '../chat/chatService.js';
 import { chatRateLimit } from '../middleware/chatRateLimit.js';
-import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE } from '../prompts/systemCore.js';
+import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE, buildTimelineContext } from '../prompts/systemCore.js';
 import { listAllCapabilities } from '../capabilities/CapabilityRegistry.js';
 import { getDiscoveredSkills } from '../skills/discovery.js';
 import { loadAgentsFromDb } from './agents.js';
@@ -20,10 +21,58 @@ import type { SandboxFS } from '../tooling/SandboxFS.js';
 import { VectorStore } from '../memory/vectorStore.js';
 import { MemoryService } from '../memory/MemoryService.js';
 import { resolveLLMCredentials } from '../llm/credentialResolver.js';
+import {
+  buildTextArtifactDeliveryInstruction,
+  isSchedulingTool,
+  inspectTextArtifactCompletion,
+  extractTextArtifactBody,
+  resolveInitialLoadedTools,
+  resolveRequestedTextArtifactPath,
+} from '../chat/xDirectToolPolicy.js';
+import { classifyAssistantIntentFast } from '../chat/assistantIntent.js';
+import { ChatRunService, ChatRunBlockedError } from '../chat/ChatRunService.js';
+import type { TaskLLMConfig } from '../../../shared/src/index.js';
 
 // ── Constants and helpers also used in api.ts ─────────────────────────────────
 
 const MEMORY_DIR = 'memory';
+
+async function completeTextArtifact(params: { content: string; request: string; toolContext: string; llmConfig: TaskLLMConfig; signal?: AbortSignal }): Promise<string> {
+  let content = extractTextArtifactBody(params.content);
+  const check = inspectTextArtifactCompletion(params.request, content);
+  if (!check.complete) {
+    const correction = check.rewrite
+      ? '请按原始要求重写一份完整正文，严格满足总字数与结构要求。只输出一次正文，不要输出文件名、字数统计、解释或保存说明，不编造事实或来源。'
+      : '你是研究报告的交付完整性编辑器。只补充草稿缺失的尾部章节，不重复已有正文、不解释过程。补充内容控制在2200个中文字符以内，必须完整结束。来源链接使用[标题](https://...)，优先采用实际搜索结果。';
+    const edited = extractTextArtifactBody(await callLLM({ ...params.llmConfig, signal: params.signal, messages: [
+      { role: 'system', content: correction },
+      { role: 'user', content: `原始请求：\n${params.request}\n当前缺失项：\n${check.missing.join('\n')}\n现有草稿：\n${content}\n实际工具检索结果：\n${params.toolContext || '无'}` },
+    ] })).trim();
+    if (edited) content = check.rewrite ? edited : `${content.trim()}\n\n${edited}`;
+  }
+  const final = inspectTextArtifactCompletion(params.request, content);
+  if (!final.complete) throw new ChatRunBlockedError(`交付校验未通过：${final.missing.join('、')}`);
+  return content;
+}
+
+/**
+ * 内容质量预检：跳过太短、纯确认/寒暄的消息，避免无意义记忆浪费 LLM 调用。
+ * 与 MemoryService.isWorthRemembering 互补：这里用于决定是否触发 runConsiderCapture。
+ */
+function shouldConsiderForMemory(userMsg: string, assistantReply: string): boolean {
+  const um = userMsg.trim();
+  const ar = (assistantReply ?? '').trim();
+  if (!um || um.length < 10) return false;
+  if (!ar || ar.length < 10) return false;
+  const ackPatterns = [
+    '好的', '好的！', '好的。', '嗯', '嗯嗯', '明白', '明白了', '了解', '知道了',
+    '好的，我明白了', '没问题', 'OK', 'ok', '好的收到', '好的，我来',
+    '好的，请稍等', '好的，请稍候', '马上', '稍等', '好的，马上', '好的，立即',
+  ];
+  if (ackPatterns.includes(um)) return false;
+  if (/^(hi|hello|嗨|你好|您好|hey|hallo)[!,。！]*$/i.test(um)) return false;
+  return true;
+}
 
 function dailyPath(date: string): string {
   return `${MEMORY_DIR}/${date}.md`;
@@ -75,7 +124,11 @@ async function runConsiderCapture(params: {
   const typeMap = { PREFERENCE: 'preference' as const, DECISION: 'decision' as const, FACT: 'fact' as const };
   const type = typeMap[typeLine as keyof typeof typeMap] ?? 'fact';
   const content = (lines.slice(1).join(' ').trim() || lines[0] || trimmed).trim();
-  if (!content) return;
+
+  // 质量门槛：内容必须有足够上下文，不能是孤零零的词
+  // 至少需要 8 字符，且内容中应包含足够的描述性词语（如"用户"、"喜欢"、"决定"等）
+  if (!content || content.length < 8) return;
+
   await memoryService.capture(content, type);
   const date = new Date().toISOString().slice(0, 10);
   fireHook('memory_captured', {
@@ -192,14 +245,112 @@ export function createChatRouter(
   userSandboxManager?: UserSandboxManager,
   db?: AppDatabase,
   subscriptionService?: SubscriptionService,
+  getLivingAIContext?: (userId: string) => Promise<string>,
+  onRunsReady?: (runs: ChatRunService) => void,
 ): Router {
   const router = Router();
 
-  // Rate limit all chat routes: 1 request per 2 seconds per user (spam prevention)
-  router.use(chatRateLimit);
+  router.use('/chat', (req, res, next) => req.path.startsWith('/runs') ? next() : chatRateLimit(req, res, next));
 
   const vectorStore = new VectorStore(sandboxFS);
   const defaultMemoryService = new MemoryService(sandboxFS, vectorStore);
+  const runs = db ? new ChatRunService({
+    db, orchestrator,modelBudget:subscriptionService,
+    getSandboxFS: async (userId) => userSandboxManager ? (await userSandboxManager.getForUser(userId)).sandboxFS : sandboxFS,
+    getLLMConfig: (userId, providerId, modelId) => getChatLLMConfig(userId, providerId, modelId),
+    completeText: completeTextArtifact,
+  }) : undefined;
+  if (runs) onRunsReady?.(runs);
+  if(runs)orchestrator.setExpertDispatchRunner?.(request=>runs.expertDispatch(request));
+  async function runIdentity(body:{sessionId?:unknown;requestId?:unknown},userId:string,scene:unknown,title:string){
+    if(body.sessionId!==undefined||body.requestId!==undefined){
+      if(typeof body.sessionId!=='string'||!body.sessionId.trim()||typeof body.requestId!=='string'||!body.requestId||body.requestId.length>128)return null;
+      return{sessionId:body.sessionId,requestId:body.requestId};
+    }
+    const session=await db!.createSession(userId,title.slice(0,80)||'助手交办',typeof scene==='string'?scene:'normal_chat');
+    return{sessionId:session.id,requestId:randomUUID()};
+  }
+
+  router.get('/chat/runs', async (req, res) => {
+    try {
+      if (!runs || typeof req.query.sessionId !== 'string') { res.status(400).json({ error: '缺少有效会话' }); return; }
+      res.json({ runs: await runs.list(req.userId, req.query.sessionId) });
+    } catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  router.post('/chat/runs/stop-request', async (req, res) => {
+    try {
+      if (!runs || typeof req.body?.sessionId !== 'string' || typeof req.body?.requestId !== 'string') {
+        res.status(400).json({ error: '缺少会话和交办编号' }); return;
+      }
+      res.json(await runs.stopRequest(req.userId, req.body.sessionId, req.body.requestId));
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  router.get('/chat/runs/attention', async(req,res)=>{
+    try {if(!runs) throw new Error('执行服务不可用');res.json({items:await runs.attention(req.userId)});}
+    catch(error){res.status(503).json({error:error instanceof Error?error.message:String(error)});}
+  });
+  router.get('/chat/runs/workbench', async(req,res)=>{
+    try {if(!runs) throw new Error('执行服务不可用');res.json(await runs.workbench(req.userId));}
+    catch(error){res.status(503).json({error:error instanceof Error?error.message:String(error)});}
+  });
+  router.post('/chat/runs/:runId/review',async(req,res)=>{
+    try {if(!runs) throw new Error('执行服务不可用');res.json(await runs.reviewRun(req.userId,req.params.runId,req.body));}
+    catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)});}
+  });
+  router.post('/chat/runs/:runId/shell-decision',async(req,res)=>{
+    try{if(!runs)throw new Error('执行服务不可用');if(!req.body||typeof req.body!=='object'||Array.isArray(req.body))throw new Error('确认参数无效');res.status(202).json(await runs.decideShell(req.userId,req.params.runId,req.body));}
+    catch(error){res.status(409).json({error:error instanceof Error?error.message:'命令决定未保存，请刷新核查'});}
+  });
+  router.post('/chat/runs/:runId/answer', async (req, res) => {
+    try {
+      if (!runs) throw new Error('执行服务不可用');
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new Error('回答参数无效');
+      res.status(202).json(await runs.answerQuestion(req.userId, req.params.runId, req.body));
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : '回答未保存，请刷新核查' }); }
+  });
+  router.post('/chat/runs/:runId/send-decision', async (req, res) => {
+    try {
+      if (!runs) throw new Error('执行服务不可用');
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) throw new Error('确认参数无效');
+      res.status(202).json(await runs.decideSend(req.userId, req.params.runId, req.body));
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : '发送决定未保存，请刷新核查' }); }
+  });
+  router.post('/chat/runs/:runId/revise',aiQuota,async(req,res)=>{
+    try {if(!runs) throw new Error('执行服务不可用');res.status(202).json(await runs.revise(req.userId,req.params.runId));}
+    catch(error){res.status(409).json({error:error instanceof Error?error.message:String(error)});}
+  });
+  router.get('/chat/runs/:runId', async (req, res) => {
+    try {
+      if (!runs) { res.status(503).json({ error: '执行记录服务不可用' }); return; }
+      res.json(await runs.get(req.userId, req.params.runId));
+    } catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  router.post('/chat/runs/:runId/stop', async (req, res) => {
+    try {
+      if (!runs) { res.status(503).json({ error: '执行记录服务不可用' }); return; }
+      res.json(await runs.stop(req.userId, req.params.runId));
+    } catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+  router.post('/chat/runs/:runId/resume', aiQuota, async (req, res) => {
+    try {
+      if (!runs) { res.status(503).json({ error: '执行记录服务不可用' }); return; }
+      res.status(202).json(await runs.resume(req.userId, req.params.runId));
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : String(error) }); }
+  });
+
+  async function getLivingContext(userId: string | undefined, scene: unknown): Promise<string> {
+    if (!getLivingAIContext || !userId || userId === 'anonymous' || (scene !== 'x_direct' && scene !== 'normal_chat')) return '';
+    try {
+      return await getLivingAIContext(userId);
+    } catch (error) {
+      serverLogger.warn(
+        'chat/living-ai',
+        '读取连续认知状态失败',
+        error instanceof Error ? error.message : String(error),
+      );
+      return '';
+    }
+  }
 
   /**
    * 获取当前对话的 LLM 凭证（服务器端凭证查找，不从请求体取 apiKey）。
@@ -277,11 +428,13 @@ export function createChatRouter(
       const llmConfig = await getChatLLMConfig(userId, providerId, modelId);
       serverLogger.info('chat', `POST /chat [${providerId}/${modelId}] messages=${messages.length} stream=${!!stream} scene=${scene ?? 'none'}`);
 
-      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
+      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
         getLearnedPromptForUser(userId),
         getEvolvedCorePromptForUser(userId),
         getBasePromptForUser(userId),
         getAssistantPromptForUser(userId),
+        buildTimelineContext(db as any, userId),
+        getLivingContext(userId, scene),
       ]);
 
       let chatMessages = messages.map((m) => ({
@@ -315,8 +468,10 @@ export function createChatRouter(
           learnedPrompt,
           evolvedCorePrompt,
           assistantPrompt: sceneId !== 'x_direct' ? assistantPrompt : '',
+          timeline,
         });
-        chatMessages = [{ role: 'system', content: systemPrompt }, ...chatMessages.filter((m) => m.role !== 'system')];
+        const continuousSystemPrompt = systemPrompt + (livingContext ? `\n\n${livingContext}` : '');
+        chatMessages = [{ role: 'system', content: continuousSystemPrompt }, ...chatMessages.filter((m) => m.role !== 'system')];
       }
 
       if (stream) {
@@ -355,7 +510,7 @@ export function createChatRouter(
       });
       serverLogger.info('chat', `聊天完成 [${llmConfig.providerId}/${llmConfig.modelId}] 回复长度=${content.length}`);
       const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
-      if (lastUser?.content?.trim() && content?.trim()) {
+      if (shouldConsiderForMemory(lastUser?.content ?? '', content)) {
         const uid = userId;
         setImmediate(() => {
           (async () => {
@@ -439,11 +594,13 @@ export function createChatRouter(
         );
       }
 
-      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
+      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
         getLearnedPromptForUser(userId),
         getEvolvedCorePromptForUser(userId),
         getBasePromptForUser(userId),
         getAssistantPromptForUser(userId),
+        buildTimelineContext(db as any, userId ?? ''),
+        getLivingContext(userId, scene),
       ]);
       const clientToolNames = new Set(toolsBody.map((t) => t.name));
       const allServerTools = await orchestrator.getLLMToolDefsFiltered(userId);
@@ -481,10 +638,11 @@ export function createChatRouter(
           learnedPrompt,
           evolvedCorePrompt,
           assistantPrompt: sceneId !== 'x_direct' ? assistantPrompt : '',
+          timeline,
         });
         const systemPrompt = isUtilityScene
           ? baseSystemPrompt
-          : baseSystemPrompt + TOOL_USE_MANDATE + MEMORY_TOOL_MANDATE;
+          : baseSystemPrompt + (livingContext ? `\n\n${livingContext}` : '') + TOOL_USE_MANDATE + MEMORY_TOOL_MANDATE;
         chatMessages = [{ role: 'system', content: systemPrompt }, ...chatMessages.filter((m) => m.role !== 'system')];
       }
 
@@ -553,7 +711,7 @@ export function createChatRouter(
       }
 
       const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
-      if (lastUser?.content?.trim() && result.content?.trim()) {
+      if (shouldConsiderForMemory(lastUser?.content ?? '', result.content ?? '')) {
         const uid = userId;
         setImmediate(() => {
           (async () => {
@@ -639,13 +797,15 @@ export function createChatRouter(
       } else {
         const toolLoadingMode = getToolLoadingMode();
         const onDemand = toolLoadingMode === 'on_demand';
-        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
+        const sceneId = scene && ['normal_chat', 'x_direct', 'none'].includes(scene) ? scene : 'normal_chat';
+        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
           getLearnedPromptForUser(userId),
           getEvolvedCorePromptForUser(userId),
           getBasePromptForUser(userId),
           getAssistantPromptForUser(userId),
+          buildTimelineContext(db as any, userId),
+          getLivingContext(userId, sceneId),
         ]);
-        const sceneId = scene && ['normal_chat', 'none'].includes(scene) ? scene : 'normal_chat';
         const caps = onDemand
           ? ''
           : USE_CONDENSED_SYSTEM_PROMPT
@@ -663,8 +823,12 @@ export function createChatRouter(
           learnedPrompt,
           evolvedCorePrompt,
           assistantPrompt,
+          timeline,
         });
-        systemPrompt = baseSystemPrompt + TOOL_USE_MANDATE + MEMORY_TOOL_MANDATE;
+        systemPrompt = baseSystemPrompt
+          + (livingContext ? `\n\n${livingContext}` : '')
+          + TOOL_USE_MANDATE
+          + MEMORY_TOOL_MANDATE;
       }
       let chatMessages = messages.map((m) => ({
         role: m.role as 'system' | 'user' | 'assistant',
@@ -674,6 +838,12 @@ export function createChatRouter(
         chatMessages = truncateChatMessages(chatMessages);
       }
       chatMessages = chatMessages.filter((m) => m.role !== 'system');
+      const lastUserMessage =
+        [...chatMessages].reverse().find((m) => m.role === 'user')?.content?.trim() ?? '';
+      const requestedTextArtifactPath = resolveRequestedTextArtifactPath(lastUserMessage);
+      if (requestedTextArtifactPath) {
+        systemPrompt += `\n\n${buildTextArtifactDeliveryInstruction(requestedTextArtifactPath)}`;
+      }
       if (Array.isArray(referenceImagePaths) && referenceImagePaths.length > 0 && referenceImagePaths.length <= 3) {
         const lastUserIdx = [...chatMessages].reverse().findIndex((m) => m.role === 'user');
         if (lastUserIdx >= 0) {
@@ -693,7 +863,17 @@ export function createChatRouter(
       const llmConfig = resolvedLLMConfig;
       const toolLoadingMode = !agentId ? getToolLoadingMode() : 'all';
       serverLogger.info('chat/agent', `POST /chat/agent [${providerId}/${modelId}] messages=${chatMessages.length}${agentId ? ` agentId=${agentId}` : ''} toolMode=${toolLoadingMode}`);
-      const result = await orchestrator.runChatAgentLoop({
+      let persisted:Awaited<ReturnType<ChatRunService['get']>>|undefined,acceptedRequestId:string|undefined;
+      if(runs&&userId&&userId!=='anonymous'){
+        const identity=await runIdentity(req.body,userId,scene,lastUserMessage);
+        if(!identity){res.status(400).json({error:'会话与请求编号需同时提供，或均省略以新建交办'});return;}
+        acceptedRequestId=identity.requestId;
+        const run=await runs.accept({userId,...identity,messages:chatMessages,providerId,modelId,systemPrompt,allowedToolNames,toolLoadingMode,
+          initialLoadedToolNames:resolveInitialLoadedTools(scene,reqLoadedTools,lastUserMessage),requestedTextArtifactPath,
+          userMessage:{content:lastUserMessage,images:referenceImagePaths,attachedFiles:Array.isArray(attachedFilePaths)?attachedFilePaths.filter((p):p is string=>typeof p==='string').map(p=>({name:p.split('/').pop()||p,path:p})):undefined}});
+        await runs.launch(userId,run.id);persisted=await runs.get(userId,run.id);
+      }
+      const result = persisted??await orchestrator.runChatAgentLoop({
         messages: chatMessages,
         llmConfig,
         systemPrompt,
@@ -701,10 +881,10 @@ export function createChatRouter(
         userId,
         allowedToolNames,
         toolLoadingMode: !agentId ? toolLoadingMode : undefined,
-        initialLoadedToolNames: Array.isArray(reqLoadedTools) ? reqLoadedTools : undefined,
+        initialLoadedToolNames: resolveInitialLoadedTools(scene, reqLoadedTools, lastUserMessage),
       });
       const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
-      if (lastUser?.content?.trim() && result.content?.trim()) {
+      if ((!persisted||persisted.status==='completed')&&shouldConsiderForMemory(lastUser?.content ?? '', result.content ?? '')) {
         const uid = userId;
         setImmediate(() => {
           (async () => {
@@ -727,7 +907,7 @@ export function createChatRouter(
           })().catch((err: any) => serverLogger.error('chat/agent (consider-capture)', err.message));
         });
       }
-      res.json({ content: result.content, ...(result.loadedToolNames?.length ? { loadedToolNames: result.loadedToolNames } : {}) });
+      res.json({...(persisted?{...persisted,runId:persisted.id,requestId:acceptedRequestId,serverPersisted:true}:{}), content: persisted?.error?[result.content,persisted.error].filter(Boolean).join('\n\n'):result.content, ...(result.loadedToolNames?.length ? { loadedToolNames: result.loadedToolNames } : {}) });
     } catch (err: any) {
       serverLogger.error('chat/agent', err.message, err.stack);
       res.status(400).json({ error: err.message || 'LLM 调用失败' });
@@ -737,7 +917,7 @@ export function createChatRouter(
   /** 聊天 Agent 流式：SSE 推送工具调用进度及最终回复。可选 agentId：与指定智能体对话。 */
   router.post('/chat/agent/stream', aiQuota, async (req, res) => {
     try {
-      const { messages, providerId, modelId, scene, computerContext, taskSummary, memory, agentId, referenceImagePaths, attachedFilePaths, loadedToolNames: reqLoadedTools } = req.body as {
+      const { messages, providerId, modelId, scene, computerContext, taskSummary, memory, agentId, referenceImagePaths, attachedFilePaths, loadedToolNames: reqLoadedTools, sessionId, requestId } = req.body as {
         messages?: Array<{ role: string; content: string }>;
         providerId?: string;
         modelId?: string;
@@ -749,6 +929,8 @@ export function createChatRouter(
         referenceImagePaths?: string[];
         attachedFilePaths?: string[];
         loadedToolNames?: string[];
+        sessionId?: string;
+        requestId?: string;
       };
       if (!Array.isArray(messages) || !providerId || !modelId) {
         res.status(400).json({ error: '缺少 messages、providerId 或 modelId' });
@@ -793,11 +975,13 @@ export function createChatRouter(
         allowedToolNames = agent.toolNames?.length ? agent.toolNames : undefined;
         sceneId = 'normal_chat';
       } else {
-        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
+        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
           getLearnedPromptForUser(userId),
           getEvolvedCorePromptForUser(userId),
           getBasePromptForUser(userId),
           getAssistantPromptForUser(userId),
+          buildTimelineContext(db as any, userId),
+          getLivingContext(userId, sceneId),
         ]);
         const toolLoadingMode = getToolLoadingMode();
         const onDemand = toolLoadingMode === 'on_demand';
@@ -824,8 +1008,12 @@ export function createChatRouter(
           learnedPrompt,
           evolvedCorePrompt,
           assistantPrompt: sceneId !== 'x_direct' ? assistantPrompt : '',
+          timeline,
         });
-        systemPrompt = baseSystemPrompt + TOOL_USE_MANDATE + MEMORY_TOOL_MANDATE;
+        systemPrompt = baseSystemPrompt
+          + (livingContext ? `\n\n${livingContext}` : '')
+          + TOOL_USE_MANDATE
+          + MEMORY_TOOL_MANDATE;
       }
       let chatMessages = messages.map((m) => ({
         role: m.role as 'system' | 'user' | 'assistant',
@@ -835,6 +1023,12 @@ export function createChatRouter(
         chatMessages = truncateChatMessages(chatMessages);
       }
       chatMessages = chatMessages.filter((m) => m.role !== 'system');
+      const lastUserMessage =
+        [...chatMessages].reverse().find((m) => m.role === 'user')?.content?.trim() ?? '';
+      const requestedTextArtifactPath = resolveRequestedTextArtifactPath(lastUserMessage);
+      if (requestedTextArtifactPath) {
+        systemPrompt += `\n\n${buildTextArtifactDeliveryInstruction(requestedTextArtifactPath)}`;
+      }
       if (Array.isArray(referenceImagePaths) && referenceImagePaths.length > 0 && referenceImagePaths.length <= 3) {
         const lastUserIdx = [...chatMessages].reverse().findIndex((m) => m.role === 'user');
         if (lastUserIdx >= 0) {
@@ -852,6 +1046,59 @@ export function createChatRouter(
         }
       }
       const llmConfig = resolvedLLMConfig;
+      if (sessionId||runs&&userId&&userId!=='anonymous') {
+        if (!runs || !userId || userId === 'anonymous') {
+          res.status(400).json({ error: '服务端交办需要有效的会话、用户和请求编号' }); return;
+        }
+        if (req.aborted || res.destroyed) return;
+        const identity=await runIdentity({sessionId,requestId},userId,sceneId,lastUserMessage);
+        if(!identity){res.status(400).json({error:'会话与请求编号需同时提供，或均省略以新建交办'});return;}
+        const run = await runs.accept({ userId, ...identity, messages: chatMessages, providerId, modelId,
+          systemPrompt: `${systemPrompt}\n\n# 成果交付\n生成文件后调用 file.present 交付已存在的文件，Shell/Python生成的文件同样需要交付。由服务器自动保存的文本产物直接输出正文即可。`,
+          allowedToolNames, toolLoadingMode: !agentId ? getToolLoadingMode() : 'all',
+          initialLoadedToolNames: [...new Set(['file.present', ...(resolveInitialLoadedTools(sceneId, reqLoadedTools, lastUserMessage) ?? [])])],
+          requestedTextArtifactPath,
+          userMessage: {
+            content: typeof req.body.userMessage?.content === 'string' ? req.body.userMessage.content : [...messages].reverse().find((m) => m.role === 'user')?.content ?? lastUserMessage,
+            images: Array.isArray(referenceImagePaths) ? referenceImagePaths.filter((p): p is string => typeof p === 'string') : undefined,
+            attachedFiles: Array.isArray(req.body.userMessage?.attachedFiles)
+              ? req.body.userMessage.attachedFiles.filter((f: { name?: unknown; path?: unknown }) => f && typeof f.name === 'string' && typeof f.path === 'string')
+              : Array.isArray(attachedFilePaths) ? attachedFilePaths.filter((p): p is string => typeof p === 'string').map((p) => ({ name: p.split('/').pop() || p, path: p })) : undefined,
+          } });
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+        const send = (type: string, data: object) => {
+          if (res.destroyed || res.writableEnded) return;
+          res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
+          (res as any).flush?.();
+        };
+        send('run_started', { ...run, runId: run.id,requestId:identity.requestId, serverPersisted: true });
+        const unsubscribe = runs.subscribe(run.id, (event) => send(event.type, event.data));
+        res.once('close', unsubscribe);
+        try {
+          const executed = await runs.launch(userId, run.id);
+          const settled = await runs.get(userId, run.id);
+          send('done', { ...settled, runId: run.id, serverPersisted: true });
+          if (executed && settled.status === 'completed' && sceneId === 'x_direct') fireHook('x_chat_round_complete', {
+            userId, lastUserMessage, lastAssistantContent: settled.content,
+          });
+          if (executed && settled.status === 'completed' && shouldConsiderForMemory(lastUserMessage, settled.content)) {
+            setImmediate(() => {
+              void (async () => {
+                const memoryService = (await getMemoryServiceForUser(userId)) ?? defaultMemoryService;
+                await memoryService.appendDaily(`[对话] 用户: ${lastUserMessage.slice(0, 100)}... | 助手: ${settled.content.slice(0, 200)}...`);
+                await runConsiderCapture({ userMessage: lastUserMessage, assistantReply: settled.content,
+                  providerId: llmConfig.providerId, modelId: llmConfig.modelId, baseUrl: llmConfig.baseUrl,
+                  apiKey: llmConfig.apiKey, memoryService, workspaceId: userId });
+              })().catch((error) => serverLogger.error('chat/run (consider-capture)', error instanceof Error ? error.message : String(error)));
+            });
+          }
+        } finally { unsubscribe(); }
+        return;
+      }
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
@@ -866,6 +1113,7 @@ export function createChatRouter(
         (res as any).flush?.();
       };
       const toolLoadingMode = !agentId ? getToolLoadingMode() : 'all';
+      let attemptedSchedule = false;
       const result = await orchestrator.runChatAgentLoop({
         messages: chatMessages,
         llmConfig,
@@ -874,9 +1122,11 @@ export function createChatRouter(
         userId,
         allowedToolNames,
         toolLoadingMode: !agentId ? toolLoadingMode : undefined,
-        initialLoadedToolNames: Array.isArray(reqLoadedTools) ? reqLoadedTools : undefined,
+        initialLoadedToolNames: resolveInitialLoadedTools(sceneId, reqLoadedTools, lastUserMessage),
+        automaticTextDelivery: !!requestedTextArtifactPath,
         onToolEvent: (ev) => {
           if (ev.type === 'tool_start') {
+            if (isSchedulingTool(ev.toolName)) attemptedSchedule = true;
             write('tool_start', ev);
           } else if (ev.type === 'tool_complete') {
             write('tool_complete', ev);
@@ -886,30 +1136,48 @@ export function createChatRouter(
           write('content_chunk', { content: chunk });
         },
       });
-      write('done', { content: result.content, ...(result.loadedToolNames?.length ? { loadedToolNames: result.loadedToolNames } : {}) });
+      let deliveredContent = result.content;
+      if (
+        requestedTextArtifactPath
+        && !attemptedSchedule
+        && deliveredContent.trim()
+        && userSandboxManager
+        && userId
+        && userId !== 'anonymous'
+      ) {
+        deliveredContent = await completeTextArtifact({ content: deliveredContent, request: lastUserMessage,
+          toolContext: result.toolContext ?? '', llmConfig });
+        const { sandboxFS: userFs } = await userSandboxManager.getForUser(userId);
+        await userFs.writeOverwrite(requestedTextArtifactPath, deliveredContent.trim());
+        deliveredContent = `${deliveredContent.trim()}\n\n---\n已保存到：${requestedTextArtifactPath}`;
+        serverLogger.info(
+          'chat/agent/stream',
+          '已自动保存文本产物',
+          `userId=${userId} path=${requestedTextArtifactPath} chars=${result.content.trim().length}`,
+        );
+      }
+      write('done', { content: deliveredContent, ...(result.loadedToolNames?.length ? { loadedToolNames: result.loadedToolNames } : {}) });
       if (sceneId === 'x_direct' && userId && userId !== 'anonymous') {
-        const lastUserMessage =
-          [...chatMessages].reverse().find((m) => m.role === 'user')?.content?.trim() ?? '';
         fireHook('x_chat_round_complete', {
           userId,
           lastUserMessage,
-          lastAssistantContent: result.content ?? '',
+          lastAssistantContent: deliveredContent ?? '',
         });
       }
       const lastUser = [...chatMessages].reverse().find((m) => m.role === 'user');
-      if (lastUser?.content?.trim() && result.content?.trim()) {
+      if (shouldConsiderForMemory(lastUser?.content ?? '', deliveredContent ?? '')) {
         const uid = userId;
         setImmediate(() => {
           (async () => {
             const memSvc = (await getMemoryServiceForUser(uid)) ?? defaultMemoryService;
             const userMsgPreview = lastUser!.content.trim().slice(0, 100);
-            const assistantPreview = (result.content ?? '').trim().slice(0, 200);
+            const assistantPreview = (deliveredContent ?? '').trim().slice(0, 200);
             const dailyLogEntry = `[对话] 用户: ${userMsgPreview}... | 助手: ${assistantPreview}...`;
             await memSvc.appendDaily(dailyLogEntry);
             serverLogger.info('memory', '每日记忆已记录（agent/stream）', `userId=${uid}`);
             await runConsiderCapture({
               userMessage: lastUser!.content.trim(),
-              assistantReply: (result.content ?? '').trim(),
+              assistantReply: (deliveredContent ?? '').trim(),
               providerId: llmConfig.providerId,
               modelId: llmConfig.modelId,
               baseUrl: llmConfig.baseUrl,
@@ -932,8 +1200,8 @@ export function createChatRouter(
     }
   });
 
-  /** 写作意图分类：使用主脑 intent_classify 场景，返回 intent 与可选的 suggestedPath */
-  router.post('/chat/classify-writing-intent', aiQuota, async (req, res) => {
+  /** 写作意图分类：高置信度规则走零模型快速路径，歧义请求才使用主脑分类。 */
+  router.post('/chat/classify-writing-intent', async (req, res) => {
     try {
       const { userMessage, hasOpenAiDocument, providerId, modelId } = req.body as {
         userMessage?: string;
@@ -943,6 +1211,11 @@ export function createChatRouter(
       };
       if (typeof userMessage !== 'string' || !providerId || !modelId) {
         res.status(400).json({ error: '缺少 userMessage、providerId 或 modelId' });
+        return;
+      }
+      const fastIntent = classifyAssistantIntentFast(userMessage, Boolean(hasOpenAiDocument));
+      if (fastIntent) {
+        res.json(fastIntent);
         return;
       }
       const userId = (req as { userId?: string }).userId ?? '';
@@ -971,7 +1244,7 @@ export function createChatRouter(
         const isConnectionError = /无法连接|fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|network/i.test(msg);
         if (isConnectionError) {
           serverLogger.error('chat/classify-writing-intent', msg);
-          res.json({ intent: 'normal_chat', fallback: true });
+          res.json({ intent: 'normal_chat', fallback: true, source: 'fallback' });
           return;
         }
         throw llmErr;
@@ -980,22 +1253,18 @@ export function createChatRouter(
       const jsonMatch = raw.match(/\{[\s\S]*\}/);
       try {
         const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : '{}') as { intent?: string; suggestedPath?: string | null };
-        const intent =
+        const parsedIntent =
           typeof parsed.intent === 'string' &&
           ['generate_image', 'generate_and_save_to_editor', 'save_to_editor', 'edit_current_document', 'normal_chat', 'create_task'].includes(parsed.intent)
             ? parsed.intent
             : 'normal_chat';
-        let suggestedPath: string | null = parsed.suggestedPath ?? null;
-        if (intent === 'generate_and_save_to_editor' && suggestedPath) {
-          suggestedPath = String(suggestedPath).replace(/^\/+/, '').trim();
-          if (!suggestedPath.startsWith('文档/')) suggestedPath = `文档/${suggestedPath}`;
-        }
+        const intent = parsedIntent === 'generate_and_save_to_editor' ? 'normal_chat' : parsedIntent;
         res.json({
           intent,
-          suggestedPath: intent === 'generate_and_save_to_editor' ? (suggestedPath || '文档/未命名.txt') : undefined,
+          source: 'model',
         });
       } catch {
-        res.json({ intent: 'normal_chat' });
+        res.json({ intent: 'normal_chat', source: 'fallback' });
       }
     } catch (err: any) {
       serverLogger.error('chat/classify-writing-intent', err.message, err.stack);

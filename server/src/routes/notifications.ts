@@ -13,6 +13,13 @@ export interface Notification {
   createdAt: number;
   expiresAt: number | null;
 }
+const DND_DEFAULTS={enabled:false,quietHoursStart:null as string|null,quietHoursEnd:null as string|null};
+const DND_KEYS=['enabled','quietHoursStart','quietHoursEnd'] as const;
+function validDnd(value:unknown):value is Record<string,unknown>{
+  if(!value||typeof value!=='object'||Array.isArray(value))return false;
+  const prefs=value as Record<string,unknown>;
+  return (prefs.enabled===undefined||typeof prefs.enabled==='boolean')&&['quietHoursStart','quietHoursEnd'].every(key=>prefs[key]===undefined||prefs[key]===null||typeof prefs[key]==='string'&&/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(prefs[key] as string));
+}
 
 function toNotification(row: { id: string; user_id: string; type: string; title: string; body: string | null; link: string | null; read: number; created_at: number; expires_at: number | null }): Notification {
   return {
@@ -102,7 +109,8 @@ export function createNotificationsRouter(db: AsyncDatabase): Router {
         [userId, 'dnd_preferences'],
       );
       if (row?.value) {
-        res.json({ success: true, data: JSON.parse(row.value) });
+        const prefs=JSON.parse(row.value);if(!validDnd(prefs))throw new Error('已有免打扰设置格式无效');
+        res.json({ success: true, data: {enabled:prefs.enabled??false,quietHoursStart:prefs.quietHoursStart??null,quietHoursEnd:prefs.quietHoursEnd??null} });
       } else {
         res.json({ success: true, data: { enabled: false, quietHoursStart: null, quietHoursEnd: null } });
       }
@@ -116,17 +124,15 @@ export function createNotificationsRouter(db: AsyncDatabase): Router {
   router.put('/dnd', async (req, res) => {
     try {
       const userId = (req as any).userId;
-      const prefs = req.body as { enabled?: boolean; quietHoursStart?: string | null; quietHoursEnd?: string | null };
-      const value = JSON.stringify({
-        enabled: prefs.enabled ?? false,
-        quietHoursStart: prefs.quietHoursStart ?? null,
-        quietHoursEnd: prefs.quietHoursEnd ?? null,
-      });
-      await db.run(
-        `INSERT INTO user_config (user_id, \`key\`, value, updated_at) VALUES (?, 'dnd_preferences', ?, ?)
-         ON CONFLICT(user_id, \`key\`) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
-        [userId, value, Date.now()],
-      );
+      const prefs=req.body;if(!validDnd(prefs)||!DND_KEYS.some(key=>prefs[key]!==undefined)){res.status(400).json({error:'免打扰参数无效'});return;}
+      const original=await db.getConfig(userId,'dnd_preferences');
+      if(original!==undefined){try{if(!validDnd(JSON.parse(original)))throw Error('invalid');}catch{res.status(409).json({error:'已有设置格式异常，已保留原数据，请检查后重试'});return;}}
+      const sqlite=db.getDialect()==='sqlite',keys=DND_KEYS.filter(key=>prefs[key]!==undefined),values=keys.map(key=>JSON.stringify(prefs[key])),now=sqlite?Date.now():new Date().toISOString().slice(0,19).replace('T',' ');
+      await db.run(`${sqlite?'INSERT OR IGNORE':'INSERT IGNORE'} INTO user_config(user_id,\`key\`,value,updated_at) VALUES (?,'dnd_preferences',?,?)`,[userId,JSON.stringify(DND_DEFAULTS),now]);
+      const edits=keys.map(key=>`'$.${key}',${sqlite?'json(?)':'CAST(? AS JSON)'}`).join(',');
+      await db.run(`UPDATE user_config SET value=${sqlite?'json_set':'JSON_SET'}(value,${edits}),updated_at=? WHERE user_id=? AND \`key\`='dnd_preferences' AND ${sqlite?"json_type(value)='object'":"JSON_TYPE(value)='OBJECT'"}`,[...values,now,userId]);
+      const saved=JSON.parse(await db.getConfig(userId,'dnd_preferences')??'null');
+      if(!validDnd(saved)||keys.some(key=>saved[key]!==prefs[key])){res.status(409).json({error:'设置已变化，请重新查看后再试'});return;}
       res.json({ success: true });
     } catch (err) {
       serverLogger.error('notifications', '保存 DND 设置失败', String(err));

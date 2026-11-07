@@ -14,8 +14,9 @@ import {
   PROVIDER_META,
 } from '@/constants/llmPresets';
 import { api } from '@/utils/api';
+import { getUserIdOrNull } from '@/utils/userId';
 
-/** 构建要同步到云端的配置（不含 API Key，由服务器端统一管理） */
+/** 普通同步只包含公开配置。 */
 function buildConfigForCloud(config: LLMSystemConfig): LLMSystemConfig {
   return { ...config };
 }
@@ -41,21 +42,33 @@ interface LLMConfigStore {
   /** 立即同步到云端并返回 Promise，供「保存到云端」按钮等待结果并提示 */
   syncToCloudNow: () => Promise<void>;
   /** 更新某个提供商信息（name, baseUrl）；不包含 API Key */
-  updateProvider: (providerId: string, updates: Partial<Pick<LLMProviderConfig, 'name' | 'baseUrl'>>) => void;
+  updateProvider: (providerId: string, updates: Partial<Pick<LLMProviderConfig, 'name' | 'baseUrl' | 'apiType'>>) => void;
   /** 添加提供商 */
   addProvider: (providerId: string) => void;
   /** 移除提供商；会清理该提供商的 API Key、导入列表并修正 defaultByModality */
   removeProvider: (providerId: string) => void;
   /** 设置某模态的默认提供商+模型 */
   setDefaultForModality: (modality: LLMModality, selection: ModalityModelSelection) => void;
-  /** 设置提供商 API Key（仅存本地，不进入 config 对象） */
-  setProviderApiKey: (providerId: string, apiKey: string) => void;
+  /** 提交密钥到服务端，只保留公开的配置状态。 */
+  setProviderApiKey: (providerId: string, apiKey: string) => Promise<void>;
   /** 清除提供商 API Key */
-  clearProviderApiKey: (providerId: string) => void;
+  clearProviderApiKey: (providerId: string) => Promise<void>;
   /** 获取某提供商的 API Key（供调用方使用，不暴露在 UI 明文） */
   getProviderApiKey: (providerId: string) => string;
   /** 设置某提供商从 API 导入的模型列表并持久化 */
   setImportedModelsForProvider: (providerId: string, models: ImportedModel[]) => void;
+}
+
+let configWrite: Promise<unknown> = Promise.resolve();
+
+function queueConfigWrite<T>(write: () => Promise<T>): Promise<T> {
+  const owner = getUserIdOrNull();
+  const request = configWrite.then(() => {
+    if (!owner || getUserIdOrNull() !== owner) throw new Error('登录状态已变化，请重新操作');
+    return write();
+  });
+  configWrite = request.catch(() => {});
+  return request;
 }
 
 export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
@@ -69,28 +82,23 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
     const status = get().configSyncStatus;
     if (status !== 'pending') return;
     try {
-      await api.setUserConfigKey(
-        'llm_config',
-        buildConfigForCloud(get().llmConfig),
-      );
-      set({ configSyncStatus: 'ok' });
+      await get().syncToCloudNow();
     } catch {
       // 保持 pending，下次 online 再试
     }
   },
 
   syncToCloud: () => {
-    const payload = buildConfigForCloud(get().llmConfig);
-    api
-      .setUserConfigKey('llm_config', payload)
-      .then(() => set({ configSyncStatus: 'ok' }))
-      .catch(() => set({ configSyncStatus: 'pending' }));
+    const owner = getUserIdOrNull();
+    void get().syncToCloudNow().catch(() => {
+      if (getUserIdOrNull() === owner) set({ configSyncStatus: 'pending' });
+    });
   },
 
   syncToCloudNow: async () => {
-    const payload = buildConfigForCloud(get().llmConfig);
-    await api.setUserConfigKey('llm_config', payload);
-    set({ configSyncStatus: 'ok' });
+    const owner = getUserIdOrNull();
+    await queueConfigWrite(() => api.setUserConfigKey('llm_config', buildConfigForCloud(get().llmConfig)));
+    if (getUserIdOrNull() === owner) set({ configSyncStatus: 'ok' });
   },
 
   setLLMConfig: (config, options) => {
@@ -170,18 +178,28 @@ export const useLLMConfigStore = create<LLMConfigStore>((set, get) => ({
     get().syncToCloud();
   },
 
-  /** 设置提供商 API Key（已废弃：API Key 只存服务器端，前端不再存 key）
-   *  @deprecated 此函数已废弃，API Key 由服务器端统一管理
-   */
-  setProviderApiKey: (_providerId: string, _apiKey: string) => {
-    // no-op: API Key 只存在于服务器端，前端不再存储
+  setProviderApiKey: async (providerId, apiKey) => {
+    const owner = getUserIdOrNull();
+    const saved = await queueConfigWrite(async () => {
+      const config = get().llmConfig;
+      if (!config.providers.some(provider => provider.id === providerId)) throw new Error('提供商已移除');
+      const providers = config.providers.map(provider => provider.id === providerId ? { ...provider, apiKey } : provider);
+      const response = await api.setUserConfigKey('llm_config', { ...config, providers });
+      const publicConfig = response.value as LLMSystemConfig | undefined;
+      const provider = publicConfig?.providers.find(item => item.id === providerId);
+      if (!provider || provider.apiKeyConfigured !== Boolean(apiKey)) throw new Error('服务器未确认密钥状态，请重试');
+      return provider;
+    });
+    if (getUserIdOrNull() !== owner) return;
+    set(state => {
+      const providers = state.llmConfig.providers.map(provider => provider.id === providerId
+        ? { ...provider, apiKeyConfigured: saved.apiKeyConfigured } : provider);
+      const config = { ...state.llmConfig, providers };
+      saveToStorage(config);
+      return { llmConfig: config, configSyncStatus: 'ok' };
+    });
   },
-  /** 清除提供商 API Key（已废弃）
-   *  @deprecated 此函数已废弃
-   */
-  clearProviderApiKey: (_providerId: string) => {
-    // no-op: API Key 只存服务器端
-  },
+  clearProviderApiKey: (providerId) => get().setProviderApiKey(providerId, ''),
   /** 获取某提供商的 API Key（已废弃：始终返回空字符串）
    *  @deprecated 此函数已废弃，API Key 由服务器端统一管理
    */

@@ -97,6 +97,7 @@ async function handleOAuthCallback(
     const userInfo = await fetchUserInfo(provider, tokens.accessToken);
     const userId = await resolveUser(db, provider, userInfo);
 
+    await req.app.locals.sessions.login(req,res,userId);
     serverLogger.info('oauth', `OAuth login success`, `provider=${provider} userId=${userId}`);
     res.redirect(buildFrontendCallbackUrl(userId));
   } catch (err: unknown) {

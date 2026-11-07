@@ -41,7 +41,7 @@ export function CodeBlock({ code, language, inline = false }: CodeBlockProps) {
 
   if (inline) {
     return (
-      <code className="px-1 py-0.5 rounded bg-white/10 text-desktop-accent text-xs font-mono">
+      <code className="px-1 py-0.5 rounded bg-white/10 text-amber-400 text-xs font-mono">
         {code}
       </code>
     );
@@ -57,7 +57,7 @@ export function CodeBlock({ code, language, inline = false }: CodeBlockProps) {
     <div className="relative group mt-2 rounded-lg overflow-hidden border border-white/10">
       {/* Header bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-white/5 border-b border-white/10">
-        <span className="text-[10px] text-desktop-muted font-mono uppercase">{lang}</span>
+        <span className="text-[10px] text-gray-400 font-mono uppercase">{lang}</span>
         <div className="flex items-center gap-1">
           {canRun && (
             <button
@@ -65,7 +65,7 @@ export function CodeBlock({ code, language, inline = false }: CodeBlockProps) {
               onClick={handleRun}
               disabled={running}
               title="运行代码"
-              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-desktop-accent/60 hover:bg-desktop-accent/80 text-desktop-text transition-colors disabled:opacity-50"
+              className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] bg-amber-500/60 hover:bg-amber-500/80 text-gray-200 transition-colors disabled:opacity-50"
             >
               {running ? (
                 <><Loader2 size={10} className="animate-spin" /> 运行中…</>
@@ -78,7 +78,7 @@ export function CodeBlock({ code, language, inline = false }: CodeBlockProps) {
             type="button"
             onClick={() => navigator.clipboard.writeText(code)}
             title="复制代码"
-            className="px-2 py-0.5 rounded text-[10px] bg-white/10 hover:bg-white/20 text-desktop-muted transition-colors"
+            className="px-2 py-0.5 rounded text-[10px] bg-white/10 hover:bg-white/20 text-gray-400 transition-colors"
           >
             复制
           </button>

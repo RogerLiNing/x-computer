@@ -98,6 +98,14 @@ html, body, #root {
   animation: toastIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.animate-scale-in {
+  animation: scaleIn 0.15s ease-out;
+}
+
 /* 可编辑与可选中区域（默认已可选中，此处显式保证 input/textarea 不受影响） */
 textarea, input {
   user-select: text;
@@ -110,3 +118,77 @@ textarea, input {
 .highlight-flash {
   animation: highlightFlash 0.8s ease-in-out;
 }
+
+/* ── Noir Laboratory Chat Theme ── */
+.chat-theme {
+  --ct-bg: #0D0D0D;
+  --ct-surface: #161616;
+  --ct-surface-raised: #1E1E1E;
+  --ct-accent: #C8A96E;
+  --ct-accent-glow: rgba(200, 169, 110, 0.15);
+  --ct-accent-strong: rgba(200, 169, 110, 0.3);
+  --ct-text: #F0EDE8;
+  --ct-text-secondary: #8A857D;
+  --ct-text-tertiary: #5C5852;
+  --ct-border: rgba(255, 255, 255, 0.06);
+  --ct-border-visible: rgba(255, 255, 255, 0.10);
+  --ct-user-bg: #1A1A1A;
+  --ct-user-border: rgba(255, 255, 255, 0.04);
+
+  color: var(--ct-text);
+  background: var(--ct-bg);
+}
+
+/* Subtle noise texture overlay */
+.chat-theme::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 256px 256px;
+}
+
+/* Chat theme scrollbar */
+.chat-theme::-webkit-scrollbar-track {
+  background: transparent;
+}
+.chat-theme::-webkit-scrollbar-thumb {
+  background: rgba(200, 169, 110, 0.15);
+  border-radius: 3px;
+}
+.chat-theme::-webkit-scrollbar-thumb:hover {
+  background: rgba(200, 169, 110, 0.3);
+}
+
+/* Chat theme selection */
+.chat-theme ::selection {
+  background: rgba(200, 169, 110, 0.3);
+  color: var(--ct-text);
+}
+
+/* Message entrance animation */
+@keyframes messageIn {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.chat-theme .msg-enter {
+  animation: messageIn 0.3s ease-out;
+}
+
+/* Input focus glow */
+.chat-theme .input-glow:focus-within {
+  border-color: var(--ct-accent);
+  box-shadow: 0 0 24px var(--ct-accent-glow);
+}
+
+/* The default chat puts reading and touch targets ahead of compact tool controls. */
+.chat-theme[data-simple="true"] button { min-height: 44px; }
+.chat-theme[data-simple="true"] button:focus-visible,
+.chat-theme[data-simple="true"] textarea:focus-visible { outline: 2px solid #C8A96E; outline-offset: 2px; }
+.chat-theme[data-simple="true"] textarea,
+.chat-theme[data-simple="true"] .chat-markdown { font-size: 16px; line-height: 1.75; }
+.chat-theme[data-simple="true"] [hidden] { display: none; }

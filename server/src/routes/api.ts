@@ -1,6 +1,10 @@
+import {backgroundAutostartEnabled} from '../config/backgroundRuntime.js';
+import { createHash } from 'node:crypto';
+import { resolveLLMCredentials } from '../llm/credentialResolver.js';
+import { ScheduledOccurrenceService, type ChannelReplyAddress } from '../scheduler/ScheduledOccurrenceService.js';
+import type { ChatRunService } from '../chat/ChatRunService.js';
 import { Router } from 'express';
 import { DoneLogService } from '../services/DoneLogService.js';
-import { createTasksRouter } from './tasks.js';
 import { createSchedulerRouter } from './scheduler.js';
 import { createLLMRouter } from './llm.js';
 import { createSkillsRouter } from './skills.js';
@@ -9,21 +13,19 @@ import { createMemoryRouter } from './memory.js';
 import { createPromptRouter } from './prompt.js';
 import { createXProactiveRouter } from './xProactive.js';
 import { createXPendingRouter } from './xPending.js';
-import { createXBoardRouter } from './xBoard.js';
 import { createXGroupRunRouter } from './xGroupRun.js';
 import { createXAppsRouter } from './xApps.js';
 import { createDiscordRouter } from './messaging/discord.js';
 import { createTelegramRouter } from './messaging/telegram.js';
 import { createQQRouter } from './messaging/qq.js';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
-import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
 import { createAdminRouter } from './adminUtils.js';
 import { createContentManagementRoutes } from './contentManagement.js';
 import type { AgentDefinition } from '../../../shared/src/index.js';
 import { callLLM } from '../chat/chatService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
-import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE, SCHEDULED_RUN_MANDATE } from '../prompts/systemCore.js';
+import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE, SCHEDULED_RUN_MANDATE, buildTimelineContext } from '../prompts/systemCore.js';
 import { getUserLanguage } from '../prompts/systemCore/promptLoader.js';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
@@ -40,7 +42,7 @@ import { createCapabilitiesRouter } from './capabilities.js';
 import { createEditorAgentRouter } from './editorAgent.js';
 import { createChatRouter } from './chat.js';
 import { createWhatsAppRouter } from './messaging/whatsapp.js';
-import { getMessages as getXProactiveMessages, addMessage as addXProactiveMessage } from '../x/XProactiveMessages.js';
+import { getMessagesWithHistory, addMessage as addXProactiveMessage } from '../x/XProactiveMessages.js';
 import {
   XScheduler,
   setDefaultScheduler,
@@ -48,7 +50,7 @@ import {
   type ScheduledJobStore,
   type ScheduledJob,
 } from '../scheduler/XScheduler.js';
-import { runScheduledIntent, runWithRetry } from '../scheduler/runScheduledIntent.js';
+import { runWithRetry } from '../scheduler/runScheduledIntent.js';
 import { loadDefaultConfig, getToolLoadingMode } from '../config/defaultConfig.js';
 
 /** 精简系统提示中的能力列表以节省 token；设 X_COMPUTER_SYSTEM_PROMPT_CONDENSED=false 可恢复完整格式 */
@@ -59,7 +61,6 @@ import {
   ensureUserMcpLoaded,
 } from '../mcp/loadAndRegister.js';
 import { getDiscoveredSkills } from '../skills/discovery.js';
-import { truncateChatMessages, MAX_CHAT_MESSAGES } from '../utils/chatContext.js';
 import { fire as fireHook, registerHook } from '../hooks/HookRegistry.js';
 import { fireSignal } from '../signals/signalService.js';
 import { workflowFireEvent } from '../workflow/workflowClient.js';
@@ -90,6 +91,11 @@ import { setSlackMessageHandler, reconnectSlackForConfiguredUsers, sendSlackMess
 import { handleSlackMessage } from '../slack/slackLoop.js';
 import { setQQMessageHandler, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
 import { handleQQMessage } from '../qq/qqLoop.js';
+import { createChannelReplyTransport } from '../messaging/channelReply.js';
+import type { ChannelOrigin } from '../messaging/channelIdentity.js';
+import type { PluginRegistry } from '../plugins/PluginRegistry.js';
+import { LivingAIKernel } from '../living-ai/LivingAIKernel.js';
+import { createLivingAIRouter } from './livingAI.js';
 
 const MEMORY_DIR = 'memory';
 
@@ -127,6 +133,22 @@ async function loadAgentsForSignals(
 }
 function dailyPath(date: string): string {
   return `${MEMORY_DIR}/${date}.md`;
+}
+
+/** 内容质量预检：过滤太短、纯确认/寒暄的内容 */
+function shouldConsiderForMemory(userMsg: string, assistantReply: string): boolean {
+  const um = userMsg.trim();
+  const ar = (assistantReply ?? '').trim();
+  if (!um || um.length < 10) return false;
+  if (!ar || ar.length < 10) return false;
+  const ackPatterns = [
+    '好的', '好的！', '好的。', '嗯', '嗯嗯', '明白', '明白了', '了解', '知道了',
+    '好的，我明白了', '没问题', 'OK', 'ok', '好的收到', '好的，我来',
+    '好的，请稍等', '好的，请稍候', '马上', '稍等', '好的，马上', '好的，立即',
+  ];
+  if (ackPatterns.includes(um)) return false;
+  if (/^(hi|hello|嗨|你好|您好|hey|hallo)[!,。！]*$/i.test(um)) return false;
+  return true;
 }
 
 /** 后台执行：根据本轮对话判断是否写入记忆并可选建向量索引（不向调用方返回结果，参考 OpenClaw） */
@@ -175,7 +197,8 @@ async function runConsiderCapture(params: {
   const typeMap = { PREFERENCE: 'preference' as const, DECISION: 'decision' as const, FACT: 'fact' as const };
   const type = typeMap[typeLine as keyof typeof typeMap] ?? 'fact';
   const content = (lines.slice(1).join(' ').trim() || lines[0] || trimmed).trim();
-  if (!content) return;
+  // 质量门槛：内容必须有足够上下文，至少 8 字符
+  if (!content || content.length < 8) return;
   await memoryService.capture(content, type);
   const date = new Date().toISOString().slice(0, 10);
   fireHook('memory_captured', {
@@ -271,36 +294,50 @@ async function runLearnPromptExtract(params: {
 
 export function createApiRouter(
   orchestrator: AgentOrchestrator,
-  policy: PolicyEngine,
   audit: AuditLogger,
   sandboxFS: SandboxFS,
   userSandboxManager?: UserSandboxManager,
   db?: AppDatabase,
   miniAppLogStore?: MiniAppLogStore,
   subscriptionService?: SubscriptionService,
+  plugins?: PluginRegistry,
 ): Router {
   const router = Router();
-  router.use(createAgentsRouter(orchestrator, db));
-  router.use(createTasksRouter(orchestrator, userSandboxManager, db, subscriptionService));
-  router.use(createSchedulerRouter(db));
-  router.use(createLLMRouter());
+  const enabled = (id: Parameters<PluginRegistry['isEnabled']>[0]) => plugins?.isEnabled(id) ?? true;
+  const backgroundAutostart=backgroundAutostartEnabled();
+  const autonomyEnabled = enabled('autonomy');
+  const automationEnabled = enabled('automation');
+  const messagingEnabled = enabled('messaging');
+  const productivityEnabled = enabled('productivity');
+  const mcpEnabled = enabled('mcp');
+
+  if (autonomyEnabled) router.use(createAgentsRouter(orchestrator, db));
+  let sharedChatRuns: ChatRunService | undefined;
+  let occurrences: ScheduledOccurrenceService | undefined;
+  if (db) router.use(createSchedulerRouter(db, () => occurrences));
+  router.use(createLLMRouter(db, subscriptionService));
   router.use(createXProactiveRouter(db));
-  router.use(createXPendingRouter(db));
-  router.use(createXBoardRouter(db));
+  if (autonomyEnabled) {
+    router.use(createXPendingRouter(db));
+  }
   router.use(createXAppsRouter(db));
-  if (db) {
+  if (db && messagingEnabled) {
     router.use(createDiscordRouter(db));
     router.use(createTelegramRouter(db));
     router.use(createWhatsAppRouter(db));
     router.use(createSlackRouter(db));
     router.use(createQQRouter(db));
+  }
+  if (db && productivityEnabled) {
     router.use(createContentManagementRoutes(db));
   }
-  router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
+  if (mcpEnabled) {
+    router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
+  }
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createCapabilitiesRouter(orchestrator));
   router.use(createHealthRouter(orchestrator, audit));
-  router.use(createAdminRouter(orchestrator, policy, audit, sandboxFS, userSandboxManager, db));
+  router.use(createAdminRouter(orchestrator, audit, sandboxFS, userSandboxManager, db));
   const vectorStore = new VectorStore(sandboxFS);
   const memoryService = new MemoryService(sandboxFS, vectorStore);
 
@@ -353,10 +390,11 @@ export function createApiRouter(
   const getSystemPromptForScheduler = async (uid: string) => {
     const toolLoadingMode = getToolLoadingMode();
     const onDemandTools = toolLoadingMode === 'on_demand';
-    const [learnedPrompt, evolvedCorePrompt, basePrompt] = await Promise.all([
+    const [learnedPrompt, evolvedCorePrompt, basePrompt, timeline] = await Promise.all([
       getLearnedPromptForUser(uid),
       getEvolvedCorePromptForUser(uid),
       getBasePromptForUser(uid),
+      buildTimelineContext(db as any, uid),
     ]);
     const tools = listAllCapabilities(orchestrator.getTools());
     const skills = getDiscoveredSkills(uid);
@@ -373,6 +411,7 @@ export function createApiRouter(
       capabilities: caps,
       learnedPrompt,
       evolvedCorePrompt,
+      timeline,
     });
     let out = base + TOOL_USE_MANDATE + MEMORY_TOOL_MANDATE + SCHEDULED_RUN_MANDATE;
     if (db) {
@@ -397,96 +436,34 @@ export function createApiRouter(
           /* ignore */
         }
       }
-      // 注入看板摘要
-      try {
-        const boardItems = await Promise.resolve(db.listBoardItems(uid));
-        if (boardItems.length > 0) {
-          const byStatus: Record<string, typeof boardItems> = {};
-          for (const item of boardItems) {
-            (byStatus[item.status] ??= []).push(item);
-          }
-          const statusLabels: Record<string, string> = { todo: '待做', in_progress: '进行中', pending: '等待', done: '已完成' };
-          const priorityLabels: Record<string, string> = { high: '高', medium: '中', low: '低' };
-          const lines: string[] = [];
-          for (const st of ['in_progress', 'todo', 'pending', 'done'] as const) {
-            const arr = byStatus[st];
-            if (!arr?.length) continue;
-            lines.push(`### ${statusLabels[st] ?? st}（${arr.length}）`);
-            for (const item of arr.slice(0, 10)) {
-              const desc = item.description ? ` — ${item.description.slice(0, 60)}` : '';
-              lines.push(`- [${priorityLabels[item.priority] ?? '中'}] ${item.title}${desc}  (id: ${item.id})`);
-            }
-          }
-          if (lines.length > 0) {
-            out += '\n\n## 你的任务看板当前状态\n使用 x.board_add/update/remove 管理看板。行动前先参考看板，把新任务加入看板，完成后更新状态。\n' + lines.join('\n');
-          }
-        }
-      } catch { /* ignore */ }
     }
     return out;
   };
-  const getLLMConfigForScheduler = async (
-    uid: string,
-    overrides?: { providerId?: string; modelId?: string }
-  ) => {
-    const fromConfig = (
-      config: {
-        providers?: Array<{ id: string; baseUrl?: string; apiKey?: string }>;
-        defaultByModality?: { chat?: { providerId: string; modelId: string } };
-      } | null
-    ) => {
-      if (!config?.providers?.length) return null;
-      const chat = config.defaultByModality?.chat;
-      const providerId = overrides?.providerId ?? chat?.providerId ?? config.providers?.[0]?.id;
-      const modelId = overrides?.modelId ?? chat?.modelId ?? '__custom__';
-      const provider = config.providers?.find((p) => p.id === providerId);
-      if (!providerId || !modelId || !provider?.apiKey) return null;
-      return {
-        providerId,
-        modelId,
-        baseUrl: provider?.baseUrl,
-        apiKey: provider?.apiKey,
-      };
-    };
+  const getLLMConfigForScheduler = (uid: string, overrides?: { providerId?: string; modelId?: string }) =>
+    resolveLLMCredentials(uid, db, subscriptionService, overrides);
 
-    // 1) 仅专业版用户可使用 DB 中的 llm_config；非专业版始终用 server/.x-config.json 默认值
-    const canUseUserConfig =
-      !subscriptionService ||
-      (await (async () => {
-        const sub = await subscriptionService.getUserSubscription(uid);
-        return sub ? ['pro', 'enterprise'].includes(sub.planId) : false;
-      })());
-    if (canUseUserConfig && db) {
-      const raw = await db.getConfig(uid, 'llm_config');
-      if (raw) {
-        try {
-          const config = JSON.parse(raw) as Parameters<typeof fromConfig>[0];
-          const result = fromConfig(config);
-          if (result) return result;
-        } catch {
-          // fall through
-        }
-      }
+  const livingAIKernel = db && autonomyEnabled
+    ? new LivingAIKernel({
+        db,
+        orchestrator,
+        getLLMConfig: (userId) => getLLMConfigForScheduler(userId),
+        getSystemPrompt: getSystemPromptForScheduler,
+        cancelCycles:userId=>occurrences?.cancelLivingCycles(userId)??Promise.resolve(),
+        resumeCycle:(userId,sourceId,revision,signal)=>{
+          if(!occurrences)throw new Error('后台任务服务尚未就绪');
+          return occurrences.resumeLivingCycle(userId,sourceId,revision,signal);
+        },
+      })
+    : null;
+  if (livingAIKernel) {
+    router.use('/x/life', createLivingAIRouter(livingAIKernel));
+    if (process.env.NODE_ENV !== 'test' && backgroundAutostart) {
+      livingAIKernel.start();
     }
-    // 2) 回退到 server/.x-config.json 默认值
-    const defaults = loadDefaultConfig();
-    const defaultResult = fromConfig(defaults?.llm_config as Parameters<typeof fromConfig>[0] ?? null);
-    if (defaultResult) return defaultResult;
-    // 3) 无默认配置时使用环境变量
-    const apiKey = process.env.OPENROUTER_API_KEY?.trim() || process.env.LLM_API_KEY?.trim();
-    const model = process.env.OPENROUTER_MODEL?.trim() || process.env.LLM_MODEL?.trim() || 'openai/gpt-4o-mini';
-    if (apiKey) {
-      return {
-        providerId: 'openrouter',
-        modelId: model,
-        baseUrl: 'https://openrouter.ai/api/v1',
-        apiKey,
-      };
-    }
-    return null;
-  };
+  }
+
   const ensureUserMcpForScheduler =
-    userSandboxManager && db
+    mcpEnabled && userSandboxManager && db
       ? (uid: string) =>
           ensureUserMcpLoaded(
             orchestrator,
@@ -546,7 +523,7 @@ export function createApiRouter(
   orchestrator.setMemoryDeps(getMemoryServiceForUser, getVectorConfigForUser);
 
   /** 注入 MCP 重载，供 x.add/update/remove_mcp_server 后立即生效 */
-  if (userSandboxManager && db) {
+  if (mcpEnabled && userSandboxManager && db) {
     orchestrator.setReloadMcpForUser((userId) =>
       loadMcpAndRegisterForUser(
         orchestrator,
@@ -555,20 +532,6 @@ export function createApiRouter(
         db!.getConfig.bind(db),
       ).then(() => {}),
     );
-  }
-
-  /** 若该用户当前没有任何定时任务，则为其添加一条默认定时（每天 9:00 自检），保证 X 会定期运行、永不「零任务」 */
-  const DEFAULT_CRON = '0 9 * * *';
-  const DEFAULT_INTENT =
-    '作为 X 主脑，做一次例行自检：检查当前状态、待办、是否需要主动联系用户；如需可调用 x.notify_user。';
-  function ensureDefaultScheduleForUser(userId: string | undefined): void {
-    if (!userId) return;
-    const scheduler = getDefaultScheduler();
-    if (!scheduler) return;
-    const list = scheduler.listJobs(userId);
-    if (list.length > 0) return;
-    scheduler.addJob(userId, DEFAULT_INTENT, undefined, DEFAULT_CRON);
-    serverLogger.info('x/scheduler', `为用户 ${userId} 添加默认定时任务`, DEFAULT_CRON);
   }
 
   /** 主脑一轮对话结束后：由 hook 触发，判断是否应自动进化自我约定（不依赖用户说「进化」） */
@@ -616,23 +579,40 @@ export function createApiRouter(
     }
   }
 
-  registerHook('x_chat_round_complete', (payload) => considerEvolveAfterXChat(payload));
+  if(backgroundAutostart&&autonomyEnabled)registerHook('x_chat_round_complete', async (payload) => {
+    await Promise.all([
+      considerEvolveAfterXChat(payload),
+      livingAIKernel?.observeInteraction(
+        payload.userId,
+        `用户刚刚与 X 对话：${payload.lastUserMessage.slice(0, 500)}`,
+      ),
+    ]);
+  });
+
+  const channelTransport = db ? createChannelReplyTransport(db.getConfig.bind(db)) : undefined;
+  occurrences = db ? new ScheduledOccurrenceService({
+    db, getRuns: () => sharedChatRuns, getSystemPrompt: getSystemPromptForScheduler, sendChannelReply: channelTransport?.send, validateChannelReply: channelTransport?.validate,
+    getLLMConfig: getLLMConfigForScheduler, ensureUserMcp: ensureUserMcpForScheduler,
+    onCompleted: async job => { if (job.actionFingerprint) await db!.insertHandledEvent(job.userId, job.actionFingerprint); },
+  }) : undefined;
+
+  if (occurrences) {
+    orchestrator.setBackgroundIntentRunner(input => occurrences!.run(input));
+    if (process.env.NODE_ENV !== 'test' && backgroundAutostart) occurrences.start();
+  }
 
   const scheduledJobStore: ScheduledJobStore | undefined = db
     ? {
         async loadAll(): Promise<ScheduledJob[]> {
           const rows = await db!.getAllScheduledJobs();
-          return rows.map((r: { id: string; user_id: string; intent: string; run_at: number; cron: string | null; created_at: number; session_id: string | null; name: string | null }) => ({
-            id: r.id,
-            userId: r.user_id,
-            intent: r.intent,
-            runAt: r.run_at,
-            cron: r.cron ?? undefined,
-            createdAt: r.created_at,
-            sessionId: r.session_id ?? undefined,
-            name: r.name ?? undefined,
+          return rows.filter(r => r.enabled === 1).map(r => ({
+            id: r.id, userId: r.user_id, intent: r.intent, runAt: r.next_run ?? r.run_at,
+            cron: r.cron ?? undefined, createdAt: r.created_at,
+            sessionId: r.session_id ?? undefined, name: r.name ?? undefined, scopeJson: r.scope_json,
           }));
         },
+        queue: (job, nextAt) => occurrences!.queue(job, nextAt),
+        recover: () => occurrences!.recover(),
         async save(job: ScheduledJob): Promise<void> {
           await db!.insertScheduledJob({
             id: job.id,
@@ -642,6 +622,7 @@ export function createApiRouter(
             cron: job.cron ?? null,
             created_at: job.createdAt,
             session_id: job.sessionId ?? null,
+            scope_json: job.scopeJson ?? null,
             name: job.name ?? null,
           });
         },
@@ -649,55 +630,30 @@ export function createApiRouter(
           await db!.updateScheduledJobRunAt(id, runAt);
         },
         async remove(id: string): Promise<void> {
-          await db!.deleteScheduledJob(id);
+          await occurrences!.cancelJob(id);
         },
       }
     : undefined;
 
-  const xScheduler = new XScheduler(
-    async (job) => {
-      // 提醒：直接写入对应 chat 会话
-      if (job.sessionId) {
-        await db?.addMessage(
-          job.sessionId,
-          'assistant',
-          `⏰ **提醒**\n\n${job.intent}`,
-        );
-        return;
-      }
-      await runScheduledIntent(job, {
-        orchestrator,
-        getSystemPrompt: getSystemPromptForScheduler,
-        getLLMConfig: getLLMConfigForScheduler,
-        ensureUserMcp: ensureUserMcpForScheduler,
-        onSkip: (uid) => {
-          addXProactiveMessage(
-            uid,
-            '定时任务因未配置大模型被跳过。请到「系统设置 → 大模型配置」保存一次（会同步到云端），或设置环境变量 OPENROUTER_API_KEY 后重启服务。',
-            'need_api_key',
-          );
-        },
-        onRoundComplete: considerEvolveAfterXChat,
-      });
-      ensureDefaultScheduleForUser(job.userId);
-    },
-    scheduledJobStore,
-  );
-  setDefaultScheduler(xScheduler);
-  if (scheduledJobStore) {
-    xScheduler
-      .loadJobs()
-      .then(() => {
-        xScheduler.start();
-        const stats = xScheduler.getStats();
-        serverLogger.info('x/scheduler', '已从持久化加载定时任务并启动', `jobCount=${stats.jobCount} nextRunAt=${stats.nextRunAt ?? 'none'}`);
-      })
-      .catch((err) => {
-        serverLogger.warn('x/scheduler', '加载定时任务失败，仍启动调度器', err?.message ?? err);
-        xScheduler.start();
-      });
-  } else {
-    xScheduler.start();
+  const xScheduler = new XScheduler(async () => {
+    throw new Error('持久化调度服务未就绪，未执行任务');
+  }, scheduledJobStore);
+  if (automationEnabled) {
+    setDefaultScheduler(xScheduler);
+    if (scheduledJobStore) {
+      xScheduler
+        .loadJobs()
+        .then(() => {
+          if(backgroundAutostart)xScheduler.start();
+          const stats = xScheduler.getStats();
+          serverLogger.info('x/scheduler', backgroundAutostart?'已从持久化加载定时任务并启动':'定时任务已加载，后台自动启动已暂停', `jobCount=${stats.jobCount} nextRunAt=${stats.nextRunAt ?? 'none'}`);
+        })
+        .catch((err) => {
+          serverLogger.warn('x/scheduler', '加载定时任务失败，调度器未启动', err?.message ?? err);
+        });
+    } else if(backgroundAutostart) {
+      xScheduler.start();
+    }
   }
 
   /** 收集当前用户情况，用于生成个性化欢迎语（待办数、X 主动消息未读数、时段）；使用东八区 */
@@ -720,7 +676,7 @@ export function createApiRouter(
         /* ignore */
       }
     }
-    const proactive = getXProactiveMessages(uid);
+    const proactive = await getMessagesWithHistory(db,uid);
     const unread = proactive.filter((m) => !m.read).length;
     if (unread > 0) parts.push(`X 发给用户的未读消息：${unread} 条`);
     return parts.join('；') + '。';
@@ -774,7 +730,6 @@ export function createApiRouter(
         userId,
         toolLoadingMode: getToolLoadingMode(),
       });
-      ensureDefaultScheduleForUser(userId ?? undefined);
       const lang = db && userId ? await getUserLanguage(db, userId) : 'zh-CN';
       const defaultMsg = lang === 'en' ? "Hi, what would you like to say?" : '你好，有什么想和我说的？';
       res.json({ content: content?.trim() || defaultMsg });
@@ -786,143 +741,80 @@ export function createApiRouter(
   });
 
 
+  // ── Search API ────────────────────────────────────────────────────────────────
+  const SEARCH_CONFIG_KEY = 'search_config';
+
+  router.post('/search/test', async (req, res) => {
+    try {
+      const { provider, apiKey } = req.body as { provider?: string; apiKey?: string };
+      const userId = (req as { userId?: string }).userId;
+
+      // Load from userConfig if not provided
+      let cfg: { provider?: string; apiKey?: string } = { provider, apiKey };
+      if (userId && db && (!provider || !apiKey)) {
+        const raw = await db.getConfig(userId, SEARCH_CONFIG_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw) as { provider?: string; apiKey?: string };
+          cfg = { provider: provider ?? saved.provider, apiKey: apiKey ?? saved.apiKey };
+        }
+      }
+
+      const { webSearch } = await import('../orchestrator/tools/webSearch.js');
+
+      if (cfg.provider === 'duckduckgo') {
+        const result = await webSearch({ query: 'test', numResults: 1 }, { userId });
+        res.json({ ok: !result.error, error: result.error });
+      } else if (cfg.provider === 'serper' && cfg.apiKey) {
+        const result = await webSearch({ query: 'test', numResults: 1, provider: 'serper', apiKey: cfg.apiKey }, { userId });
+        res.json({ ok: !result.error, error: result.error });
+      } else if (cfg.provider === 'perplexity' && cfg.apiKey) {
+        const result = await webSearch({ query: 'test', numResults: 1, provider: 'perplexity', apiKey: cfg.apiKey }, { userId });
+        res.json({ ok: !result.error, error: result.error });
+      } else if (cfg.provider === 'minimax' && cfg.apiKey) {
+        const result = await webSearch({ query: 'test', numResults: 1, provider: 'minimax', apiKey: cfg.apiKey }, { userId });
+        res.json({ ok: !result.error, error: result.error });
+      } else if (cfg.provider === 'brave' && cfg.apiKey) {
+        const result = await webSearch({ query: 'test', numResults: 1, provider: 'brave', apiKey: cfg.apiKey }, { userId });
+        res.json({ ok: !result.error, error: result.error });
+      } else {
+        res.json({ ok: false, error: '请先选择 Provider 并填写 API Key' });
+      }
+    } catch (err: any) {
+      res.json({ ok: false, error: err.message });
+    }
+  });
+
+
   // ── R014：事件驱动 X 执行（用户发消息 / 任务完成后触发，节流 60s 每用户每来源） ──
   const EVENT_DRIVEN_THROTTLE_MS = 60_000;
   const lastEventRunByUser = new Map<string, number>();
 
-  /** 渠道消息作为Chat会话处理：将消息添加到Chat会话并触发AI回复 */
-  const handleChannelMessageAsChat = async (
+  async function handleChannelMessageAsChat(
     userId: string,
-    channel: string,
+    source: string,
     message: string,
-    fromName?: string,
+    _fromName?: string,
     metadata?: Record<string, unknown>,
-  ): Promise<void> => {
-    if (!db || !userId || userId === 'anonymous') return;
-
-    // 查找最近的渠道会话，或创建新会话
-    const sessions = await db.listSessions(userId, 10, undefined);
-    const channelSession = sessions.find(
-      (s) => s.title && s.title.includes(`[${channel}]`),
-    );
-    const sessionId = channelSession?.id ?? (await db.createSession(userId, `渠道消息 [${channel}]`, null)).id;
-
-    // 将用户消息添加到会话
-    const userMessage = fromName
-      ? `[${channel}] ${fromName}: ${message}`
-      : `[${channel}] ${message}`;
-    await db.addMessage(sessionId, 'user', userMessage);
-
-    // 获取历史消息（最近50条）
-    const historyMessages = await db.getMessages(sessionId, 50);
-
-    // 转换为 LLM 消息格式，排除最后一条（刚添加的用户消息）
-    const chatHistoryRaw = historyMessages
-      .filter((m) => m.role !== 'system')
-      .slice(0, -1)
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content || '',
-      }));
-
-    // 使用标准的截断函数处理对话历史，并过滤掉 system 消息
-    const chatHistory = truncateChatMessages(chatHistoryRaw, MAX_CHAT_MESSAGES).filter(
-      (m) => m.role !== 'system',
-    ) as { role: 'user' | 'assistant'; content: string }[];
-
-    // 获取 LLM 配置
-    const llmConfig = await getLLMConfigForScheduler(userId);
-    if (!llmConfig?.providerId || !llmConfig?.modelId) {
-      serverLogger.warn('handleChannelMessageAsChat', `跳过执行：LLM 未配置`, `userId=${userId}`);
-      return;
+  ): Promise<void> {
+    if (!db || !occurrences || !userId || userId === 'anonymous') throw new Error('渠道交办服务未就绪');
+    const channel = source.toLowerCase();
+    if (channel !== 'qq' && channel !== 'whatsapp' && channel !== 'telegram' && channel !== 'discord' && channel !== 'slack') {
+      throw new Error('渠道不受支持');
     }
-
-    // 确保用户的 MCP 工具已加载
-    if (ensureUserMcpForScheduler) {
-      await ensureUserMcpForScheduler(userId);
-    }
-
-    const toolLoadingMode = getToolLoadingMode();
-    const onDemandTools = toolLoadingMode === 'on_demand';
-
-    // 获取各种提示词（标准做法）
-    const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt] = await Promise.all([
-      getLearnedPromptForUser(userId),
-      getEvolvedCorePromptForUser(userId),
-      getBasePromptForUser(userId),
-      getAssistantPromptForUser(userId),
-    ]);
-
-    // 构建系统提示（与 /chat/agent、定时/事件主脑一致：on_demand 时用 CAPABILITIES_ON_DEMAND，不全量塞能力列表）
-    const tools = listAllCapabilities(orchestrator.getTools());
-    const skills = getDiscoveredSkills(userId);
-    const caps = onDemandTools
-      ? ''
-      : USE_CONDENSED_SYSTEM_PROMPT
-        ? formatCapabilitiesSummaryCondensed(tools) + formatSkillsSummary(skills, true)
-        : formatCapabilitiesSummary(tools) + formatSkillsSummary(skills);
-
-    const systemPrompt = getAssembledSystemPrompt({
-      scene: 'none',
-      promptMode: 'minimal',
-      basePrompt,
-      toolLoadingModeOnDemand: onDemandTools,
-      capabilities: caps,
-      learnedPrompt,
-      evolvedCorePrompt,
-      assistantPrompt,
-    });
-
-    // 用户最新消息
-    const userMessageForLLM = `用户通过 ${channel} 发来消息：${message}\n\n请理解消息内容，进行对话式回复。`;
-
-    // 构建完整的消息列表（历史 + 最新）
-    const allMessages = [
-      ...chatHistory,
-      { role: 'user' as const, content: userMessageForLLM },
-    ];
-
-    // 直接调用 orchestrator 的聊天循环，获取回复内容
-    const result = await orchestrator.runChatAgentLoop({
-      messages: allMessages,
-      systemPrompt,
-      llmConfig,
-      maxSteps: 15,
-      userId,
-      toolLoadingMode,
-    });
-
-    const replyText = result.content?.trim();
-    if (!replyText) {
-      serverLogger.warn('handleChannelMessageAsChat', `AI 未生成回复内容`, `userId=${userId} channel=${channel}`);
-      return;
-    }
-
-    // 保存 AI 回复到会话（用于多轮对话）
-    await db.addMessage(sessionId, 'assistant', replyText);
-
-    // 自动发送回复到对应渠道
-    const getConfig = db.getConfig.bind(db);
-    let sendResult: { ok: boolean; error?: string } = { ok: false, error: '未知渠道' };
-
-    if (channel === 'QQ' && metadata?.targetType && metadata?.targetId) {
-      sendResult = await sendQQMessage(getConfig, userId, { type: metadata.targetType as 'private' | 'group' | 'guild', id: String(metadata.targetId) }, replyText);
-    } else if (channel === 'WhatsApp' && metadata?.to) {
-      sendResult = await sendWhatsAppMessage(getConfig, userId, String(metadata.to), replyText);
-    } else if (channel === 'Telegram' && metadata?.chatId) {
-      sendResult = await sendTelegramMessage(getConfig, userId, String(metadata.chatId), replyText);
-    } else if (channel === 'Discord' && metadata?.channelId) {
-      sendResult = await sendDiscordMessage(getConfig, userId, String(metadata.channelId), replyText);
-    } else if (channel === 'Slack' && metadata?.channelId) {
-      sendResult = await sendSlackMessage(getConfig, userId, String(metadata.channelId), replyText);
-    }
-
-    if (sendResult.ok) {
-      serverLogger.info('handleChannelMessageAsChat', `渠道回复已发送`, `userId=${userId} channel=${channel}`);
-    } else {
-      serverLogger.error('handleChannelMessageAsChat', `渠道回复发送失败: ${sendResult.error}`, `userId=${userId} channel=${channel}`);
-    }
-  };
+    const target = channel === 'qq' ? metadata?.targetId : channel === 'whatsapp' ? metadata?.to
+      : channel === 'telegram' ? metadata?.chatId : metadata?.channelId;
+    const messageId = metadata?.messageId;
+    if (typeof target !== 'string' || typeof messageId !== 'string') throw new Error('渠道消息缺少地址或编号');
+    const origin = metadata?.origin as ChannelOrigin | undefined;
+    const targetType = metadata?.targetType;
+    const thread = metadata?.threadTs;
+    await occurrences.enqueueChannel(userId, messageId, message, {
+      channel, target, accountId: typeof origin?.accountId === 'string' ? origin.accountId : undefined,
+      sourceScope: typeof origin?.scopeId === 'string' ? origin.scopeId : undefined, configDigest: typeof origin?.configDigest === 'string' ? origin.configDigest : '',
+      targetType: targetType === 'private' || targetType === 'group' || targetType === 'guild' ? targetType : undefined,
+      thread: typeof thread === 'string' ? thread : undefined,
+    }, typeof metadata?.inboxId === 'string' ? metadata.inboxId : undefined);
+  }
 
   const triggerXRunForUser = (
     userId: string,
@@ -931,7 +823,7 @@ export function createApiRouter(
     actionFingerprint?: string,
     metadata?: Record<string, unknown>,
   ): void => {
-    if (!userId || userId === 'anonymous' || !db) return;
+    if (!backgroundAutostart || !userId || userId === 'anonymous' || !db) return;
     const now = Date.now();
     const throttleKey = `${userId}:${source}`;
     const noThrottleSources = ['qq_message_received', 'whatsapp_message_received', 'telegram_message_received', 'discord_message_received', 'slack_message_received', 'email_received'];
@@ -969,21 +861,21 @@ export function createApiRouter(
             }),
           { logLabel: 'x/event-driven' },
         );
-        ensureDefaultScheduleForUser(userId);
       } catch (err: unknown) {
         serverLogger.warn('x/event-driven', err instanceof Error ? err.message : String(err));
       }
     });
   };
-  router.use(createXGroupRunRouter(
-    orchestrator,
-    db,
-    subscriptionService,
-    getSystemPromptForScheduler,
-    ensureUserMcpForScheduler,
-    ensureDefaultScheduleForUser,
-    triggerXRunForUser,
-  ));
+  if (db) {
+    router.use(createXGroupRunRouter(
+      orchestrator,
+      db,
+      subscriptionService,
+      getSystemPromptForScheduler,
+      ensureUserMcpForScheduler,
+      ()=>sharedChatRuns,
+    ));
+  }
   const signalToSource = (signal?: string): 'chat' | 'task' | 'email' => {
     if (signal === 'email_received') return 'email';
     if (signal === 'task_completed') return 'task';
@@ -1016,28 +908,34 @@ export function createApiRouter(
         }
       : null;
 
-  router.use(createEmailRouter(db, signalFireDeps));
-  router.use('/calendar', createCalendarRouter(db));
-  router.use('/notes', createNotesRouter(db));
-  router.use('/bookmarks', createBookmarksRouter(db));
-  router.use('/decisions', createDecisionsRouter(db));
-  router.use('/delegations', createDelegationsRouter(db));
-  router.use('/weekly-plans', createWeeklyPlannerRouter(db));
-  router.use('/changelog', createChangelogRouter(db));
-  router.use('/reading-list', createReadingListRouter(db));
+  if (messagingEnabled) {
+    router.use(createEmailRouter(db, signalFireDeps));
+  }
+  if (productivityEnabled && db) {
+    router.use('/calendar', createCalendarRouter(db));
+    router.use('/notes', createNotesRouter(db));
+    router.use('/bookmarks', createBookmarksRouter(db));
+    router.use('/decisions', createDecisionsRouter(db));
+    router.use('/delegations', createDelegationsRouter(db));
+    router.use('/weekly-plans', createWeeklyPlannerRouter(db));
+    router.use('/changelog', createChangelogRouter(db));
+    router.use('/reading-list', createReadingListRouter(db));
+  }
 
-  if (db && signalFireDeps) {
+  if (db && signalFireDeps && (autonomyEnabled || automationEnabled || messagingEnabled)) {
     const doneLogService = new DoneLogService(db);
 
     registerHook('task_complete', async (payload) => {
+      if(!backgroundAutostart)return;
       const task = orchestrator.getTask(payload.taskId);
-      const meta = task?.metadata as { userId?: string; actionFingerprint?: string; source?: string; sourceId?: string; description?: string; llmConfig?: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string } } | undefined;
+      const meta = task?.metadata as { userId?: string; actionFingerprint?: string; source?: string; sourceId?: string; description?: string; livingAI?: boolean; llmConfig?: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string } } | undefined;
       if (meta?.actionFingerprint && meta?.userId) {
         const ok = payload.data && typeof payload.data === 'object' && (payload.data as { success?: boolean }).success === true;
         if (ok) void Promise.resolve(signalFireDeps.recordHandled!(meta.userId, meta.actionFingerprint)).catch(() => {});
       }
       const userId = meta?.userId;
       if (!userId) return;
+      if (meta.livingAI) return;
 
       // ── 记忆捕获：信号触发（QQ/WhatsApp/Telegram/Discord/Slack/Email）的任务 ──
       // 仅对信号触发的任务执行记忆捕获，避免和 HTTP /chat 接口重复
@@ -1047,7 +945,7 @@ export function createApiRouter(
         const userMessage = meta?.description ?? '';
         const assistantReply = (task?.result as { output?: string } | undefined)?.output ?? '';
         const llmConfig = meta?.llmConfig;
-        if (userMessage.trim() && assistantReply.trim() && llmConfig?.providerId && llmConfig?.modelId) {
+        if (shouldConsiderForMemory(userMessage.trim(), assistantReply.trim()) && llmConfig?.providerId && llmConfig?.modelId) {
           setImmediate(async () => {
             try {
               const memSvc = (await getMemoryServiceForUser(userId)) ?? memoryService;
@@ -1078,11 +976,6 @@ export function createApiRouter(
         }
       }
 
-      // 定时任务完成后，将看板中对应「等待」项更新为「已完成」
-      if (meta?.source === 'scheduled_job' && meta?.sourceId && typeof db.getBoardItemBySourceId === 'function') {
-        const row = await Promise.resolve(db.getBoardItemBySourceId(userId, meta.sourceId));
-        if (row) await Promise.resolve(db.updateBoardItem(row.id, { status: 'done' })).catch(() => {});
-      }
       const title = task?.title ?? '未知任务';
       const result = task?.result as { success?: boolean; output?: string; error?: string } | undefined;
       const resultBrief =
@@ -1100,27 +993,32 @@ export function createApiRouter(
         `有一个任务刚完成：【${title}】。` +
         (resultBrief ? `结果摘要：${resultBrief}。` : '') +
         '该事项已记入你的「近期已完成」清单，请查看并酌情通知用户或做后续处理，勿重复执行该任务。';
-      triggerXRunForUser(userId, intent, 'task');
-      void fireSignal(userId, 'task_completed', { taskId: payload.taskId }, signalFireDeps).then(() =>
-        notifyWorkflowOnSignal(userId, 'task_completed'),
-      );
+      if (autonomyEnabled) {
+        triggerXRunForUser(userId, intent, 'task');
+      }
+      if (automationEnabled) {
+        void fireSignal(userId, 'task_completed', { taskId: payload.taskId }, signalFireDeps).then(() =>
+          notifyWorkflowOnSignal(userId, 'task_completed'),
+        );
+      }
     });
     orchestrator.setSignalFireHandler(async (userId, signal, payload) => {
       const result = await fireSignal(userId, signal, payload as Record<string, unknown> | undefined, signalFireDeps);
       void notifyWorkflowOnSignal(userId, signal);
       return result;
     });
-    const emailCheckIntervalMs = parseInt(process.env.X_COMPUTER_EMAIL_CHECK_INTERVAL_MS ?? '60000', 10) || 60000;
-    startEmailCheckLoop(
-      {
-        db,
-        getConfig: db.getConfig.bind(db),
-        setConfig: db.setConfig.bind(db),
-        runIntent: runIntentWithSource,
-        runAgent: signalFireDeps.runAgent,
-      },
-      emailCheckIntervalMs,
-    );
+    if (messagingEnabled) {
+      const emailCheckIntervalMs = parseInt(process.env.X_COMPUTER_EMAIL_CHECK_INTERVAL_MS ?? '60000', 10) || 60000;
+      if(backgroundAutostart)startEmailCheckLoop(
+        {
+          db,
+          getConfig: db.getConfig.bind(db),
+          setConfig: db.setConfig.bind(db),
+          runIntent: runIntentWithSource,
+          runAgent: signalFireDeps.runAgent,
+        },
+        emailCheckIntervalMs,
+      );
 
     // R052 WhatsApp：注入消息处理器，收到消息时存入 DB 并发出 whatsapp_message_received 信号
     const whatsappLoopDeps = {
@@ -1129,14 +1027,13 @@ export function createApiRouter(
       setConfig: db.setConfig.bind(db),
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
-      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
-        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+      handleChannelMessageAsChat,
     };
     setWhatsAppMessageHandler((userId, msg) => {
-      void handleWhatsAppMessage(whatsappLoopDeps, userId, msg);
+      void handleWhatsAppMessage(whatsappLoopDeps, userId, msg).catch(() => console.warn('[channel] WhatsApp message not queued'));
     });
     // 启动时自动重连已配置且拥有凭证的用户，服务重启后无需重新扫码
-    void reconnectWhatsAppForConfiguredUsers(
+    if(backgroundAutostart)void reconnectWhatsAppForConfiguredUsers(
       db.getConfig.bind(db),
       () => db.getUserIdsWithConfigKey('whatsapp_config'),
     );
@@ -1148,11 +1045,10 @@ export function createApiRouter(
       setConfig: db.setConfig.bind(db),
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
-      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
-        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+      handleChannelMessageAsChat,
     };
-    setTelegramMessageHandler((userId, msg) => { void handleTelegramMessage(telegramLoopDeps, userId, msg); });
-    void reconnectTelegramForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('telegram_config'));
+    setTelegramMessageHandler((userId, msg) => { void handleTelegramMessage(telegramLoopDeps, userId, msg).catch(() => console.warn('[channel] Telegram message not queued')); });
+    if(backgroundAutostart)void reconnectTelegramForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('telegram_config'));
 
     // Discord：注入消息处理器 + 启动自动重连
     const discordLoopDeps = {
@@ -1161,11 +1057,10 @@ export function createApiRouter(
       setConfig: db.setConfig.bind(db),
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
-      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
-        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+      handleChannelMessageAsChat,
     };
-    setDiscordMessageHandler((userId, msg) => { void handleDiscordMessage(discordLoopDeps, userId, msg); });
-    void reconnectDiscordForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('discord_config'));
+    setDiscordMessageHandler((userId, msg) => { void handleDiscordMessage(discordLoopDeps, userId, msg).catch(() => console.warn('[channel] Discord message not queued')); });
+    if(backgroundAutostart)void reconnectDiscordForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('discord_config'));
 
     // Slack：注入消息处理器 + 启动自动重连
     const slackLoopDeps = {
@@ -1174,11 +1069,10 @@ export function createApiRouter(
       setConfig: db.setConfig.bind(db),
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
-      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
-        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+      handleChannelMessageAsChat,
     };
-    setSlackMessageHandler((userId, msg) => { void handleSlackMessage(slackLoopDeps, userId, msg); });
-    void reconnectSlackForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('slack_config'));
+    setSlackMessageHandler((userId, msg) => { void handleSlackMessage(slackLoopDeps, userId, msg).catch(() => console.warn('[channel] Slack message not queued')); });
+    if(backgroundAutostart)void reconnectSlackForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('slack_config'));
 
     // QQ：注入消息处理器 + 启动自动重连
     const qqLoopDeps = {
@@ -1187,11 +1081,11 @@ export function createApiRouter(
       setConfig: db.setConfig.bind(db),
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
-      handleChannelMessageAsChat: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) =>
-        handleChannelMessageAsChat(userId, channel, message, fromName, metadata),
+      handleChannelMessageAsChat,
     };
-    setQQMessageHandler((userId, msg) => { void handleQQMessage(qqLoopDeps, userId, msg); });
-    void reconnectQQForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('qq_config'));
+    setQQMessageHandler((userId, msg) => { void handleQQMessage(qqLoopDeps, userId, msg).catch(() => console.warn('[channel] QQ message not queued')); });
+      if(backgroundAutostart)void reconnectQQForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('qq_config'));
+    }
   }
 
   // ── 聊天会话路由（云端持久化） ──
@@ -1200,27 +1094,45 @@ export function createApiRouter(
       '/chat/sessions',
       createChatSessionRouter(db, {
         onMessageAdded: (userId) => {
+          if (process.env.NODE_ENV === 'test' || !backgroundAutostart) return;
           if (!signalFireDeps) return;
-          triggerXRunForUser(
-            userId,
-            '用户刚在对话中发了新消息。请读取近期助手对话（read_recent_assistant_chat），**作为待处理的聊天记录**审视：有无需记录、跟进、通知或加入看板的事项；不要当成「用户正在和助手聊天」而生成面向用户的回复，你的输出是后台处理结论，宜简短、操作化（如「已处理近期对话」「已记录/已加入看板」或「无新待办」）。',
-            'chat',
-          );
-          void fireSignal(userId, 'user_message_sent', undefined, signalFireDeps).then(() =>
-            notifyWorkflowOnSignal(userId, 'user_message_sent'),
-          );
+          if (autonomyEnabled) {
+            triggerXRunForUser(
+              userId,
+              '用户刚在对话中发了新消息。请读取近期助手对话（read_recent_assistant_chat），**作为待处理的聊天记录**审视：有无需记录、跟进、通知或加入看板的事项；不要当成「用户正在和助手聊天」而生成面向用户的回复，你的输出是后台处理结论，宜简短、操作化（如「已处理近期对话」「已记录/已加入看板」或「无新待办」）。',
+              'chat',
+            );
+          }
+          if (automationEnabled) {
+            void fireSignal(userId, 'user_message_sent', undefined, signalFireDeps).then(() =>
+              notifyWorkflowOnSignal(userId, 'user_message_sent'),
+            );
+          }
         },
       }),
     );
   }
 
 
-  router.use(createChatRouter(orchestrator, sandboxFS, aiQuota, userSandboxManager, db, subscriptionService));
+  router.use(createChatRouter(
+    orchestrator,
+    sandboxFS,
+    aiQuota,
+    userSandboxManager,
+    db,
+    subscriptionService,
+    livingAIKernel ? (userId) => livingAIKernel.getCognitiveContext(userId) : undefined,
+    (runs) => { sharedChatRuns = runs; },
+  ));
 
-  router.use(createEditorAgentRouter(aiQuota));
+  if (autonomyEnabled) {
+    router.use(createEditorAgentRouter(aiQuota));
+  }
 
   // ── 公开分享路由（无需认证，在 auth guard 之后挂载） ──
-  router.use('/chat/shared', createSharedSessionRouter(db));
+  if (db) {
+    router.use('/chat/shared', createSharedSessionRouter(db));
+  }
 
   return router;
 }

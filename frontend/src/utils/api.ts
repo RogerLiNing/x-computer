@@ -6,6 +6,56 @@
 import { getSystemLogStore } from '@/store/systemLogStore';
 import { getUserId, getUserIdOrNull } from './userId.js';
 import i18n from '../i18n.js';
+import type {
+  LivingAIConfig,
+  LivingAIGoal,
+  LivingAIStatus,
+} from '@x-computer/shared';
+import type { ToolCallRecord } from '@/components/shared';
+
+export interface ChatRunArtifact { path: string; name: string; size: number; ownerName?:string }
+export type ChatRunStatus = 'running' | 'stopping' | 'completed' | 'paused' | 'interrupted' | 'failed' | 'blocked';
+export interface ChatRunSnapshot {
+  userQuestion?: { id: string; toolCallId: string; question: string; options: string[]; status: 'pending' | 'answered' | 'cancelled'; answer?: string };
+  sendApproval?: { sender?: { accountId: string; label: string }; id: string; toolCallId: string; toolName: string; input: Record<string, string>; hash: string;
+    expiresAt: number; status: 'pending' | 'approved' | 'executing' | 'completed' | 'rejected' };
+  shellApproval?: {id:string;toolCallId:string;command:string;workdir:string;timeout:number;workspace:string;executionMode:'container'|'host';hash:string;expiresAt:number;status:'pending'|'approved'|'executing'|'completed'|'rejected'};
+  waitingForModel?:boolean;
+  followup?:{rootRunId:string;sourceRunId:string;sequence:number;eventKey:string};
+  followupRunId?:string;
+  loadedToolNames?:string[];
+  conversationUpdatedAt?:number;
+  inputFiles?:Array<{path:string;name:string;size:number;sha256:string;sourcePath:string;relativePath:string}>;
+  expert?:{parentRunId:string;agentId:string;agentName:string;depth:number};
+  expertRuns?:Array<{id:string;agentName:string;status?:ChatRunSnapshot['status'];returnPending?:boolean}>;
+  review?: {status:'pending'|'accepted'|'changes_requested';feedback?:string;delegationId?:string;revisionRunId?:string;delegationPending?:boolean};
+  id: string;
+  sessionId: string;
+  status: ChatRunStatus;
+  content: string;
+  error?: string;
+  artifacts: ChatRunArtifact[];
+  toolCalls: ToolCallRecord[];
+  updatedAt: number;
+  canResume: boolean;
+  assistantMessageId?: string;
+  userMessageId?: string;
+}
+export type WorkbenchRun = Pick<ChatRunSnapshot,'id'|'sessionId'|'status'|'review'|'artifacts'|'updatedAt'|'canResume'> & {title:string;scene?:'normal_chat'|'x_direct'};
+export interface AssistantWorkbenchData {
+ active: WorkbenchRun[]; finished: WorkbenchRun[];
+ attention: Array<{id:string;title:string;detail:string;sessionId?:string;source:'run'|'delegation'|'notification';sourceId:string;appId?:'browser';link?:string|null;at:number}>;
+ limited:boolean;
+}
+export interface ChatRunStarted extends Partial<ChatRunSnapshot> { runId: string; sessionId: string; status: ChatRunStatus; serverPersisted: true }
+export interface ChatAgentResult {
+  content: string;
+  loadedToolNames?: string[];
+  runId?: string;
+  status?: ChatRunStatus;
+  artifacts?: ChatRunArtifact[];
+  serverPersisted?: boolean;
+}
 
 /** MCP 服务器配置（与后端、Cursor mcp.json 兼容） */
 export interface McpServerConfig {
@@ -149,7 +199,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
       logApiError({ path: url, method, status: res.status, message, detail });
       throw new ApiError(String(message), res.status, typeof code === 'string' ? code : undefined, err);
     }
-    return res.json();
+    const json = await res.json();
+    // 自动解包 { success, data } 包装格式
+    if (json && typeof json === 'object' && 'success' in json && 'data' in json) {
+      return json.data as T;
+    }
+    return json as T;
   } catch (e) {
     if (e instanceof Error && e.message.startsWith('HTTP')) {
       throw e; // already logged above
@@ -161,88 +216,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 }
 
-// ── Tasks ──────────────────────────────────────────────────
-
 export const api = {
-  // Tasks
-  createTask: (data: {
-    domain: string;
-    title: string;
-    description: string;
-    mode?: string;
-    llmConfig?: { providerId: string; modelId: string; baseUrl?: string; apiKey?: string };
-    useLlmPlan?: boolean;
-    chatContext?: Array<{ role: string; content: string }>;
-  }) => request('/tasks', { method: 'POST', body: JSON.stringify(data) }),
-
-  getTasks: () => request<any[]>('/tasks'),
-
-  getTaskHistory: (limit = 30) =>
-    request<{
-      success: boolean;
-      data: {
-        tasks: Array<{
-          id: string;
-          title: string;
-          status: string;
-          updated_at: number;
-          started_at: number | null;
-          completed_at: number | null;
-          duration_ms: number | null;
-          actual_cost: number;
-        }>;
-        stats: {
-          total: number;
-          completed: number;
-          failed: number;
-          success_rate: number;
-          avg_duration_ms: number | null;
-          total_cost: number;
-        };
-        tool_stats: Array<{
-          toolName: string;
-          totalCalls: number;
-          avgDurationMs: number;
-        }>;
-      };
-    }>(`/tasks/history?limit=${limit}`),
-
-  getTask: (id: string) => request<any>(`/tasks/${id}`),
-
-  pauseTask: (id: string) =>
-    request(`/tasks/${id}/pause`, { method: 'POST' }),
-
-  resumeTask: (id: string) =>
-    request(`/tasks/${id}/resume`, { method: 'POST' }),
-
-  approveStep: (taskId: string, stepId: string) =>
-    request(`/tasks/${taskId}/steps/${stepId}/approve`, { method: 'POST' }),
-
-  rejectStep: (taskId: string, stepId: string) =>
-    request(`/tasks/${taskId}/steps/${stepId}/reject`, { method: 'POST' }),
-
-  /** 失败任务重试：mode 'restart' 从头，'from_failure' 从失败步骤起 */
-  retryTask: (id: string, mode: 'restart' | 'from_failure' = 'restart') =>
-    request<{ success: boolean; mode: string }>(`/tasks/${id}/retry`, {
-      method: 'POST',
-      body: JSON.stringify({ mode }),
-    }),
-
-  /** LLM 分析任务意图，评估复杂度 */
-  estimateTask: (intent: string, steps: string[], providerId: string, modelId: string, baseUrl?: string, apiKey?: string) =>
-    request<{
-      difficulty: string;
-      estimatedSteps: number;
-      estimatedMinutes: number;
-      requiredSkills: string[];
-      potentialChallenges: string[];
-      riskLevel: string;
-      summary: string;
-    }>('/tasks/estimate', {
-      method: 'POST',
-      body: JSON.stringify({ intent, steps, providerId, modelId, baseUrl, apiKey }),
-    }),
-
   // Mode
   getMode: () => request<{ mode: string }>('/mode'),
 
@@ -260,6 +234,7 @@ export const api = {
   getXSchedulerStatus: () =>
     request<{
       running: boolean;
+      backgroundAutostart?:boolean;
       jobCount: number;
       nextRunAt: number | null;
       nextRunAtISO: string | null;
@@ -276,7 +251,7 @@ export const api = {
     }>(limit != null ? `/x/done-log?limit=${limit}` : '/x/done-log'),
 
   /** 获取认证配置（是否允许注册等，无需登录） */
-  authGetSettings: () => request<{ allowRegister: boolean }>('/auth/settings'),
+  authGetSettings: () => request<{ allowRegister: boolean;passwordResetAvailable?:boolean }>('/auth/settings'),
 
   /** 获取验证码（登录/注册前调用） */
   authGetCaptcha: () =>
@@ -298,7 +273,7 @@ export const api = {
 
   /** 请求密码重置验证码 */
   authRequestPasswordReset: (email: string) =>
-    request<{ success: boolean; message?: string; code?: string }>('/auth/request-password-reset', {
+    request<{ success: boolean; message?: string }>('/auth/request-password-reset', {
       method: 'POST',
       body: JSON.stringify({ email }),
     }),
@@ -737,6 +712,13 @@ export const api = {
 
   // ── 定时任务 ────────────────────────────────────────────────────
 
+  scheduledRunsList: (focusId?: string) => request<{ runs: Array<{
+    id: string; name: string; status: string; scheduled_at: number;
+    replyStatus?: 'not_sent' | 'sending' | 'sent' | 'unknown';
+    execution_session_id: string | null; run_id: string | null; error: string | null;
+  }> }>(focusId ? `/x/scheduled-runs?focus=${encodeURIComponent(focusId)}` : '/x/scheduled-runs'),
+  scheduledRunStop: (id: string) => request<{ success: boolean }>(`/x/scheduled-runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+
   /** 列出当前用户所有定时任务 */
   scheduledJobsList: () =>
     request<Array<{
@@ -942,16 +924,46 @@ export const api = {
   postXGreet: () => request<{ content: string }>('/x/greet', { method: 'POST' }),
 
   /** 用户手动触发 X 立即执行一次（与定时任务同流程）。可选 intent；后端根据 providerId/modelId 解析凭证 */
-  postXRunNow: (intent?: string, llm?: { providerId: string; modelId: string }) =>
-    request<{ content: string; error?: string }>('/x/run-now', {
+  postXRunNow: (intent?: string, llm?: { providerId: string; modelId: string }, requestId = crypto.randomUUID()) =>
+    request<{ content: string; runId?: string; sessionId?: string; error?: string }>('/x/run-now', {
       method: 'POST',
       body: JSON.stringify({
+        requestId,
         ...(intent != null && intent !== '' ? { intent } : {}),
         ...(llm?.providerId && llm?.modelId
           ? { providerId: llm.providerId, modelId: llm.modelId }
           : {}),
       }),
       headers: { 'Content-Type': 'application/json' },
+    }),
+
+  getLivingAIStatus: () =>
+    request<LivingAIStatus>('/x/life/status'),
+
+  patchLivingAIConfig: (patch: Partial<LivingAIConfig>) =>
+    request<LivingAIStatus>('/x/life/config', {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  postLivingAIWake: () =>
+    request<LivingAIStatus>('/x/life/wake', {
+      method: 'POST',
+    }),
+
+  postLivingAIGoal: (goal: { title: string; description?: string; priority?: number }) =>
+    request<LivingAIStatus>('/x/life/goals', {
+      method: 'POST',
+      body: JSON.stringify(goal),
+    }),
+
+  patchLivingAIGoal: (
+    goalId: string,
+    patch: Partial<Pick<LivingAIGoal, 'title' | 'description' | 'priority' | 'status' | 'progress'>>,
+  ) =>
+    request<LivingAIStatus>(`/x/life/goals/${encodeURIComponent(goalId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
     }),
 
   setMode: (mode: string) =>
@@ -965,8 +977,6 @@ export const api = {
 
   // Audit
   getAudit: (limit = 100) => request<any[]>(`/audit?limit=${limit}`),
-
-  getTaskAudit: (taskId: string) => request<any[]>(`/audit/task/${taskId}`),
 
   // Server Logs
   getServerLogs: (limit = 200) =>
@@ -995,11 +1005,15 @@ export const api = {
       body: JSON.stringify({ path, contentBase64 }),
     }),
 
-  /** 读取办公文档（docx/xlsx）为可编辑内容 */
-  readOfficeFile: (path: string) =>
-    request<{ type: 'docx' | 'xlsx' | 'pptx'; path: string; text?: string; sheets?: { name: string; rows: string[][] }[]; unsupported?: boolean; message?: string }>(
-      `/fs/read-office?path=${encodeURIComponent(path)}`,
+  /** 读取办公文档；PPTX 仅返回按实际页序排列的文字。 */
+  readOfficeFile: (path: string, signal?: AbortSignal, options?: { ocr?: boolean; expectedSha256?: string }) =>
+    request<{ type: 'docx' | 'xlsx' | 'pptx' | 'pdf'; path: string; sha256?: string; text?: string; sheets?: { name: string; rows: string[][]; range?: string }[]; slides?: { title?: string; content?: string }[]; pages?: { page: number; text: string; ocr?: boolean }[]; warnings?: string[] }>(
+      `/fs/read-office?path=${encodeURIComponent(path)}${options?.ocr ? '&ocr=true&expected_sha256=' + encodeURIComponent(options.expectedSha256 ?? '') : ''}`,
+      { signal },
     ),
+
+  editOfficeCopy: (path: string, expectedSha256: string, content: { find: string; replace: string; expected_occurrences: number; slide?: number } | { cells: { sheet: string; cell: string; value: string }[] }) =>
+    request<{ ok: boolean; path: string; changes: number; warnings: string[] }>('/fs/edit-office', { method: 'POST', body: JSON.stringify({ path, expectedSha256, content }) }),
 
   /** 保存办公文档；content: docx 为 { text, title? }，xlsx 为 { sheets: [{ name, rows }] } */
   writeOfficeFile: (path: string, type: 'docx' | 'xlsx', content: { text?: string; title?: string; sheets?: { name: string; rows: string[][] }[] }) =>
@@ -1084,18 +1098,6 @@ export const api = {
   getWelcomeMessage: () =>
     request<{ content: string }>('/prompts/welcome'),
 
-  /** 任务完成后 AI 助手回复：根据任务结果生成「任务完成了，根据结果xxxx，我xxxx」风格摘要 */
-  taskCompletionReply: (params: {
-    sessionId?: string;
-    taskId: string;
-    userMessage?: string;
-    task: { title?: string; description?: string; status?: string; result?: { success?: boolean; output?: unknown; error?: string }; steps?: Array<{ action?: string; output?: unknown; error?: string }> };
-  }) =>
-    request<{ content: string }>('/chat/task-completion-reply', {
-      method: 'POST',
-      body: JSON.stringify(params),
-    }),
-
   /** 记忆状态（对齐 OpenClaw status）：索引条数、memory 文件数、最近嵌入错误等 */
   memoryStatus: () =>
     request<{
@@ -1168,7 +1170,7 @@ export const api = {
 
   /** MCP 配置：获取当前配置（用于界面展示） */
   mcpGetConfig: () =>
-    request<{ servers: McpServerConfig[]; configPath: string; fromEnv: boolean }>('/mcp/config'),
+    request<{ servers: McpServerConfig[]; configPath: string; fromEnv: boolean; inherited?: boolean }>('/mcp/config'),
 
   /** MCP 配置：保存并重载。支持 { servers } 或 { mcpServers } 格式 */
   mcpSaveConfig: (payload: { servers?: McpServerConfig[]; mcpServers?: Record<string, Record<string, unknown>> }) =>
@@ -1277,10 +1279,11 @@ export const api = {
     hasOpenAiDocument: boolean;
     providerId: string;
     modelId: string;
-  }) =>
+  },options?:{signal?:AbortSignal}) =>
     request<{ intent: 'generate_image' | 'generate_and_save_to_editor' | 'save_to_editor' | 'edit_current_document' | 'normal_chat' | 'create_task'; suggestedPath?: string }>('/chat/classify-writing-intent', {
       method: 'POST',
       body: JSON.stringify(body),
+      signal:options?.signal,
     }),
 
   /** 图片生成：凭证由服务器端统一解析 */
@@ -1333,6 +1336,8 @@ export const api = {
 
   /** 聊天 Agent 循环：带工具执行。凭证由服务器端统一解析 */
   chatAgent: (body: {
+    sessionId?:string;
+    requestId?:string;
     messages: Array<{ role: string; content: string }>;
     providerId: string;
     modelId: string;
@@ -1344,12 +1349,25 @@ export const api = {
     attachedFilePaths?: string[];
     loadedToolNames?: string[];
   }) =>
-    request<{ content: string; loadedToolNames?: string[] }>('/chat/agent', {
+    request<{ content: string; loadedToolNames?: string[];runId?:string;sessionId?:string;requestId?:string;status?:ChatRunSnapshot['status'];serverPersisted?:boolean;canResume?:boolean }>('/chat/agent', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
 
   /** 聊天 Agent 流式：SSE 推送工具调用进度及内容片段。凭证由服务器端统一解析。返回 { content, loadedToolNames? }。 */
+  getAssistantWorkbench: () => request<AssistantWorkbenchData>('/chat/runs/workbench'),
+  getAttention: () => request<{items:Array<{id:string;title:string;detail:string;sessionId?:string;source:'run'|'delegation'|'notification';sourceId:string;at:number}>}>('/chat/runs/attention'),
+  reviewChatRun: (id:string,data:{decision:'accepted'|'changes_requested';feedback?:string;delegationId?:string;expectedUpdatedAt:number}) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/review`,{method:'POST',body:JSON.stringify(data)}),
+  answerChatQuestion: (id: string, data: { questionId: string; answer: string; expectedUpdatedAt: number }) =>
+    request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/answer`, { method: 'POST', body: JSON.stringify(data) }),
+  decideChannelSend: (id:string,data:{approvalId:string;hash:string;decision:'approve'|'reject';expectedUpdatedAt:number}) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/send-decision`,{method:'POST',body:JSON.stringify(data)}),
+  decideShellCommand: (id:string,data:{approvalId:string;hash:string;decision:'approve'|'reject';expectedUpdatedAt:number}) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/shell-decision`,{method:'POST',body:JSON.stringify(data)}),
+  reviseChatRun: (id:string) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/revise`,{method:'POST'}),
+  listChatRuns: (sessionId: string) => request<{ runs: ChatRunSnapshot[] }>(`/chat/runs?sessionId=${encodeURIComponent(sessionId)}`),
+  getChatRun: (id: string) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}`),
+  stopChatRun: (id: string) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/stop`, { method: 'POST' }),
+  stopChatRunRequest: (sessionId: string, requestId: string) => request<{ status: 'paused' | 'stopping' }>('/chat/runs/stop-request', { method: 'POST', body: JSON.stringify({ sessionId, requestId }) }),
+  resumeChatRun: (id: string) => request<ChatRunSnapshot>(`/chat/runs/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
   chatAgentStream: async (
     body: {
       messages: Array<{ role: string; content: string }>;
@@ -1363,13 +1381,17 @@ export const api = {
       referenceImagePaths?: string[];
       attachedFilePaths?: string[];
       loadedToolNames?: string[];
+      sessionId?: string;
+      requestId?: string;
+      userMessage?: { content: string; images?: string[]; attachedFiles?: Array<{ name: string; path: string }> };
     },
     onToolEvent: (event: { type: string; id?: string; toolName?: string; input?: object; output?: unknown; error?: string; duration?: number }) => void,
-    opts?: AbortSignal | { signal?: AbortSignal; onContentChunk?: (chunk: string) => void },
-  ): Promise<{ content: string; loadedToolNames?: string[] }> => {
+    opts?: AbortSignal | { signal?: AbortSignal; onContentChunk?: (chunk: string) => void; onRunStarted?: (run: ChatRunStarted) => void },
+  ): Promise<ChatAgentResult> => {
     const optsObj = opts && typeof opts === 'object' && !('aborted' in opts) ? opts : { signal: opts as AbortSignal | undefined };
     const signal = optsObj.signal;
     let loadedToolNames: string[] | undefined;
+    let result: ChatAgentResult | undefined;
     const res = await fetch(`${BASE}/chat/agent/stream`, {
       method: 'POST',
       headers: getDefaultHeaders(),
@@ -1401,7 +1423,9 @@ export const api = {
               const data = line.slice(6);
               try {
                 const obj = JSON.parse(data);
-                if (eventType === 'tool_start') {
+                if (eventType === 'run_started') {
+                  optsObj.onRunStarted?.(obj);
+                } else if (eventType === 'tool_start') {
                   onToolEvent({ type: 'tool_start', id: obj.id, toolName: obj.toolName, input: obj.input });
                 } else if (eventType === 'tool_complete') {
                   onToolEvent({
@@ -1417,6 +1441,7 @@ export const api = {
                 } else if (eventType === 'done') {
                   content = obj.content ?? '';
                   if (Array.isArray(obj.loadedToolNames)) loadedToolNames = obj.loadedToolNames;
+                  result = { ...obj, content, loadedToolNames };
                 } else if (eventType === 'error') {
                   throw new Error(obj.error || '未知错误');
                 }
@@ -1431,7 +1456,8 @@ export const api = {
     } finally {
       reader.releaseLock();
     }
-    return loadedToolNames?.length ? { content, loadedToolNames } : { content };
+    if (!result && body.sessionId) throw new Error('连接已断开，任务可能仍在后台执行，请查看任务状态。');
+    return result ?? (loadedToolNames?.length ? { content, loadedToolNames } : { content });
   },
 
   /** 流式聊天：支持 scene 注入主脑提示；凭证由服务器端统一解析。onChunk 每收到一段内容调用一次。可选 signal 用于中止请求。 */
@@ -1512,8 +1538,8 @@ export const api = {
   // ── 用户与配置 API ──────────────────────────────────────
 
   /** 获取当前用户信息 */
-  getMe: () =>
-    request<{ id: string; displayName: string | null; email: string | null; createdAt: string; updatedAt: string }>('/users/me'),
+  getMe: (options?: {signal?:AbortSignal}) =>
+    request<{ id: string; displayName: string | null; email: string | null; createdAt: string; updatedAt: string }>('/users/me',options),
 
   /** 获取用户资料 */
   getUserProfile: () =>
@@ -1615,6 +1641,11 @@ export const api = {
 
   /** 更新单个配置 */
   /** X 制作的小程序列表（按用户隔离） */
+  createAppPreview: (appId:string) => request<{url:string;expiresAt:number}>('/apps/preview',{method:'POST',body:JSON.stringify({appId})}),
+  getAppVersions: (appId:string) => request<{versions:Array<{id:string;name:string;createdAt:number}>}>(`/apps/${encodeURIComponent(appId)}/versions`),
+  restoreAppVersion: (appId:string,versionId:string) => request<{app:{id:string;name:string;path:string}}>(`/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(versionId)}/restore`,{method:'POST'}),
+  createContentPreview: (content:string,mode:'html'|'react') => request<{url:string;expiresAt:number}>('/apps/preview',{method:'POST',body:JSON.stringify({content,mode})}),
+
   getMiniApps: () =>
     request<{ apps: Array<{ id: string; name: string; path: string }> }>('/apps'),
 
@@ -1658,29 +1689,36 @@ export const api = {
     if (params?.groupId) q.set('groupId', params.groupId);
     if (params?.limit != null) q.set('limit', String(params.limit));
     const query = q.toString();
-    return request<{ runs: Array<{ id: string; groupId: string; groupName: string; goal: string; results: Array<{ agentId: string; agentName: string; content: string }>; cancelled?: boolean; createdAt: number }> }>(
+    return request<{ runs: Array<{ id: string;runId?:string;sessionId?:string;status?:ChatRunSnapshot['status'];canResume?:boolean; groupId: string; groupName: string; goal: string; results: Array<{ agentId: string; agentName: string; content: string }>; cancelled?: boolean; createdAt: number }> }>(
       `/x/group-run-history${query ? `?${query}` : ''}`,
     );
   },
 
   setUserConfigKey: (key: string, value: unknown) =>
-    request<{ success: boolean }>(`/users/me/config/${key}`, {
+    request<{ success: boolean; value?: unknown }>(`/users/me/config/${key}`, {
       method: 'PUT',
       body: JSON.stringify({ value }),
     }),
 
   /** 从提供商 baseUrl 导入模型列表（服务端代理，避免 CORS） */
-  importLLMModels: (baseUrl: string, apiKey?: string) =>
+  importLLMModels: (baseUrl: string, apiKey?: string, providerId?: string) =>
     request<{ models: Array<{ id: string; name?: string }> }>('/llm/import-models', {
       method: 'POST',
-      body: JSON.stringify({ baseUrl, apiKey: apiKey ?? '' }),
+      body: JSON.stringify({ baseUrl, apiKey: apiKey ?? '', providerId }),
+    }),
+
+  // ── 搜索 API ─────────────────────────────────────────
+  testSearchProvider: (provider: string, apiKey: string) =>
+    request<{ ok: boolean; error?: string }>('/search/test', {
+      method: 'POST',
+      body: JSON.stringify({ provider, apiKey }),
     }),
 
   // ── 聊天会话 API（云端持久化）──────────────────────────
 
   /** 获取会话列表；scene 可选：x_direct（仅 X 主脑）、normal_chat（仅 AI 助手） */
   listChatSessions: (limit = 50, scene?: string) =>
-    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; isPinned?: boolean; isArchived?: boolean }>>(
+    request<Array<{ id: string; title: string | null; createdAt: string; updatedAt: string; tags: string[]; isPinned?: boolean; isArchived?: boolean; summary?: string | null; parentSessionId?: string | null; preview?: string | null }>>(
       scene ? `/chat/sessions?limit=${limit}&scene=${encodeURIComponent(scene)}` : `/chat/sessions?limit=${limit}`,
     ),
 
@@ -1726,7 +1764,20 @@ export const api = {
 
   /** 获取会话上下文统计（消息数、估算token数、占用百分比） */
   getSessionContextStats: (sessionId: string) =>
-    request<{ messageCount: number; estimatedTokens: number; estimatedChars: number; modelContextLimit: number; usagePercent: number }>(
+    request<{
+      messageCount: number;
+      estimatedTokens: number;
+      estimatedChars: number;
+      modelContextLimit: number;
+      usagePercent: number;
+      treemapData: Array<{ name: string; value: number; chars: number; children: unknown[] }>;
+      breakdown: {
+        system: { tokens: number; chars: number };
+        user: { tokens: number; chars: number };
+        assistant: { tokens: number; chars: number };
+        toolCalls: { tokens: number; chars: number };
+      };
+    }>(
       `/chat/sessions/${sessionId}/context-stats`,
     ),
 
@@ -1961,26 +2012,6 @@ export const api = {
     request<{ success: boolean }>(`/chat/sessions/${sessionId}/messages/${messageId}`, {
       method: 'DELETE',
     }),
-
-  // ── X Board (任务看板) ──────────────────────────────────
-
-  getBoardItems: () =>
-    request<{ ok: boolean; items: Array<{ id: string; title: string; description: string | null; status: string; priority: string; sort_order: number; created_at: string; updated_at: string }> }>('/x/board'),
-
-  createBoardItem: (data: { title: string; description?: string; status?: string; priority?: string }) =>
-    request<{ ok: boolean; item: { id: string; title: string; description: string | null; status: string; priority: string; sort_order: number; created_at: string; updated_at: string } }>('/x/board', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-
-  updateBoardItem: (id: string, data: { title?: string; description?: string; status?: string; priority?: string; sort_order?: number }) =>
-    request<{ ok: boolean; item: { id: string; title: string; description: string | null; status: string; priority: string; sort_order: number; created_at: string; updated_at: string } }>(`/x/board/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-
-  deleteBoardItem: (id: string) =>
-    request<{ ok: boolean }>(`/x/board/${id}`, { method: 'DELETE' }),
 
   // ── 服务器管理 ──────────────────────────────────
   
@@ -2225,21 +2256,22 @@ export const api = {
 
   // ── Notifications ───────────────────────────────────────────────
 
-  getNotifications: (options?: { limit?: number; includeRead?: boolean }) => {
+  getNotifications: async (options?: { limit?: number; includeRead?: boolean }) => {
     const params = new URLSearchParams();
     if (options?.limit) params.set('limit', String(options.limit));
     if (options?.includeRead) params.set('includeRead', 'true');
     const qs = params.toString();
-    return request<{
-      data: Array<{
+    const result=await request<Array<{
         id: string; userId: string; type: string; title: string; body: string | null;
         link: string | null; read: boolean; createdAt: number; expiresAt: number | null;
-      }>;
-    }>(`/notifications${qs ? '?' + qs : ''}`);
+      }>>(`/notifications${qs ? '?' + qs : ''}`);
+    if(!Array.isArray(result))throw new Error('通知数据格式暂不可用');return result;
   },
 
-  getUnreadNotificationCount: () =>
-    request<{ data: { count: number } }>('/notifications/unread-count'),
+  getUnreadNotificationCount: async () => {
+    const result=await request<{count:number}>('/notifications/unread-count');
+    if(!result||!Number.isSafeInteger(result.count)||result.count<0)throw new Error('通知计数格式暂不可用');return result;
+  },
 
   markNotificationRead: (id: string) =>
     request<{ success: boolean }>(`/notifications/${encodeURIComponent(id)}/read`, { method: 'PATCH' }),
@@ -2299,8 +2331,10 @@ export const api = {
 
   // ── Do Not Disturb ────────────────────────────────────────────────
 
-  getDndPreferences: () =>
-    request<{ data: { enabled: boolean; quietHoursStart: string | null; quietHoursEnd: string | null } }>('/notifications/dnd'),
+  getDndPreferences: async () => {
+    const result=await request<{enabled:boolean;quietHoursStart:string|null;quietHoursEnd:string|null}>('/notifications/dnd');
+    if(!result||typeof result.enabled!=='boolean'||![result.quietHoursStart,result.quietHoursEnd].every(value=>value===null||typeof value==='string'))throw new Error('免打扰设置格式暂不可用');return result;
+  },
 
   setDndPreferences: (prefs: { enabled?: boolean; quietHoursStart?: string | null; quietHoursEnd?: string | null }) =>
     request<{ success: boolean }>('/notifications/dnd', { method: 'PUT', body: JSON.stringify(prefs) }),
@@ -2471,4 +2505,44 @@ export const api = {
 
   changelogDelete: (id: string) =>
     request<void>(`/changelog/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // Task-related API methods
+  createTask: (body: {
+    domain: string;
+    title: string;
+    description: string;
+    mode: string;
+    llmConfig?: unknown;
+    chatContext?: unknown;
+  }) => request<{ id: string; steps?: unknown[]; status: string }>('/tasks', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
+
+  taskCompletionReply: (body: {
+    taskId: string;
+    sessionId?: string;
+    userMessage?: string;
+    task: {
+      title: string;
+      description: string;
+      status: string;
+      result?: string;
+      steps?: unknown[];
+    };
+  }) => request<{ content?: string }>('/tasks/completion-reply', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  }),
+  /** 已发现的 Skill 列表（来自 /api/skills），供命令面板展示"技能"分组 */
+  listSkills: () =>
+    request<
+      Array<{
+        id: string;
+        name: string;
+        description: string;
+        dirName: string;
+        requiresApiKey?: boolean;
+      }>
+    >('/skills'),
 };

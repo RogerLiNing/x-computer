@@ -1,3 +1,11 @@
+import {backgroundAutostartEnabled} from '../config/backgroundRuntime.js';
+import { askUser, askUserDefinition, UserInputRequiredError } from '../tooling/userQuestion.js';
+import { setTimeout as delay } from 'node:timers/promises';
+import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
+import { SendApprovalRequiredError, SendExecutionDeniedError } from '../tooling/sendApproval.js';
+import { ShellApprovalRequiredError } from '../tooling/shellApproval.js';
+import { AppVersionStore } from '../apps/AppVersionStore.js';
+import type {ExpertDispatchRunner} from './tools/agent.js';
 import { v4 as uuid } from 'uuid';
 import { spawn } from 'child_process';
 import path from 'path';
@@ -22,12 +30,12 @@ import { callDashScopeReferenceToVideo, callDashScopeText2Video, callDashScopeIm
 import type { AppDatabase } from '../db/database.js';
 import { loadDefaultConfig } from '../config/defaultConfig.js';
 import { listAllCapabilities } from '../capabilities/CapabilityRegistry.js';
-import { getToolVectorStore } from '../capabilities/ToolVectorStore.js';
+import { contentHash, getToolVectorStore } from '../capabilities/ToolVectorStore.js';
 import { callEmbeddingBatch } from '../memory/embeddingService.js';
 import { fetchModelsFromProvider as fetchModelsFromProviderServer } from '../llm/fetchModels.js';
 import { loadTriggers, saveTriggers, fireSignal, type SignalTrigger } from '../signals/signalService.js';
 import * as workflowClient from '../workflow/workflowClient.js';
-import { sendEmail, parseSmtpConfigExport, clearEmailTransporterCache, fetchEmails, parseImapConfig } from '../email/emailService.js';
+import { sendEmail, parseSmtpConfigExport, fetchEmails, parseImapConfig } from '../email/emailService.js';
 import { sendWhatsAppMessage, parseWhatsAppConfig } from '../whatsapp/whatsappService.js';
 import { sendTelegramMessage, parseTelegramConfig } from '../telegram/telegramService.js';
 import { sendDiscordMessage, parseDiscordConfig } from '../discord/discordService.js';
@@ -39,8 +47,13 @@ import type { McpServerConfig } from '../mcp/types.js';
 import type { ToolExecutorDeps } from './tools/types.js';
 import { decodeHtmlEntities } from './tools/utils.js';
 import { fileDefinitions, createFileHandlers } from './tools/file/index.js';
+import { officeDefinitions, createOfficeHandlers } from './tools/office.js';
+import { reminderDefinition,createReminderHandler } from './tools/reminder.js';
 import { grepDefinition, createGrepHandler } from './tools/grep.js';
 import { webSearchDefinition, createWebSearchHandler } from './tools/webSearch.js';
+import { httpRequestDefinition, createHttpRequestHandler } from './tools/httpRequest.js';
+import { htmlParserDefinition, createHtmlParserHandler } from './tools/htmlParser.js';
+import { jsonParserDefinition, createJsonParserHandler } from './tools/jsonParser.js';
 import { shellRunDefinition, createShellRunHandler } from './tools/shell/run.js';
 import {
   dockerRunDefinition,
@@ -97,10 +110,6 @@ import {
   createPageIndexHandlers,
 } from './tools/pageindex.js';
 import {
-  boardListDef,
-  boardAddDef,
-  boardUpdateDef,
-  boardRemoveDef,
   sendEmailDef,
   sendWhatsAppDef,
   sendTelegramDef,
@@ -134,6 +143,10 @@ import {
   createAgentDef,
   listAgentsDef,
   runAgentDef,
+  dispatchAgentDef,
+  getAgentRunDef,
+  dispatchTeamDef,
+  dispatchGroupDef,
   updateAgentDef,
   removeAgentDef,
   createTeamDef,
@@ -306,6 +319,18 @@ export type GroupRunProgressPayload = {
 };
 
 export interface ExecutionContext {
+  scheduledToolNames?: string[];
+  scheduledBlockedToolNames?: string[];
+  approvedShellHash?:string;
+  approvedSendHash?: string;
+  assertSendActive?: () => Promise<void>;
+  signal?: AbortSignal;
+  allowedToolNames?: string[];
+  blockedToolNames?: string[];
+  delegationDepth?: number;
+  runId?:string;
+  toolCallId?:string;
+  agentRunId?:string;
   llmConfig?: TaskLLMConfig;
   /** 用于按用户隔离沙箱（Agent 循环 / 任务执行时传入） */
   userId?: string;
@@ -348,6 +373,10 @@ export type RunCustomAgentLoop = (params: {
   agentDef: AgentDefinition;
   goal: string;
   userId: string;
+  signal?: AbortSignal;
+  allowedToolNames?: string[];
+  blockedToolNames?: string[];
+  delegationDepth?: number;
 }) => Promise<{ content: string }>;
 
 const X_MINI_APPS_CONFIG_KEY = 'x_mini_apps';
@@ -447,19 +476,20 @@ async function loadMiniApps(getConfig: (userId: string, key: string) => string |
   }
 }
 
-function saveMiniApps(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: MiniAppDefinition[]): void {
-  setConfig(userId, X_MINI_APPS_CONFIG_KEY, JSON.stringify(list));
+async function saveMiniApps(setConfig: (userId: string, key: string, value: string) => void | Promise<void>, userId: string, list: MiniAppDefinition[]): Promise<void> {
+  await setConfig(userId, X_MINI_APPS_CONFIG_KEY, JSON.stringify(list));
 }
 
 
 export class ToolExecutor {
+  private expertDispatchRunner?:ExpertDispatchRunner;
+  setExpertDispatchRunner(runner:ExpertDispatchRunner){this.expertDispatchRunner=runner;}
   private tools = new Map<string, ToolHandler>();
   private definitions = new Map<string, ToolDefinition>();
   /** scope -> (name -> { definition, handler }) */
   private scopedTools = new Map<string, Map<string, { definition: ToolDefinition; handler: ToolHandler }>>();
 
   private signalFireHandler?: (userId: string, signal: string, payload?: object) => Promise<{ fired: number; skipped: number } | void>;
-  private createTaskHandler?: (request: CreateTaskRequest, userId: string) => Promise<Task>;
   private getMemoryServiceForUser?: (userId: string) => Promise<MemoryService | null>;
   private getVectorConfigForUser?: (
     userId: string
@@ -480,11 +510,6 @@ export class ToolExecutor {
   /** 由 createApiRouter 注入，用于 signal.emit 时触发用户配置的触发器 */
   setSignalFireHandler(handler: (userId: string, signal: string, payload?: object) => Promise<{ fired: number; skipped: number } | void>): void {
     this.signalFireHandler = handler;
-  }
-
-  /** 由 AgentOrchestrator 注入，用于 task.create 工具创建系统任务进任务时间线 */
-  setCreateTaskHandler(handler: (request: CreateTaskRequest, userId: string) => Promise<Task>): void {
-    this.createTaskHandler = handler;
   }
 
   /** 由 createApiRouter 注入，供 memory_search、memory_embed_add、memory_delete 使用 */
@@ -557,7 +582,7 @@ export class ToolExecutor {
     const agentId = context?.agentId;
     if (uid && uid !== 'anonymous' && this.userSandboxManager) {
       if (agentId) {
-        const agentSandbox = await this.userSandboxManager.getForAgent(uid, agentId);
+        const agentSandbox = await this.userSandboxManager.getForAgent(uid, agentId,context?.agentRunId);
         return agentSandbox.sandboxFS;
       }
       const sandbox = await this.userSandboxManager.getForUser(uid);
@@ -569,6 +594,7 @@ export class ToolExecutor {
   // ── Public API ───────────────────────────────────────────
 
   async execute(step: TaskStep, runtimeType: RuntimeType, context?: ExecutionContext): Promise<ToolCall> {
+    context?.signal?.throwIfAborted();
     const call: ToolCall = {
       id: uuid(),
       toolName: step.toolName,
@@ -577,20 +603,20 @@ export class ToolExecutor {
       runtimeType,
     };
 
-    let handler = this.tools.get(step.toolName);
-    if (!handler && context?.userId) {
+    let handler: ToolHandler | undefined;
+    if (context?.userId) {
       const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + context.userId);
       handler = scopeMap?.get(step.toolName)?.handler;
     }
+    handler ??= this.tools.get(step.toolName);
     if (!handler) {
       call.error = `Tool not found: ${step.toolName}`;
       call.completedAt = Date.now();
       return call;
     }
 
-    // 打印实际调用的接口和参数，便于排查与审计
-    const paramsJson = JSON.stringify(step.toolInput ?? {}, null, 2);
-    serverLogger.info('tool', `调用工具: ${step.toolName}`, `参数:\n${paramsJson}`);
+    // Detailed arguments belong to the authenticated run record, not shared process logs.
+    serverLogger.info('tool', `调用工具: ${step.toolName}`);
 
     const validation = validateToolInput(step.toolName, step.toolInput as Record<string, unknown> | undefined);
     if (validation.invalid) {
@@ -601,6 +627,7 @@ export class ToolExecutor {
     }
 
     try {
+      context?.signal?.throwIfAborted();
       const out = await handler(step.toolInput, context);
       call.output = out;
       call.completedAt = Date.now();
@@ -610,6 +637,7 @@ export class ToolExecutor {
         serverLogger.warn('tool', `工具返回错误: ${step.toolName}`, call.error);
       }
     } catch (err: any) {
+      if (err?.name === 'AbortError' || err instanceof UncertainToolOutcomeError || err instanceof ShellApprovalRequiredError || err instanceof SendApprovalRequiredError || err instanceof SendExecutionDeniedError || err instanceof UserInputRequiredError) throw err;
       call.error = err.message || String(err);
       call.completedAt = Date.now();
     }
@@ -618,24 +646,23 @@ export class ToolExecutor {
   }
 
   getToolDefinition(name: string, userId?: string): ToolDefinition | undefined {
-    const d = this.definitions.get(name);
-    if (d) return d;
     if (userId) {
       const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + userId);
-      return scopeMap?.get(name)?.definition;
+      const own=scopeMap?.get(name)?.definition;
+      if(own)return own;
     }
-    return undefined;
+    return this.definitions.get(name);
   }
 
   listTools(userId?: string): ToolDefinition[] {
-    const list = Array.from(this.definitions.values());
+    const definitions = new Map(this.definitions);
     if (userId) {
       const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + userId);
       if (scopeMap) {
-        for (const { definition } of scopeMap.values()) list.push(definition);
+        for (const { definition } of scopeMap.values()) definitions.set(definition.name,definition);
       }
     }
-    return list;
+    return [...definitions.values()];
   }
 
   /** 动态注册工具（供 MCP 等扩展使用）。scope 存在时按用户隔离（如 'mcp:'+userId） */
@@ -669,13 +696,7 @@ export class ToolExecutor {
 
   /** 供 Agent 循环使用：将已注册工具转为 LLM function calling 格式；userId 存在时包含该用户 scope 内工具 */
   getLLMToolDefs(userId?: string): LLMToolDef[] {
-    const defs = Array.from(this.definitions.values());
-    if (userId) {
-      const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + userId);
-      if (scopeMap) {
-        for (const { definition } of scopeMap.values()) defs.push(definition);
-      }
-    }
+    const defs = this.listTools(userId);
     const skills = getDiscoveredSkills(userId);
     return defs.map((def) => {
       let description = def.description;
@@ -715,10 +736,6 @@ export class ToolExecutor {
       resolveDB: () => this.db ?? null,
       resolveFS: this.resolveFS.bind(this),
     });
-    this.register(boardListDef as any, boardHandlers.boardListHandler);
-    this.register(boardAddDef as any, boardHandlers.boardAddHandler);
-    this.register(boardUpdateDef as any, boardHandlers.boardUpdateHandler);
-    this.register(boardRemoveDef as any, boardHandlers.boardRemoveHandler);
     this.register(sendEmailDef as any, boardHandlers.sendEmailHandler);
     this.register(sendWhatsAppDef as any, boardHandlers.sendWhatsAppHandler);
     this.register(sendTelegramDef as any, boardHandlers.sendTelegramHandler);
@@ -750,10 +767,15 @@ export class ToolExecutor {
     // Agent 管理（智能体 CRUD / 团队 / 群组）
     const agentHandlers = createAgentHandlers({
       resolveRunCustomAgentLoop: () => this.runCustomAgentLoop,
+      resolveExpertDispatchRunner:()=>this.expertDispatchRunner,
     });
     this.register(createAgentDef as any, agentHandlers.createAgentHandler);
     this.register(listAgentsDef as any, agentHandlers.listAgentsHandler);
     this.register(runAgentDef as any, agentHandlers.runAgentHandler);
+    this.register(dispatchAgentDef,agentHandlers.dispatchAgentHandler);
+    this.register(getAgentRunDef,agentHandlers.getAgentRunHandler);
+    this.register(dispatchTeamDef,agentHandlers.dispatchTeamHandler);
+    this.register(dispatchGroupDef,agentHandlers.dispatchGroupHandler);
     this.register(updateAgentDef as any, agentHandlers.updateAgentHandler);
     this.register(removeAgentDef as any, agentHandlers.removeAgentHandler);
     this.register(createTeamDef as any, agentHandlers.createTeamHandler);
@@ -798,7 +820,7 @@ export class ToolExecutor {
         if (vecConfig) {
           try {
             const store = getToolVectorStore();
-            await store.syncFull(all, async (texts: string[]) => {
+            const syncIndex = async () => store.syncFull(all, async (texts: string[]) => {
               const batchSize = 10;
               const results: number[][] = [];
               for (let i = 0; i < texts.length; i += batchSize) {
@@ -808,13 +830,24 @@ export class ToolExecutor {
               }
               return results;
             });
-            const queryVector = await callEmbedding(q, vecConfig);
-            const matches = await store.search(queryVector, 40);
-            return {
-              matches: matches.map((m) => ({ name: m.name, description: (m.description ?? '').slice(0, 120) })),
-              total: matches.length,
-              hint: '[skill] 条目用 skill.load(name) 加载；其余用 capability.load(names) 加载工具',
-            };
+            const storedHash = await store.getStoredContentHash();
+            if (storedHash === contentHash(all)) {
+              const queryVector = await callEmbedding(q, vecConfig);
+              const matches = await store.search(queryVector, 40);
+              return {
+                matches: matches.map((m) => ({ name: m.name, description: (m.description ?? '').slice(0, 120) })),
+                total: matches.length,
+                hint: '[skill] 条目用 skill.load(name) 加载；其余用 capability.load(names) 加载工具',
+              };
+            }
+            void syncIndex().catch((e) => {
+              serverLogger.warn(
+                'tool',
+                '工具向量索引后台同步失败',
+                e instanceof Error ? e.message : String(e),
+              );
+            });
+            serverLogger.info('tool', '工具向量索引需更新，本次立即使用关键词匹配');
           } catch (e) {
             serverLogger.warn(
               'tool',
@@ -898,9 +931,12 @@ export class ToolExecutor {
               modelId: llmConfig.modelId,
               baseUrl: llmConfig.baseUrl,
               apiKey: llmConfig.apiKey,
+              apiType: llmConfig.apiType,
+              signal: ctx?.signal,
             },
             [FILE_WRITE_TOOL],
           );
+          ctx?.signal?.throwIfAborted();
           const writtenFiles: string[] = [];
           // 优先使用模型主回复 text 作为写入内容，避免误存用户问题；仅当 text 为空时用 tool 的 content 兜底
           const primaryContent = (text ?? '').trim();
@@ -1041,6 +1077,7 @@ export class ToolExecutor {
             modelId: llmConfig.modelId,
             baseUrl: llmConfig.baseUrl,
             apiKey: llmConfig.apiKey,
+            signal: ctx?.signal,
             ...(referenceImageUrls ? { referenceImageUrls } : {}),
           });
           const images = result?.images ?? [];
@@ -1160,6 +1197,7 @@ export class ToolExecutor {
             modelId: llmConfig.modelId,
             baseUrl: llmConfig.baseUrl,
             apiKey: llmConfig.apiKey,
+            signal: ctx?.signal,
             referenceImageUrls: dataUrls,
           });
           const images = result?.images ?? [];
@@ -1480,8 +1518,18 @@ export class ToolExecutor {
       const handler = createFileHandlers(deps).get(def.name);
       if (handler) this.register(def, handler);
     }
+    this.register(reminderDefinition,createReminderHandler(this.db));
+    this.register(askUserDefinition, askUser);
+    const officeHandlers = createOfficeHandlers(deps);
+    for (const def of officeDefinitions) {
+      const handler = officeHandlers.get(def.name);
+      if (handler) this.register(def, handler);
+    }
     this.register(grepDefinition, createGrepHandler(deps));
     this.register(webSearchDefinition, createWebSearchHandler(deps));
+    this.register(httpRequestDefinition, createHttpRequestHandler(deps));
+    this.register(htmlParserDefinition, createHtmlParserHandler(deps));
+    this.register(jsonParserDefinition, createJsonParserHandler(deps));
     this.register(shellRunDefinition, createShellRunHandler(deps));
 
     // Docker 容器管理工具 - 已禁用（安全风险：R060）
@@ -1522,9 +1570,9 @@ export class ToolExecutor {
         ],
         requiredPermissions: [],
       },
-      async (input) => {
+      async (input, ctx) => {
         const sec = Math.min(300, Math.max(1, Math.floor(Number(input.seconds) || 1)));
-        await new Promise((r) => setTimeout(r, sec * 1000));
+        await delay(sec * 1000, undefined, { signal: ctx?.signal });
         return { slept: sec, message: `已等待 ${sec} 秒` };
       },
     );
@@ -1556,38 +1604,40 @@ export class ToolExecutor {
         if (!absPath.startsWith(root)) throw new Error('python.run: 脚本路径必须在沙箱内');
         const args: string[] = Array.isArray(input.args) ? input.args.map((a) => String(a)) : [];
         const timeoutMs = Math.min(120000, Math.max(5000, Number(input.timeout) || 30000));
+        ctx?.signal?.throwIfAborted();
         return new Promise((resolve, reject) => {
           const proc = spawn('python3', [absPath, ...args], {
-            cwd: root,
-            stdio: ['ignore', 'pipe', 'pipe'],
+            cwd: root, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, HOME: root, USER: 'x-computer', PYTHONUNBUFFERED: '1' },
           });
           let stdout = '';
           let stderr = '';
-          proc.stdout?.on('data', (chunk) => (stdout += chunk.toString()));
-          proc.stderr?.on('data', (chunk) => (stderr += chunk.toString()));
-          const timer = setTimeout(() => {
-            proc.kill('SIGTERM');
-            resolve({
-              exitCode: -1,
-              timedOut: true,
-              stdout: stdout.slice(0, 50000),
-              stderr: (stderr + '\n[Python 执行超时]').slice(0, 10000),
-            });
-          }, timeoutMs);
-          proc.once('exit', (code, signal) => {
+          let timedOut = false;
+          let killTimer: ReturnType<typeof setTimeout> | undefined;
+          const kill = (kind: NodeJS.Signals) => {
+            try {
+              if (process.platform !== 'win32' && proc.pid) process.kill(-proc.pid, kind);
+              else proc.kill(kind);
+            } catch { /* The command may already have exited. */ }
+          };
+          const terminate = () => { kill('SIGTERM'); killTimer ??= setTimeout(() => kill('SIGKILL'), 500); };
+          const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+          ctx?.signal?.addEventListener('abort', terminate, { once: true });
+          if (ctx?.signal?.aborted) terminate();
+          proc.stdout.on('data', (chunk) => { stdout = (stdout + chunk.toString()).slice(0, 50000); });
+          proc.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(0, 10000); });
+          const cleanup = () => {
             clearTimeout(timer);
-            resolve({
-              exitCode: code ?? undefined,
-              signal: signal ?? undefined,
-              stdout: stdout.slice(0, 50000),
-              stderr: stderr.slice(0, 10000),
-            });
+            if (killTimer) clearTimeout(killTimer);
+            ctx?.signal?.removeEventListener('abort', terminate);
+          };
+          proc.once('close', (code, signal) => {
+            cleanup();
+            if (ctx?.signal?.aborted) { reject(new DOMException('Python 已停止', 'AbortError')); return; }
+            resolve({ exitCode: timedOut ? -1 : code ?? undefined, signal: signal ?? undefined,
+              ...(timedOut ? { timedOut: true } : {}), stdout, stderr: timedOut ? `${stderr}\n[Python 执行超时]` : stderr });
           });
-          proc.once('error', (err) => {
-            clearTimeout(timer);
-            reject(new Error(`python.run: ${err.message}`));
-          });
+          proc.once('error', (error) => { cleanup(); reject(new Error(`python.run: ${error.message}`)); });
         });
       },
     );
@@ -1792,7 +1842,8 @@ export class ToolExecutor {
         const p = config.providers.find((x) => x.id === providerId);
         if (!p) return { ok: false, error: '未找到该提供商', models: [] };
         try {
-          const models = await fetchModelsFromProviderServer(p.baseUrl ?? '', p.apiKey);
+          const preset=loadDefaultConfig().llm_config?.providers.find(provider=>provider.id===p.id);
+          const models = await fetchModelsFromProviderServer(p.baseUrl ?? '', p.apiKey, !!preset&&preset.baseUrl===p.baseUrl&&preset.apiKey===p.apiKey);
           const imported = await loadImportedModels(getConfig, userId);
           imported[providerId] = models;
           saveImportedModels(setConfig, userId, imported);
@@ -2304,9 +2355,12 @@ git clone https://${hostname}/${skillName}.git
             modelId: llmConfig.modelId,
             baseUrl: llmConfig.baseUrl,
             apiKey: llmConfig.apiKey,
+            apiType: llmConfig.apiType,
+            signal: ctx?.signal,
           });
           return { result: (content ?? '').trim(), task, configured: true };
         } catch (err: unknown) {
+          if (err instanceof Error && err.name === 'AbortError') throw err;
           const msg = err instanceof Error ? err.message : String(err);
           return { result: `分析失败: ${msg}`, task, configured: true, isError: true };
         }
@@ -2343,27 +2397,14 @@ git clone https://${hostname}/${skillName}.git
         const inMinutes = input.in_minutes != null ? Math.max(1, Math.floor(Number(input.in_minutes))) : undefined;
         const inHours = input.in_hours != null ? Math.max(1, Math.floor(Number(input.in_hours))) : undefined;
         if (!at && !cron && !inMinutes && !inHours) throw new Error('x.schedule_run: 至少填 at、cron、in_minutes 或 in_hours 之一');
-        const job = scheduler.addJob(userId, intent, at as string | number | undefined, cron || undefined, inMinutes, inHours);
-        // 同步到任务看板，并记录 source_id 以便任务完成后将该项更新为 done
-        if (this.db) {
-          const runAtDesc = job.runAt
-            ? `执行时间：${new Date(job.runAt).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`
-            : cron
-              ? `cron: ${cron}`
-              : '定时执行';
-          await Promise.resolve(
-            this.db.insertBoardItem({
-              id: uuid(),
-              user_id: userId,
-              title: intent.slice(0, 300),
-              description: runAtDesc,
-              status: 'pending',
-              priority: 'medium',
-              source_id: job.id,
-            }),
-          ).catch(() => {});
-        }
-        return { ok: true, jobId: job.id, runAt: job.runAt, message: '已加入定时执行，到点将自动运行；已同步到任务看板' };
+        if (!ctx.scheduledToolNames?.includes('x.schedule_run')) throw new Error('无法验证定时任务的工具权限');
+        const scopeJson = JSON.stringify({
+          allowedToolNames: ctx.scheduledToolNames,
+          blockedToolNames: ctx.scheduledBlockedToolNames ?? ctx.blockedToolNames ?? [],
+          workspace: { agentId: ctx.agentId, agentRunId: ctx.agentRunId, delegationDepth: ctx.delegationDepth },
+        });
+        const job = await scheduler.addJob(userId, intent, at, cron || undefined, inMinutes, inHours, undefined, undefined, scopeJson);
+        return { ok: true, jobId: job.id, runAt: job.runAt, backgroundPaused:!backgroundAutostartEnabled(),message:backgroundAutostartEnabled()?'已加入定时执行，到点将自动运行':'计划已保存，但后台自动启动已暂停，恢复后台运行后才会处理' };
       },
     );
 
@@ -2419,7 +2460,7 @@ git clone https://${hostname}/${skillName}.git
         const list = scheduler.listJobs(userId);
         const job = list.find((j) => j.id === jobId);
         if (!job) return { ok: false, error: '未找到该定时任务或无权删除' };
-        const removed = scheduler.removeJob(jobId);
+        const removed = await scheduler.removeJob(jobId);
         return removed ? { ok: true, message: '已删除该定时任务' } : { ok: false, error: '删除失败' };
       },
     );
@@ -2638,46 +2679,7 @@ git clone https://${hostname}/${skillName}.git
       },
     );
 
-    // R016：X 创建系统任务，进任务时间线，用户可见、可审批或自动执行
-    this.register(
-      {
-        name: 'task.create',
-        displayName: '创建系统任务',
-        description:
-          '创建一条系统任务进任务时间线，用户可见、可审批或自动执行。用于：需要用户审批的步骤（如发送邮件前确认）、派活到时间线让用户追踪、与沙箱 x-tasks.md 协同。domain: chat/coding/agent/office。mode: auto=自动执行，approval=需用户审批。',
-        domain: ['chat', 'agent'],
-        riskLevel: 'medium',
-        parameters: [
-          { name: 'domain', type: 'string', description: '任务域：chat/coding/agent/office', required: true },
-          { name: 'title', type: 'string', description: '任务标题', required: true },
-          { name: 'description', type: 'string', description: '任务描述（详细说明要完成的事项）', required: true },
-          { name: 'mode', type: 'string', description: '执行模式：auto（自动）或 approval（需审批），默认 approval', required: false },
-        ],
-        requiredPermissions: [],
-      },
-      async (input, ctx) => {
-        const userId = ctx?.userId;
-        if (!userId || userId === 'anonymous') throw new Error('task.create: 需要已登录用户');
-        const create = this.createTaskHandler;
-        if (!create) throw new Error('task.create: 服务未配置任务创建能力');
-        const domain = String(input.domain ?? '').trim();
-        const title = String(input.title ?? '').trim();
-        const description = String(input.description ?? '').trim();
-        if (!domain || !title || !description) throw new Error('task.create: domain、title、description 必填');
-        const validDomains = ['chat', 'coding', 'agent', 'office'];
-        if (!validDomains.includes(domain)) throw new Error(`task.create: domain 必须是 ${validDomains.join('|')} 之一`);
-        const modeStr = String(input.mode ?? 'approval').toLowerCase();
-        const mode = modeStr === 'auto' ? 'auto' : 'approval';
-        const request: CreateTaskRequest = {
-          domain: domain as CreateTaskRequest['domain'],
-          title,
-          description,
-          mode,
-        };
-        const task = await create(request, userId);
-        return { ok: true, taskId: task.id, title: task.title, status: task.status, message: '任务已创建，用户可在任务时间线查看与审批' };
-      },
-    );
+    // task.create removed - approval system deprecated
 
     // ── X 制作有界面的小程序（存于沙箱 apps/<id>/，可固定到桌面打开） ─────────────────
     this.register(
@@ -2705,14 +2707,23 @@ git clone https://${hostname}/${skillName}.git
         const setConfig = ctx?.setConfig;
         if (!getConfig || !setConfig) return { ok: false, error: '无法读写配置' };
         const appId = String(input.app_id ?? '').trim().replace(/\s+/g, '-');
-        if (!/^[a-zA-Z0-9_-]+$/.test(appId)) return { ok: false, error: 'app_id 仅允许英文、数字、短横线、下划线' };
+        if (!/^[a-zA-Z0-9_-]{1,64}$/.test(appId)) return { ok: false, error: 'app_id 仅允许 1 至 64 个英文、数字、短横线、下划线' };
         const name = String(input.name ?? '').trim();
-        if (!name) return { ok: false, error: 'name 必填' };
+        if (!name || name.length > 255) return { ok: false, error: 'name 必填且不能超过 255 个字符' };
         const bodyOrHtml = decodeHtmlEntities(String(input.html_content ?? '').trim());
         const planContent = String(input.plan_content ?? '').trim();
         const appPath = `apps/${appId}`;
-        const fs = await this.resolveFS(ctx);
+        if(ctx?.agentId&&!bodyOrHtml)return {ok:false,error:'专家制作桌面应用请使用 html_content 快速模式，应用将交付到用户桌面。'};
+        const fs = await this.resolveFS(ctx?.agentId?{...ctx,agentId:undefined}:ctx);
         if (!fs) return { ok: false, error: '沙箱不可用' };
+        const list = await loadMiniApps(getConfig, userId);
+        let folders: Array<{name:string}> = [];
+        try { folders=await fs.list('apps'); } catch(error) { if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error; }
+        if(list.some(app=>app.id!==appId&&app.id.toLowerCase()===appId.toLowerCase())||folders.some(folder=>folder.name!==appId&&folder.name.toLowerCase()===appId.toLowerCase())) return {ok:false,error:'应用编号大小写冲突，请另起一个名称'};
+
+        const versions=this.db?new AppVersionStore(this.db):undefined;
+        // Save the old published source before quick creation overwrites it.
+        if(versions&&await fs.exists(`${appPath}/index.html`))await versions.capture(userId,appId,list.find(app=>app.id===appId)?.name??name,fs);
 
         if (bodyOrHtml) {
           const css = input.css_content != null ? decodeHtmlEntities(String(input.css_content).trim()) : '';
@@ -2742,15 +2753,16 @@ git clone https://${hostname}/${skillName}.git
             /* 非致命 */
           }
         }
-        const list = await loadMiniApps(getConfig, userId);
+        const versionId=await versions?.capture(userId,appId,name,fs);
         if (list.some((a) => a.id === appId)) {
           const idx = list.findIndex((a) => a.id === appId);
           list[idx] = { id: appId, name, path: appPath };
         } else {
           list.push({ id: appId, name, path: appPath });
         }
-        saveMiniApps(setConfig, userId, list);
-        return { ok: true, appId, message: bodyOrHtml ? `已创建应用「${name}」` : `已注册应用「${name}」（请确保 apps/${appId}/index.html 等已存在）` };
+        if(versions)await versions.register(userId,{id:appId,name,path:appPath});
+        else await saveMiniApps(setConfig, userId, list);
+        return { ok: true, appId, versionId, message: bodyOrHtml ? `已创建应用「${name}」` : `已注册应用「${name}」` };
       },
     );
 
@@ -2996,8 +3008,9 @@ git clone https://${hostname}/${skillName}.git
         domain: ['chat', 'agent', 'office'],
         riskLevel: 'low',
         parameters: [
-          { name: 'path', type: 'string', description: '沙箱内文件路径（与 content 二选一）', required: false },
+          { name: 'path', type: 'string', description: '沙箱内文件路径（与 text/content 三选一）', required: false },
           { name: 'content', type: 'string', description: '直接嵌入的文本（与 path 二选一）', required: false },
+          { name: 'text', type: 'string', description: 'content 的别名，直接嵌入的文本', required: false },
           { name: 'chunkSize', type: 'number', description: '分块大小（字符数），默认 600', required: false },
         ],
         requiredPermissions: [],
@@ -3014,7 +3027,9 @@ git clone https://${hostname}/${skillName}.git
         let text = '';
         let filePath = '';
         const pathParam = typeof input.path === 'string' ? input.path.trim() : '';
-        const contentParam = typeof input.content === 'string' ? input.content.trim() : '';
+        // text 是 content 的别名，AI 常用 text 作为参数名
+        const contentParam = (typeof input.content === 'string' ? input.content.trim() : '')
+          || (typeof input.text === 'string' ? input.text.trim() : '');
         if (pathParam && !pathParam.includes('..')) {
           const fs = await this.resolveFS(ctx);
           if (!fs) return { ok: false, error: '无法解析沙箱', indexed: 0 };
@@ -3028,7 +3043,7 @@ git clone https://${hostname}/${skillName}.git
           text = contentParam;
           filePath = `inline-${Date.now()}.txt`;
         } else {
-          return { ok: false, error: '请提供 path 或 content 之一', indexed: 0 };
+          return { ok: false, error: '请提供 path、content 或 text 之一', indexed: 0 };
         }
         const chunkSize = typeof input.chunkSize === 'number' ? Math.min(2000, Math.max(200, input.chunkSize)) : 600;
         const overlap = Math.min(80, Math.floor(chunkSize / 4));

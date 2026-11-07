@@ -3,6 +3,12 @@ import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
 import type { AppDatabase } from '../db/database.js';
 import type { MiniAppLogStore } from '../miniAppLogStore.js';
+import { PreviewService } from '../apps/PreviewService.js';
+import { injectAppBootstrap } from '../apps/appBootstrap.js';
+import { renderReact } from '../apps/renderReact.js';
+import { appRuntime } from '../apps/appRuntime.js';
+import { previewCapsule } from '../../../shared/src/previewCapsule.js';
+import { AppVersionStore } from '../apps/AppVersionStore.js';
 
 export function createAppsRouter(
   orchestrator: AgentOrchestrator,
@@ -11,6 +17,70 @@ export function createAppsRouter(
   miniAppLogStore?: MiniAppLogStore,
 ): Router {
   const router = Router();
+  const previews=db&&userSandboxManager?new PreviewService(db,userSandboxManager):undefined;
+  const versions=db&&userSandboxManager?new AppVersionStore(db):undefined;
+  router.get('/apps/:appId/versions',async(req,res)=>{
+    if(!versions)return res.status(503).json({error:'版本服务不可用'});
+    try{res.json({versions:await versions.list(req.userId,req.params.appId)});}
+    catch{res.status(400).json({error:'无法读取应用版本'});}
+  });
+  router.post('/apps/:appId/versions/:versionId/restore',async(req,res)=>{
+    if(!versions||!db||!userSandboxManager)return res.status(503).json({error:'版本服务不可用'});
+    try{
+      const {sandboxFS}=await userSandboxManager.getForUser(req.userId);
+      const restored=await versions.restore(req.userId,req.params.appId,req.params.versionId,sandboxFS);
+      await versions.register(req.userId,restored);
+      res.json({app:restored});
+    }catch{res.status(400).json({error:'恢复未完成；当前应用和存档未被覆盖，请重试'});}
+  });
+  const legacyPolicy="sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; base-uri 'none'; form-action 'none'";
+  router.post('/apps/preview',async(req,res)=>{
+    if(!previews)return res.status(503).json({error:'预览服务不可用'});
+    try{
+      const session=await req.app.locals.sessions.authenticate(req.headers.cookie);
+      if(!session||session.userId!==req.userId)return res.status(401).json({error:'需要登录'});
+      const origin=req.headers.origin??`${req.protocol}://${req.get('host')}`;
+      const {appId,content,mode}=req.body??{};
+      if(appId!==undefined&&(typeof appId!=='string'||content!==undefined))return res.status(400).json({error:'应用预览参数无效'});
+      if(content!==undefined&&(typeof content!=='string'||Buffer.byteLength(content)>512*1024||!['html','react'].includes(mode)))return res.status(400).json({error:'内容预览参数无效'});
+      const html=content===undefined?undefined:mode==='react'?await renderReact(content):(content.match(/^```(?:html)?\s*\n([\s\S]*?)```\s*$/)?.[1]??content);
+      res.json(await previews.mint(req.userId,session,origin,{appId,html}));
+    }catch{res.status(400).json({error:'预览尚未创建，请检查应用或内容'});}
+  });
+  router.post('/apps/preview/:owner/:token/__runtime',async(req,res)=>{
+    if(!previews||!db)return res.status(503).json({error:'预览服务不可用'});
+    try{
+      const preview=await previews.resolve(req.params.owner,req.params.token);
+      if(!preview.app_id)return res.status(403).json({error:'内容预览不能访问应用数据'});
+      res.json(await appRuntime(db,previews,miniAppLogStore,preview.user_id,preview.app_id,String(req.body?.op??''),req.body?.args,preview.token_hash));
+    }catch{res.status(403).json({error:'应用请求未完成或超出授权范围'});}
+  });
+  router.get(/^\/apps\/preview\/([\w-]+)\/([\w-]+)\/(.+)$/,async(req,res)=>{
+    if(!previews)return res.status(503).end();
+    try{
+      const match=req.path.match(/^\/apps\/preview\/([\w-]+)\/([\w-]+)\/(.+)$/)!;
+      const [,owner,token,encoded]=match;const asset=decodeURIComponent(encoded);
+      const preview=await previews.resolve(owner,token);
+      const prefix=`${preview.origin}/api/apps/preview/${owner}/${token}/`;
+      if(req.headers['sec-fetch-dest']==='document'&&asset!=='__viewer')return res.redirect(prefix+'__viewer');
+      res.set({'Cache-Control':'private, no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Access-Control-Allow-Origin':'*',
+        'Content-Security-Policy':`sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' ${prefix}; style-src 'unsafe-inline' ${prefix}; img-src data: blob: ${prefix}; font-src data: ${prefix}; media-src data: blob: ${prefix}; connect-src ${prefix}; frame-src 'none'; base-uri 'none'; form-action 'none'`});
+      if(asset==='__viewer'){
+        res.set('Content-Security-Policy',`sandbox allow-scripts; default-src 'none'; frame-src ${prefix}; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`);
+        return res.type('text/html').send(previewCapsule(prefix+'index.html',preview.origin));
+      }
+      if(asset==='__runtime')return res.status(405).end();
+      const ext=asset.split('.').pop()?.toLowerCase();
+      const mime:Record<string,string>={html:'text/html; charset=utf-8',htm:'text/html; charset=utf-8',js:'application/javascript',css:'text/css',json:'application/json',svg:'image/svg+xml',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',gif:'image/gif',woff2:'font/woff2',mp3:'audio/mpeg',wav:'audio/wav'};
+      res.type(mime[ext??'']??'application/octet-stream');
+      const body=preview.app_id?await previews.readAppAsset(owner,preview.app_id,asset):asset==='index.html'?Buffer.from(preview.html??''):null;
+      if(body===null)return res.status(404).end();
+      if(ext==='html'||ext==='htm')res.send(injectAppBootstrap(body.toString('utf8'),preview.app_id,preview.app_id?await previews.storage(owner,preview.app_id):{},preview.token_hash,preview.app_id?await versions?.sourceAppId(owner,preview.app_id):undefined));
+      else res.send(body);
+    }catch{res.status(403).json({error:'预览已失效或资源不可访问'});}
+  });
+
+  router.use('/apps/sandbox',(req,res,next)=>{res.set({'Content-Security-Policy':legacyPolicy,'X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer'});next();});
 
   /** 生成注入到小程序 HTML 的脚本：上报 window.onerror 与 console.error 到后端，供 x.get_app_logs 查看 */
   function buildMiniAppLoggerScript(appId: string, userId: string): string {
@@ -25,7 +95,7 @@ export function createAppsRouter(
     );
   }
 
-  /** X 制作的小程序列表（按用户隔离）。仅返回沙箱内仍存在应用目录的项，删除目录后桌面图标会同步消失；并写回清理后的 x_mini_apps。 */
+  /** 只返回仍可打开的应用；读取列表不删除登记，避免覆盖并发交付的新应用。 */
   router.get('/apps', async (req, res) => {
     try {
       const userId = (req as { userId?: string }).userId;
@@ -60,9 +130,6 @@ export function createAppsRouter(
             const code = (err as NodeJS.ErrnoException)?.code ?? '';
             if (code !== 'ENOENT' && !err?.message?.includes('not found')) throw err;
           }
-        }
-        if (existing.length !== apps.length) {
-          await db.setConfig(userId, 'x_mini_apps', JSON.stringify(existing));
         }
         return res.json({ apps: existing });
       } catch (err: any) {
@@ -135,6 +202,7 @@ export function createAppsRouter(
     const dupMatch = pathParam.match(/^apps\/([^/]+)\/apps\/\1\/(.*)$/);
     if (dupMatch) pathParam = `apps/${dupMatch[1]}/${dupMatch[2]}`;
 
+    if (userIdFromPath !== req.userId) {res.status(403).json({error:'无权访问此工作区'});return;}
     if (!userIdFromPath || userIdFromPath === 'anonymous') {
       res.status(401).json({ error: '需要登录' });
       return;

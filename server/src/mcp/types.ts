@@ -24,6 +24,15 @@ export interface McpServerConfig {
   env?: Record<string, string>;
 }
 
+/** Supplied by the server, never read from an extension's JSON configuration. */
+export interface McpExecutionContext {
+  owner: string;
+  containerId?: string;
+  trustedServer?: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 /** 是否为 HTTP 传输（有 url） */
 export function isMcpHttpTransport(c: McpServerConfig): boolean {
   return typeof c.url === 'string' && c.url.length > 0;

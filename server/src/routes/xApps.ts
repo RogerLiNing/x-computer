@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { AppDatabase } from '../db/database.js';
 import type { Response } from 'express';
+import { APP_STORAGE_PREFIX } from '../apps/PreviewService.js';
 
 export function createXAppsRouter(db: AppDatabase | undefined): Router {
   const router = Router();
@@ -20,6 +21,7 @@ export function createXAppsRouter(db: AppDatabase | undefined): Router {
 
   router.get('/x-apps/backend/kv/:appId', async (req, res) => {
     let uid = (req as { userId?: string }).userId;
+    const publicReader=uid==='anonymous';
     if (uid === 'anonymous') {
       const token = typeof req.headers['x-app-read-token'] === 'string' ? req.headers['x-app-read-token'].trim() : '';
       if (token && db) {
@@ -32,11 +34,13 @@ export function createXAppsRouter(db: AppDatabase | undefined): Router {
     if (userId === null) return;
     const appId = (req.params.appId ?? '').trim();
     const key = (req.query.key as string)?.trim();
+    if(publicReader&&appId.startsWith('@'))return res.status(403).json({error:'共享授权不包含内部存档'});
     if (!appId) {
       res.status(400).json({ error: 'appId 必填' });
       return;
     }
     if (key !== undefined && key !== '') {
+      if(publicReader&&key.startsWith(APP_STORAGE_PREFIX))return res.status(403).json({error:'共享授权不包含浏览器存档'});
       const value = await db!.appBackendKvGet(userId, appId, key);
       if (value === undefined) {
         res.status(404).json({ error: 'key 不存在' });
@@ -48,7 +52,7 @@ export function createXAppsRouter(db: AppDatabase | undefined): Router {
     }
     const prefix = (req.query.prefix as string)?.trim() || undefined;
     const keys = await db!.appBackendKvList(userId, appId, prefix);
-    res.json({ keys });
+    res.json({ keys:publicReader?keys.filter(key=>!key.startsWith(APP_STORAGE_PREFIX)):keys });
   });
 
   router.put('/x-apps/backend/kv/:appId', async (req, res) => {
@@ -89,6 +93,7 @@ export function createXAppsRouter(db: AppDatabase | undefined): Router {
       res.status(400).json({ error: 'appId 必填' });
       return;
     }
+    if(appId.startsWith('@'))return res.status(403).json({error:'内部存档不能公开分享'});
     const token = await db!.createAppPublicReadToken(userId, appId);
     res.json({ token });
   });

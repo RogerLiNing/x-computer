@@ -53,11 +53,21 @@ export class UserSandboxManager {
 
   /** 获取用户的工作区根目录路径（不创建） */
   getUserWorkspaceRoot(userId: string): string {
+    if(!/^[\w-]{1,128}$/.test(userId))throw new Error('Invalid workspace owner');
     return path.join(this.basePath, 'users', userId, 'workspace');
   }
 
+  async getMcpContainerId(userId: string, serverKey: string): Promise<string> {
+    const workspace = this.getUserWorkspaceRoot(userId);
+    if (!this.useContainer || !this.containerManager) throw new Error('本地扩展需要启用容器隔离');
+    await fs.mkdir(workspace, { recursive: true });
+    return this.containerManager.getOrCreateMcpContainer(userId, serverKey);
+  }
+
   /** 获取指定 agent 的独立工作目录路径（不创建） */
-  getAgentWorkspaceRoot(userId: string, agentId: string): string {
+  getAgentWorkspaceRoot(userId: string, agentId: string, runId?:string): string {
+    if(!/^[\w-]{1,128}$/.test(agentId))throw new Error('Invalid agent ID');
+    if(runId!==undefined){if(!/^[\w-]{1,64}$/.test(runId))throw new Error('Invalid agent run ID');return path.join(this.getUserWorkspaceRoot(userId),'agents',agentId,'runs',runId);}
     return path.join(this.getUserWorkspaceRoot(userId), 'agents', agentId);
   }
 
@@ -66,12 +76,12 @@ export class UserSandboxManager {
   /**
    * 获取（或创建）某 agent 的隔离沙箱。每个 agent 有独立目录，file.write/shell.run 等操作限于该目录。
    */
-  async getForAgent(userId: string, agentId: string): Promise<AgentSandbox> {
-    const key = `${userId}:${agentId}`;
+  async getForAgent(userId: string, agentId: string, runId?:string): Promise<AgentSandbox> {
+    const key = `${userId}:${agentId}:${runId??''}`;
     const existing = this.agentCache.get(key);
     if (existing) return existing;
 
-    const agentRoot = this.getAgentWorkspaceRoot(userId, agentId);
+    const agentRoot = this.getAgentWorkspaceRoot(userId, agentId,runId);
     await fs.mkdir(agentRoot, { recursive: true });
 
     const sandboxFS = new SandboxFS(agentRoot, {
@@ -80,6 +90,7 @@ export class UserSandboxManager {
     });
     const sandboxShell = new SandboxShell(agentRoot, 30_000, {
       userId,
+      containerWorkspaceRoot:this.getUserWorkspaceRoot(userId),
       containerManager: this.containerManager,
       useContainer: this.useContainer,
     });

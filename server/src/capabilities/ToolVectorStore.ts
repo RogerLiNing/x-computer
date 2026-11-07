@@ -50,6 +50,7 @@ export function contentHash(capabilities: Array<{ name: string; description: str
 export class ToolVectorStore {
   private indexPath: string;
   private cached: PersistedIndex | null = null;
+  private syncing: Promise<void> | null = null;
 
   constructor(indexDir?: string) {
     const dir = indexDir ?? path.join(process.cwd(), DEFAULT_INDEX_DIR);
@@ -95,6 +96,19 @@ export class ToolVectorStore {
    * 若 contentHash 与当前一致则跳过；否则用 embedFn 为每条生成向量并写入。
    */
   async syncFull(
+    capabilities: Array<{ name: string; description: string }>,
+    embedFn: (texts: string[]) => Promise<number[][]>,
+  ): Promise<void> {
+    if (this.syncing) return this.syncing;
+    this.syncing = this.performSyncFull(capabilities, embedFn);
+    try {
+      await this.syncing;
+    } finally {
+      this.syncing = null;
+    }
+  }
+
+  private async performSyncFull(
     capabilities: Array<{ name: string; description: string }>,
     embedFn: (texts: string[]) => Promise<number[][]>,
   ): Promise<void> {

@@ -4,6 +4,9 @@
  */
 
 import { broadcastToUser } from '../wsBroadcast.js';
+import type { AppDatabase } from '../db/database.js';
+
+export const LIVING_NOTICE_PREFIX='living-notice-';
 
 export type ProactiveMessageType = 'info' | 'need_api_key' | 'question' | 'skill_ready';
 
@@ -58,6 +61,18 @@ export function markRead(userId: string | undefined, messageId: string): void {
   const list = byUser.get(userId);
   const m = list?.find((x) => x.id === messageId);
   if (m) m.read = true;
+}
+
+/** Autonomous receipts share the existing durable notification and read state. */
+export async function getMessagesWithHistory(db:AppDatabase|undefined,userId:string|undefined):Promise<ProactiveMessage[]>{
+  const memory=getMessages(userId);if(!db||!userId||userId==='anonymous')return memory;
+  const rows=await db.query<{id:string;body:string;created_at:number;read:number}>('SELECT id,body,created_at,`read` FROM notifications WHERE user_id=? AND id LIKE ? AND (expires_at IS NULL OR expires_at>?) ORDER BY created_at DESC,id DESC LIMIT 100',[userId,`${LIVING_NOTICE_PREFIX}%`,Date.now()]);
+  const durable=rows.map(row=>({id:row.id,userId,content:row.body,type:'info' as const,createdAt:Number(row.created_at),read:!!row.read}));
+  return [...new Map([...memory,...durable].map(message=>[message.id,message])).values()].sort((a,b)=>b.createdAt-a.createdAt).slice(0,MAX_PER_USER);
+}
+export async function markReadWithHistory(db:AppDatabase|undefined,userId:string|undefined,id:string){
+  if(db&&userId&&id.startsWith(LIVING_NOTICE_PREFIX))await db.markNotificationRead(id,userId);
+  markRead(userId,id);
 }
 
 /** 将 fromUserId 的主动消息合并到 toUserId（登录/注册后关联匿名数据时调用） */

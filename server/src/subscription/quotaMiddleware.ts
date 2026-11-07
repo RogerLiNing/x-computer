@@ -42,7 +42,7 @@ export function createQuotaMiddleware(
           
           return res.status(429).json({
             error: 'quota_exceeded',
-            message: 'You have exceeded your quota limit. Please upgrade your plan.',
+            message: resourceType==='ai_calls'?'本期模型调用次数已用完。已有进度会保留，可在额度恢复后继续。':'当前可用额度不足，请稍后重试。',
             resourceType,
             limits,
             usage,
@@ -74,12 +74,12 @@ export function createQuotaMiddleware(
 
 /**
  * AI 调用配额中间件
- * 每次 HTTP 请求计 1 次（不论请求内有多少轮 LLM 调用），任务创建也计 1 次。
+ * HTTP 层只做预检；模型请求发出前统一预留，避免后台漏计和重复计数。
  */
 export function aiCallsQuota(subscriptionService: SubscriptionService) {
   return createQuotaMiddleware(subscriptionService, {
     resourceType: 'ai_calls',
-    amount: 1,
+    amount: 0,
   });
 }
 

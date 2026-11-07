@@ -26,6 +26,30 @@ export {
 };
 export type { SceneId };
 
+/** 判断时间段（东八区） */
+function getTimePeriod(date: Date): string {
+  const hour = parseInt(
+    date.toLocaleTimeString('en-GB', { timeZone: TZ_ASIA_SHANGHAI, hour: '2-digit', hour12: false }),
+    10
+  );
+  if (hour >= 5 && hour < 9)  return '清晨';
+  if (hour >= 9 && hour < 12) return '上午';
+  if (hour >= 12 && hour < 14) return '中午';
+  if (hour >= 14 && hour < 18) return '下午';
+  if (hour >= 18 && hour < 22) return '傍晚/晚间';
+  return '深夜';
+}
+
+/** 判断一周中的位置 */
+function getWeekContext(date: Date): string {
+  const day = date.getDay(); // 0=Sun, 1=Mon, ...
+  const dayNames = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+  const monthStart = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+  const weekNum = Math.ceil((date.getDate() + new Date(date.getFullYear(), date.getMonth(), 1).getDay()) / 7);
+  const isWeekend = day === 0 || day === 6;
+  return `${dayNames[day]}（${isWeekend ? '周末' : '工作日'}，本月第${weekNum}周）`;
+}
+
 /** 主脑应感知的「当前时间与运行环境」，人类自然会知道的内容（东八区） */
 export function getCurrentAwareness(): string {
   const now = new Date();
@@ -34,16 +58,16 @@ export function getCurrentAwareness(): string {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
-    weekday: 'long',
   });
   const timeStr = now.toLocaleTimeString('zh-CN', {
     timeZone: TZ_ASIA_SHANGHAI,
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
     hour12: false,
   });
   const tz = TZ_ASIA_SHANGHAI;
+  const period = getTimePeriod(now);
+  const weekCtx = getWeekContext(now);
   const platformMap: Record<string, string> = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' };
   const platform =
     typeof process !== 'undefined' && process.platform
@@ -51,7 +75,8 @@ export function getCurrentAwareness(): string {
       : '未知';
   const nodeVer = typeof process !== 'undefined' && process.version ? process.version : '';
   const lines = [
-    `- 当前日期与时间：${dateStr} ${timeStr}（时区：${tz}）`,
+    `- 日期时间：${dateStr} ${timeStr}（${period}）`,
+    `- ${weekCtx}（时区：${tz}）`,
     `- 运行环境：${platform}${nodeVer ? `，Node ${nodeVer}` : ''}`,
   ];
   return lines.join('\n');
@@ -62,6 +87,59 @@ export const PLACEHOLDER_CAPABILITIES = '{{CAPABILITIES}}';
 export const PLACEHOLDER_COMPUTER_CONTEXT = '{{COMPUTER_CONTEXT}}';
 export const PLACEHOLDER_TASK_SUMMARY = '{{TASK_SUMMARY}}';
 export const PLACEHOLDER_MEMORY = '{{MEMORY}}';
+
+/**
+ * 从数据库拉取并格式化用户时间线上下文（日历事件 + 定时任务）
+ * 由调用方在组装系统提示词前调用，结果传入 AssembleOptions.timeline
+ *
+ * 支持同步（SQLite）和异步（MySQL）两种数据库实现。
+ */
+export async function buildTimelineContext(
+  db: {
+    listCalendarEvents: (userId: string, opts: { startTime: number; endTime: number }) => unknown[] | Promise<unknown[]>;
+    listScheduledJobsByUser: (userId: string) => { next_run: number | null; name: string; cron: string | null; enabled: number }[] | Promise<{ next_run: number | null; name: string; cron: string | null; enabled: number }[]>;
+  } | null | undefined,
+  userId: string | undefined,
+): Promise<string> {
+  if (!db || !userId) return '';
+  const now = Date.now();
+  const dayEnd = now + 7 * 24 * 60 * 60 * 1000; // 未来7天
+
+  const lines: string[] = [];
+
+  // 日历事件（未来7天）- 兼容 sync/async
+  const eventsRaw = await db.listCalendarEvents(userId, { startTime: now, endTime: dayEnd });
+  const events = eventsRaw as Array<{
+    title?: string; start_time?: number; end_time?: number; all_day?: number;
+  }>;
+  if (events.length > 0) {
+    const fmtEvent = (e: { title?: string; start_time?: number; end_time?: number; all_day?: number }) => {
+      const t = new Date(e.start_time ?? 0);
+      const dateStr = t.toLocaleDateString('zh-CN', { timeZone: TZ_ASIA_SHANGHAI, month: 'numeric', day: 'numeric' });
+      const timeStr = e.all_day ? '全天' : t.toLocaleTimeString('zh-CN', { timeZone: TZ_ASIA_SHANGHAI, hour: '2-digit', minute: '2-digit', hour12: false });
+      return `- ${dateStr} ${timeStr}：${e.title ?? '（无标题）'}`;
+    };
+    lines.push('**即将到来的日历事件**');
+    events.slice(0, 10).forEach(e => lines.push(fmtEvent(e)));
+  }
+
+  // 定时任务（未来7天内）- 兼容 sync/async
+  const jobsRaw = await db.listScheduledJobsByUser(userId);
+  const jobs = jobsRaw.filter((j: { next_run: number | null; enabled: number }) => j.enabled && j.next_run && j.next_run < dayEnd);
+  if (jobs.length > 0) {
+    const fmtJob = (j: { next_run: number | null; name: string; cron: string | null }) => {
+      const t = new Date(j.next_run ?? 0);
+      const dateStr = t.toLocaleDateString('zh-CN', { timeZone: TZ_ASIA_SHANGHAI, month: 'numeric', day: 'numeric' });
+      const timeStr = t.toLocaleTimeString('zh-CN', { timeZone: TZ_ASIA_SHANGHAI, hour: '2-digit', minute: '2-digit', hour12: false });
+      const cronHint = j.cron ? ` [${j.cron}]` : '';
+      return `- ${dateStr} ${timeStr}：${j.name ?? '定时任务'}${cronHint}`;
+    };
+    lines.push('**即将执行的定时任务**');
+    jobs.slice(0, 10).forEach(j => lines.push(fmtJob(j)));
+  }
+
+  return lines.length > 0 ? lines.join('\n') : '';
+}
 
 export interface AssembleOptions {
   scene?: SceneId;
@@ -85,6 +163,8 @@ export interface AssembleOptions {
   evolvedCorePrompt?: string;
   /** AI 助手专用说明（由 X 主脑根据用户与助手对话优化，仅注入到 AI 助手场景） */
   assistantPrompt?: string;
+  /** 时间线上下文：即将到来的日历事件、定时任务等（由调用方从 DB 拉取后传入） */
+  timeline?: string;
 }
 
 /**
@@ -138,7 +218,7 @@ export function formatSkillsSummary(skills: Array<{ name: string; description: s
   if (brief) {
     return [
       '\n# Skills',
-      '可通过 skill.load(name) 加载。用户要搜索/查资料时：先 skill.load 匹配的 Skill，再调用对应 MCP 工具；缺 API Key 用 x.notify_user 告知。',
+      '可通过 skill.load(name) 加载。搜索/查资料请用内置 web_search 工具，无需加载 Skill。',
       '<available_skills>',
       list,
       '</available_skills>',
@@ -160,10 +240,9 @@ export function formatSkillsSummary(skills: Array<{ name: string; description: s
     '**删除 Skill**：用户要求删除某 Skill 时，调用 **skill.uninstall**，传入 name_or_dir（Skill 名称或目录名，如 Summarize、summarize、serpapi-search）。',
     '',
     '**当用户提出搜索、查资料、联网、检索等需求时**：',
-    '1. 若存在匹配的 Skill（如 zhipu-web-search、serpapi-search），先调用 **skill.load** 传入该 name，将说明加载到上下文。',
-    '2. 加载后：在「当前可用能力」中查找对应工具（如 zhipu_web_search、serpapi_web_search）或 MCP 搜索工具，**调用该工具**执行检索。',
-    '3. 若工具返回「未配置 API Key」：用 **x.notify_user** 明确告知用户到 **设置 → Skills** 中为对应 Skill 填写 API Key 并保存，不要静默失败。',
-    '4. 不得在未调用任何搜索/query 类工具的情况下回复「没有可用的网络搜索工具」。只要能力列表中已有此类工具，就必须先调用再回复。',
+    '1. 直接调用 **web_search(query)** 工具（内置，无需加载）。**不要使用 MCP 搜索工具**（如 MiniMax MCP）。',
+    '2. 若 web_search 返回「需要 API Key」，用 **x.notify_user** 告知用户到 **设置 → 搜索** 中选择 Provider 并填写 API Key。',
+    '3. 若无匹配 Provider 或用户未配置，再考虑用 **capability.search** + **capability.load** 加载 Skill。',
     '',
   ].join('\n');
 }
@@ -181,6 +260,7 @@ export function getAssembledSystemPrompt(options: AssembleOptions = {}): string 
     learnedPrompt = '',
     evolvedCorePrompt = '',
     assistantPrompt = '',
+    timeline = '',
   } = options;
 
   const base = (basePrompt && basePrompt.trim()) ? basePrompt.trim() : CORE_SYSTEM_PROMPT;
@@ -198,9 +278,10 @@ export function getAssembledSystemPrompt(options: AssembleOptions = {}): string 
 
   // 时间与系统感知：主脑应像人类一样知道「现在几点、什么环境」
   const currentAwareness = getCurrentAwareness();
-  if (currentAwareness || capabilities || computerContext || taskSummary || memory || learnedPrompt) {
+  if (currentAwareness || capabilities || computerContext || taskSummary || memory || learnedPrompt || timeline) {
     const parts: string[] = [];
     if (currentAwareness) parts.push(`# 当前感知\n${currentAwareness}`);
+    if (timeline) parts.push(`# 时间线\n${timeline}`);
     if (promptMode === 'full' && learnedPrompt) parts.push(`# 从对话中学习到的规则与偏好\n${learnedPrompt.trim()}`);
     const capsText = toolLoadingModeOnDemand ? CAPABILITIES_ON_DEMAND : capabilities;
     if (capsText) parts.push(`# 当前可用能力\n${capsText}`);

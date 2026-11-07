@@ -7,6 +7,9 @@
 
 import { Bot, ReceiverMode, type PrivateMessageEvent, type GroupMessageEvent, type GuildMessageEvent } from 'qq-official-bot';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { captureChannelOrigin, type ChannelOrigin } from '../messaging/channelIdentity.js';
+import { randomUUID } from 'node:crypto';
+import { createSendIdentity, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 
 export interface QQConfig {
   enabled?: boolean;
@@ -50,6 +53,7 @@ function isAllowed(config: QQConfig | null, fromId: string, groupId: string | un
 }
 
 export type QQMessagePayload = {
+  origin?: ChannelOrigin;
   messageType: 'private' | 'group' | 'guild';
   chatId: string;
   fromId: string;
@@ -64,6 +68,7 @@ export type QQMessagePayload = {
 
 class UserQQConnection {
   private bot: Bot<ReceiverMode.WEBSOCKET> | null = null;
+  private sendSessionId = randomUUID();
   private running = false;
   private botInfo: { id?: string; username?: string } | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -73,7 +78,6 @@ class UserQQConnection {
   private savedConfig: { appId: string; secret: string; sandbox?: boolean } | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private readonly HEARTBEAT_INTERVAL = 30000; // 30秒心跳（缩短，更频繁检测）
-  private readonly MAX_SEND_RETRIES = 3; // 发送消息最大重试次数
   private heartbeatFailCount = 0;
   private readonly MAX_HEARTBEAT_FAILURES = 3; // 心跳连续失败超过此次数则重连
   private isReconnecting = false; // 防止并发重连
@@ -184,16 +188,17 @@ class UserQQConnection {
     
     // 定义连接超时（防止 DNS 解析等网络问题导致卡死）
     const CONNECT_TIMEOUT = 10000; // 10秒
+    let connectingBot: Bot | null = null;
     const timeoutId = setTimeout(() => {
       serverLogger.warn('qq', `连接超时（${CONNECT_TIMEOUT}ms），中止连接 userId=${this.userId}`);
-      if (this.bot) {
-        try { void this.bot.stop(); } catch {}
-        this.bot = null;
+      if (connectingBot) {
+        try { void connectingBot.stop(); } catch {}
+        if (this.bot === connectingBot) { this.bot = null; this.running = false; this.botInfo = null; }
       }
     }, CONNECT_TIMEOUT);
     
     try {
-      this.bot = new Bot({
+      const bot = this.bot = new Bot({
         appid: appId,
         secret,
         sandbox: sandbox ?? false,
@@ -208,34 +213,39 @@ class UserQQConnection {
         maxRetry: 5, // SDK 内部重连次数
       });
 
+      connectingBot = bot;
+      this.running = false; this.botInfo = null; this.sendSessionId = randomUUID();
       this.setupReconnect();
 
       this.bot.on('message.private.friend', async (event: PrivateMessageEvent) => {
-        await this.handleIncoming('private', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, undefined, undefined);
+        await this.handleIncoming('private', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, undefined, undefined, bot);
       });
 
       this.bot.on('message.private.direct', async (event: PrivateMessageEvent) => {
-        await this.handleIncoming('guild', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id);
+        await this.handleIncoming('guild', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id, bot);
       });
 
       this.bot.on('message.group', async (event: GroupMessageEvent) => {
-        await this.handleIncoming('group', event.group_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, event.group_id, undefined, undefined);
+        await this.handleIncoming('group', event.group_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, event.group_id, undefined, undefined, bot);
       });
 
       this.bot.on('message.guild', async (event: GuildMessageEvent) => {
-        await this.handleIncoming('guild', event.channel_id ?? event.guild_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id);
+        await this.handleIncoming('guild', event.channel_id ?? event.guild_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id, bot);
       });
 
-      await this.bot.start();
+      await bot.start();
       clearTimeout(timeoutId); // 清除超时定时器
+      if (this.bot !== bot) return { ok: false, error: '连接已变化' };
       
       try {
-        const info = await this.bot.getSelfInfo();
+        const info = await bot.getSelfInfo();
+        if (this.bot !== bot) return { ok: false, error: '连接已变化' };
         this.botInfo = { id: info.id, username: info.username };
         serverLogger.info('qq', `Bot 已连接: ${info.username} (${info.id}) userId=${this.userId}`);
       } catch {
         serverLogger.info('qq', `Bot 已连接 userId=${this.userId}`);
       }
+      if (this.bot !== bot) return { ok: false, error: '连接已变化' };
       this.running = true;
       this.isReconnecting = false;
       this.reconnectAttempts = 0;
@@ -246,10 +256,10 @@ class UserQQConnection {
       clearTimeout(timeoutId); // 确保清除超时定时器
       const msg = err instanceof Error ? err.message : String(err);
       serverLogger.warn('qq', `连接失败 userId=${this.userId}`, msg);
-      // 如果连接失败，清理资源
-      if (this.bot) {
-        try { void this.bot.stop(); } catch {}
-        this.bot = null;
+      // Only clean up the client belonging to this login attempt.
+      if (connectingBot) {
+        try { void connectingBot.stop(); } catch {}
+        if (this.bot === connectingBot) { this.bot = null; this.running = false; this.botInfo = null; }
       }
       return { ok: false, error: msg };
     }
@@ -265,15 +275,19 @@ class UserQQConnection {
     groupId?: string,
     guildId?: string,
     channelId?: string,
+    sourceBot?: Bot,
   ) {
-    const rawConfig = this.getConfig(this.userId, 'qq_config');
-    const config = parseQQConfig(rawConfig instanceof Promise ? await rawConfig : rawConfig);
-    if (!config?.enabled) return;
+    if (sourceBot && this.bot !== sourceBot) return;
+    const accountId = this.getSendIdentity()?.accountId, sessionId = this.sendSessionId;
+    const rawConfig = await this.getConfig(this.userId, 'qq_config');
+    const config = parseQQConfig(rawConfig);
+    if ((sourceBot && this.bot !== sourceBot) || !config?.enabled) return;
     const isPrivate = type === 'private';
     if (!isAllowed(config, fromId, groupId, isPrivate)) return;
     if (!text.trim()) return;
 
     this.onMessage(this.userId, {
+            origin: captureChannelOrigin(accountId, sessionId, rawConfig),
       messageType: type,
       chatId,
       fromId,
@@ -287,32 +301,27 @@ class UserQQConnection {
     });
   }
 
-  async sendMessage(target: { type: 'private' | 'group' | 'guild'; id: string }, text: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.bot || !this.running) return { ok: false, error: '未连接，请先配置并连接 QQ Bot' };
+  getSendIdentity() { return this.bot && this.running ? createSendIdentity(this.botInfo?.id, this.botInfo?.username, this.sendSessionId) : null; }
 
-    let lastError: string = '';
-    for (let attempt = 0; attempt < this.MAX_SEND_RETRIES; attempt++) {
-      try {
-        if (target.type === 'private') {
-          await this.bot.sendPrivateMessage(target.id, text);
-        } else if (target.type === 'group') {
-          await this.bot.sendGroupMessage(target.id, text);
-        } else {
-          await this.bot.sendGuildMessage(target.id, text);
-        }
-        return { ok: true };
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
-        serverLogger.warn('qq', `发送消息失败（第 ${attempt + 1}/${this.MAX_SEND_RETRIES} 次）userId=${this.userId}`, lastError);
+  async sendMessage(target: { type: 'private' | 'group' | 'guild'; id: string }, text: string, expectedBinding?: string): Promise<{ ok: boolean; error?: string }> {
+    const bot = this.bot;
+    if (expectedBinding && this.getSendIdentity()?.binding !== expectedBinding) throw new SendExecutionDeniedError('QQ 账号或连接已变化，尚未发送，请重新交办');
+    if (!bot || !this.running) return { ok: false, error: '未连接，请先配置并连接 QQ Bot' };
 
-        // 如果不是最后一次尝试，等待后重试（指数退避）
-        if (attempt < this.MAX_SEND_RETRIES - 1) {
-          const delay = Math.min(1000 * Math.pow(2, attempt), 10000);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
+    try {
+      if (target.type === 'private') {
+        await bot.sendPrivateMessage(target.id, text);
+      } else if (target.type === 'group') {
+        await bot.sendGroupMessage(target.id, text);
+      } else {
+        await bot.sendGuildMessage(target.id, text);
       }
+      return { ok: true };
+    } catch {
+      // A failed receipt can follow successful delivery, so never replay the message.
+      serverLogger.warn('qq', '消息发送回执未确认', `userId=${this.userId}`);
+      return { ok: false, error: '消息发送结果未确认，请核实后再决定是否重新发送' };
     }
-    return { ok: false, error: lastError };
   }
 
   getStatus(): 'connected' | 'disconnected' {
@@ -398,9 +407,10 @@ export async function sendQQMessage(
   userId: string,
   target: { type: 'private' | 'group' | 'guild'; id: string },
   message: string,
+  expectedBinding?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const conn = getOrCreateConnection(userId, getConfig);
-  return conn.sendMessage(target, message);
+  return conn.sendMessage(target, message, expectedBinding);
 }
 
 export async function reconnectQQForConfiguredUsers(

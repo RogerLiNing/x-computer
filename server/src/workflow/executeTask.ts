@@ -52,7 +52,7 @@ async function executeScriptTask(
     return { _error: 'userSandboxManager 未配置', _stdout: '', _stderr: '' };
   }
 
-  const { sandboxFS } = await manager.getForUser(userId);
+  const { sandboxFS, sandboxShell } = await manager.getForUser(userId);
   const root = sandboxFS.getRoot();
 
   const scriptPath = config.script as string | undefined;
@@ -75,7 +75,7 @@ async function executeScriptTask(
     return { _error: 'script 或 command 必填', _stdout: '', _stderr: '' };
   }
 
-  const shell = new SandboxShell(root, 60_000);
+  const shell = sandboxShell;
   const result = await shell.execute(cmd);
 
   let parsed: unknown;

@@ -2,8 +2,9 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
-import { useTaskStore } from '@/store/taskStore';
+
 import { useAiDocumentStore } from '@/store/aiDocumentStore';
+import { useDigitalHumanStore } from '@/store/digitalHumanStore';
 import { buildComputerContext } from '@/utils/computerContext';
 import { getUserId } from '@/utils/userId';
 
@@ -31,8 +32,6 @@ export function useWebSocket() {
   const reconnectDelay = useRef(RECONNECT_DELAY);
   const desktopStore = useDesktopStore;
   const connectionStore = useConnectionStore;
-  const configStore = useConfigStore;
-  const taskStore = useTaskStore;
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -89,65 +88,8 @@ export function useWebSocket() {
 
   const handleMessage = useCallback((msg: WSMessage) => {
     const cs = connectionStore.getState();
-    const cfg = configStore.getState();
 
     switch (msg.type) {
-      case 'init':
-        // Sync initial server state
-        if (msg.data.mode) cfg.setExecutionMode(msg.data.mode);
-        if (msg.data.tasks) taskStore.getState().syncTasks(msg.data.tasks);
-        break;
-
-      case 'task_event': {
-        const event = msg.data;
-        switch (event.type) {
-          case 'status_change':
-            taskStore.getState().upsertTask(event.taskId, event.data);
-            break;
-          case 'step_start':
-            taskStore.getState().updateTaskStep(event.taskId, event.stepId, { status: 'running', ...event.data });
-            break;
-          case 'step_complete':
-            taskStore.getState().updateTaskStep(event.taskId, event.stepId, { status: 'completed', ...event.data });
-            break;
-          case 'step_error':
-            taskStore.getState().updateTaskStep(event.taskId, event.stepId, { status: 'failed', ...event.data });
-            break;
-          case 'approval_needed':
-            taskStore.getState().upsertTask(event.taskId, { status: 'awaiting_approval' });
-            taskStore.getState().addApproval(event.data);
-            cs.addNotification({
-              type: 'approval',
-              title: '需要审批',
-              message: `任务步骤 "${event.data.action}" 需要你的确认`,
-              actionRequired: true,
-              relatedTaskId: event.taskId,
-            });
-            break;
-          case 'task_complete':
-            taskStore.getState().upsertTask(event.taskId, {
-              status: event.data.success ? 'completed' : 'failed',
-              result: event.data,
-            });
-            cs.addNotification({
-              type: event.data.success ? 'info' : 'error',
-              title: event.data.success ? '任务完成' : '任务失败',
-              message: event.data.success ? '任务已成功完成' : (event.data.error || '任务执行失败'),
-              relatedTaskId: event.taskId,
-            });
-            break;
-        }
-        break;
-      }
-
-      case 'task_created':
-        taskStore.getState().upsertTask(msg.data.id, msg.data);
-        break;
-
-      case 'mode_changed':
-        cfg.setExecutionMode(msg.data.mode);
-        break;
-
       case 'editor_stream':
         useAiDocumentStore.getState().appendContent(msg.data.windowId, msg.data.chunk ?? '');
         break;
@@ -167,7 +109,26 @@ export function useWebSocket() {
 
       case 'x_proactive_message':
         cs.addXProactiveMessage(msg.data);
+        useDigitalHumanStore.getState().setActivity('alert', 5000);
         break;
+      case 'notification_updated':
+      case 'notification_created':
+        window.dispatchEvent(new Event('x:notifications-refresh'));
+        window.dispatchEvent(new Event('x:workbench-refresh'));
+        if(msg.type==='notification_created'&&msg.data?.sessionId&&msg.data?.message)window.dispatchEvent(new CustomEvent('x:reminder-arrived',{detail:msg.data}));
+        break;
+
+      case 'living_ai_status': {
+        const phase = msg.data?.state?.phase;
+        if (phase === 'observing' || phase === 'reflecting' || phase === 'acting') {
+          useDigitalHumanStore.getState().setActivity('thinking');
+        } else if (phase === 'error') {
+          useDigitalHumanStore.getState().setActivity('alert', 5000);
+        } else if (phase === 'sleeping' || phase === 'waiting' || phase === 'paused') {
+          useDigitalHumanStore.getState().setActivity('idle');
+        }
+        break;
+      }
 
       case 'heartbeat_notification':
         cs.addNotification({
@@ -203,14 +164,10 @@ export function useWebSocket() {
   const sendComputerContext = useCallback(() => {
     const ds = desktopStore.getState();
     const cs = connectionStore.getState();
-    const cfg = configStore.getState();
-    const ts = taskStore.getState();
     const ctx = buildComputerContext({
       windows: ds.windows,
       activeWindowId: ds.activeWindowId,
-      executionMode: cfg.executionMode,
-      tasks: ts.tasks,
-      taskbarPinned: cfg.taskbarPinned,
+      taskbarPinned: useConfigStore.getState().taskbarPinned,
       notifications: cs.notifications,
     });
     send({ type: 'set_computer_context', data: ctx });

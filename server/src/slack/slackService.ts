@@ -5,6 +5,9 @@
 
 import { App } from '@slack/bolt';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { captureChannelOrigin, type ChannelOrigin } from '../messaging/channelIdentity.js';
+import { randomUUID } from 'node:crypto';
+import { createSendIdentity, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 
 export interface SlackConfig {
   enabled?: boolean;
@@ -46,6 +49,7 @@ function isAllowed(config: SlackConfig | null, fromId: string, channelId: string
 }
 
 export type SlackMessagePayload = {
+  origin?: ChannelOrigin;
   channelId: string;
   fromId: string;
   fromName?: string;
@@ -58,8 +62,11 @@ export type SlackMessagePayload = {
 
 class UserSlackConnection {
   private app: App | null = null;
+  private sendSessionId = randomUUID();
   private running = false;
   private botUserId: string | null = null;
+  private senderTeamId = '';
+  private senderLabel = '';
 
   constructor(
     private userId: string,
@@ -70,21 +77,26 @@ class UserSlackConnection {
   async connect(botToken: string, appToken: string): Promise<{ ok: boolean; error?: string }> {
     if (this.running) return { ok: true };
     try {
-      this.app = new App({
+      const app = this.app = new App({
         token: botToken,
         appToken,
         socketMode: true,
+        // Sending a message is not safe to replay after a lost transport receipt.
+        clientOptions: { retryConfig: { retries: 0 }, rejectRateLimitedCalls: true },
       });
 
-      this.app.message(async ({ message }) => {
+      this.running = false; this.botUserId = null; this.senderTeamId = ''; this.senderLabel = ''; this.sendSessionId = randomUUID();
+      app.message(async ({ message }) => {
+        if (this.app !== app) return;
+        const accountId = this.getSendIdentity()?.accountId, sessionId = this.sendSessionId;
         const msg = message as { subtype?: string; user?: string; text?: string; channel?: string; channel_type?: string; ts: string; thread_ts?: string };
         if (msg.subtype) return;
         if (!msg.user || !msg.text) return;
         if (msg.user === this.botUserId) return;
 
-        const rawConfig = this.getConfig(this.userId, 'slack_config');
-        const config = parseSlackConfig(rawConfig instanceof Promise ? await rawConfig : rawConfig);
-        if (!config?.enabled) return;
+        const rawConfig = await this.getConfig(this.userId, 'slack_config');
+        const config = parseSlackConfig(rawConfig);
+        if (this.app !== app || !config?.enabled) return;
 
         const isDM = msg.channel_type === 'im';
         const channelId = msg.channel ?? '';
@@ -92,6 +104,7 @@ class UserSlackConnection {
         if (!isAllowed(config, msg.user, channelId, isDM)) return;
 
         this.onMessage(this.userId, {
+            origin: captureChannelOrigin(accountId, sessionId, rawConfig),
           channelId,
           fromId: msg.user,
           text: msg.text,
@@ -102,9 +115,13 @@ class UserSlackConnection {
         });
       });
 
-      await this.app.start();
-      const authResult = await this.app.client.auth.test({ token: botToken });
+      await app.start();
+      if (this.app !== app) return { ok: false, error: '连接已变化' };
+      const authResult = await app.client.auth.test({ token: botToken });
+      if (this.app !== app) return { ok: false, error: '连接已变化' };
       this.botUserId = (authResult.user_id as string) ?? null;
+      this.senderTeamId = authResult.team_id ? 'team/' + authResult.team_id : authResult.enterprise_id ? 'enterprise/' + authResult.enterprise_id : '';
+      this.senderLabel = `${authResult.team || this.senderTeamId} / ${authResult.user || this.botUserId}`;
       this.running = true;
       serverLogger.info('slack', `Bot 已连接: ${authResult.user} userId=${this.userId}`);
       return { ok: true };
@@ -115,10 +132,14 @@ class UserSlackConnection {
     }
   }
 
-  async sendMessage(channelId: string, text: string, threadTs?: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.app || !this.running) return { ok: false, error: '未连接，请先配置 Slack Token' };
+  getSendIdentity() { return this.app && this.running && this.senderTeamId && this.botUserId ? createSendIdentity(this.senderTeamId + '/' + this.botUserId, this.senderLabel, this.sendSessionId) : null; }
+
+  async sendMessage(channelId: string, text: string, threadTs?: string, expectedBinding?: string): Promise<{ ok: boolean; error?: string }> {
+    const app = this.app;
+    if (expectedBinding && this.getSendIdentity()?.binding !== expectedBinding) throw new SendExecutionDeniedError('Slack 工作区、账号或连接已变化，尚未发送，请重新交办');
+    if (!app || !this.running) return { ok: false, error: '未连接，请先配置 Slack Token' };
     try {
-      await this.app.client.chat.postMessage({
+      await app.client.chat.postMessage({
         channel: channelId,
         text,
         ...(threadTs ? { thread_ts: threadTs } : {}),
@@ -139,7 +160,7 @@ class UserSlackConnection {
       this.app = null;
     }
     this.running = false;
-    this.botUserId = null;
+    this.botUserId = null; this.senderTeamId = ''; this.senderLabel = '';
   }
 }
 
@@ -186,9 +207,10 @@ export async function sendSlackMessage(
   channelId: string,
   message: string,
   threadTs?: string,
+  expectedBinding?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const conn = getOrCreateConnection(userId, getConfig);
-  return conn.sendMessage(channelId, message, threadTs);
+  return conn.sendMessage(channelId, message, threadTs, expectedBinding);
 }
 
 export async function reconnectSlackForConfiguredUsers(

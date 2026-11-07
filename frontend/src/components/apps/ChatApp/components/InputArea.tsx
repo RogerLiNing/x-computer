@@ -86,15 +86,15 @@ export function InputArea({
           {attachedFiles.map((item, i) => (
             <div
               key={i}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-[11px] text-desktop-text shrink-0"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-[11px] text-gray-200 shrink-0"
             >
-              <Paperclip size={12} className="text-desktop-muted shrink-0" />
+              <Paperclip size={12} className="text-gray-400 shrink-0" />
               <span className="max-w-[120px] truncate" title={item.name}>
                 {item.name}
               </span>
               <button
                 type="button"
-                className="p-0.5 rounded hover:bg-red-500/30 text-desktop-muted hover:text-red-400 transition-colors shrink-0"
+                className="p-0.5 rounded hover:bg-red-500/30 text-gray-400 hover:text-red-400 transition-colors shrink-0"
                 onClick={() => onRemoveFile(i)}
                 aria-label="移除"
               >
@@ -121,10 +121,10 @@ export function InputArea({
           ))}
         </div>
       )}
-      <div className="flex items-end gap-1 sm:gap-2 bg-white/5 rounded-xl px-2 sm:px-3 py-2 border border-white/10 focus-within:border-desktop-highlight/30 transition-colors">
+      <div className="flex items-end gap-1 sm:gap-2 bg-white/5 rounded-xl px-2 sm:px-3 py-2 border border-white/10 focus-within:border-[#C8A96E]/30 transition-colors">
         <button
           type="button"
-          className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+          className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
           onClick={() => attachFileInputRef.current?.click()}
           title={attachedFiles.length >= maxFiles ? `最多 ${maxFiles} 个文件` : '附加文档（txt、md、pdf、doc、csv、json 等）'}
         >
@@ -132,7 +132,7 @@ export function InputArea({
         </button>
         <button
           type="button"
-          className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+          className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
           onClick={() => attachInputRef.current?.click()}
           title={attachedImages.length >= maxImages ? `最多 ${maxImages} 张参考图` : '上传参考图（1–3 张），将随消息发送供图像编辑使用'}
         >
@@ -144,7 +144,7 @@ export function InputArea({
           onChange={onInputChange}
           onKeyDown={onKeyDown}
           placeholder="输入消息或任务描述... (Shift+Enter 换行)"
-          className="flex-1 bg-transparent outline-none text-sm sm:text-xs text-desktop-text resize-none max-h-[120px] min-h-[32px] sm:min-h-[24px] py-1.5 sm:py-0.5 placeholder:text-desktop-muted/50 leading-relaxed"
+          className="flex-1 bg-transparent outline-none text-sm sm:text-xs text-gray-200 resize-none max-h-[120px] min-h-[32px] sm:min-h-[24px] py-1.5 sm:py-0.5 placeholder:text-gray-400/50 leading-relaxed"
           rows={1}
         />
         {isLoading ? (
@@ -159,8 +159,8 @@ export function InputArea({
           <button
             className={`p-2 sm:p-1.5 rounded-lg transition-all shrink-0 mb-0.5 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
               input.trim() || attachedImages.length || attachedFiles.length
-                ? 'bg-desktop-highlight hover:bg-desktop-highlight/80 text-white scale-100'
-                : 'bg-white/5 text-desktop-muted scale-95'
+                ? 'bg-[#C8A96E] hover:bg-[#C8A96E]/80 text-white scale-100'
+                : 'bg-white/5 text-gray-400 scale-95'
             }`}
             onClick={onSendMessage}
             disabled={!input.trim() && !attachedImages.length && !attachedFiles.length}

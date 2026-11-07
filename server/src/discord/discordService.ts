@@ -5,6 +5,9 @@
 
 import { Client, GatewayIntentBits, type Message } from 'discord.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { captureChannelOrigin, type ChannelOrigin } from '../messaging/channelIdentity.js';
+import { randomUUID } from 'node:crypto';
+import { createSendIdentity, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 
 export interface DiscordConfig {
   enabled?: boolean;
@@ -45,6 +48,7 @@ function isAllowed(config: DiscordConfig | null, fromId: string, guildId: string
 }
 
 export type DiscordMessagePayload = {
+  origin?: ChannelOrigin;
   channelId: string;
   guildId: string | null;
   fromId: string;
@@ -57,6 +61,7 @@ export type DiscordMessagePayload = {
 
 class UserDiscordConnection {
   private client: Client | null = null;
+  private sendSessionId = randomUUID();
   private connected = false;
   private botInfo: { username?: string; id?: string } | null = null;
 
@@ -69,7 +74,8 @@ class UserDiscordConnection {
   async connect(token: string): Promise<{ ok: boolean; error?: string }> {
     if (this.connected) return { ok: true };
     try {
-      this.client = new Client({
+      const client = this.client = new Client({
+        rest: { retries: 0, rejectOnRateLimit: ['/channels'] },
         intents: [
           GatewayIntentBits.Guilds,
           GatewayIntentBits.GuildMessages,
@@ -78,11 +84,14 @@ class UserDiscordConnection {
         ],
       });
 
-      this.client.on('messageCreate', async (msg: Message) => {
+      this.connected = false; this.botInfo = null; this.sendSessionId = randomUUID();
+      client.on('messageCreate', async (msg: Message) => {
+        if (this.client !== client) return;
+        const accountId = this.getSendIdentity()?.accountId, sessionId = this.sendSessionId;
         if (msg.author.bot) return;
-        const rawConfig = this.getConfig(this.userId, 'discord_config');
-        const config = parseDiscordConfig(rawConfig instanceof Promise ? await rawConfig : rawConfig);
-        if (!config?.enabled) return;
+        const rawConfig = await this.getConfig(this.userId, 'discord_config');
+        const config = parseDiscordConfig(rawConfig);
+        if (this.client !== client || !config?.enabled) return;
 
         const isDM = !msg.guild;
         if (!isAllowed(config, msg.author.id, msg.guildId, isDM)) return;
@@ -91,6 +100,7 @@ class UserDiscordConnection {
         if (!text.trim()) return;
 
         this.onMessage(this.userId, {
+            origin: captureChannelOrigin(accountId, sessionId, rawConfig),
           channelId: msg.channelId,
           guildId: msg.guildId,
           fromId: msg.author.id,
@@ -102,8 +112,9 @@ class UserDiscordConnection {
         });
       });
 
-      await this.client.login(token);
-      const me = this.client.user;
+      await client.login(token);
+      if (this.client !== client) return { ok: false, error: '连接已变化' };
+      const me = client.user;
       this.botInfo = { username: me?.username, id: me?.id };
       this.connected = true;
       serverLogger.info('discord', `Bot 已连接: ${me?.tag} userId=${this.userId}`);
@@ -115,14 +126,21 @@ class UserDiscordConnection {
     }
   }
 
-  async sendMessage(channelId: string, text: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.client || !this.connected) return { ok: false, error: '未连接，请先配置 Bot Token' };
+  getSendIdentity() { return this.client && this.connected ? createSendIdentity(this.botInfo?.id, this.botInfo?.username, this.sendSessionId) : null; }
+
+  async sendMessage(channelId: string, text: string, expectedBinding?: string): Promise<{ ok: boolean; error?: string }> {
+    const client = this.client;
+    const verify = () => { if (expectedBinding && this.getSendIdentity()?.binding !== expectedBinding) throw new SendExecutionDeniedError('Discord 账号或连接已变化，尚未发送，请重新交办'); };
+    verify();
+    if (!client || !this.connected) return { ok: false, error: '未连接，请先配置 Bot Token' };
     try {
-      const channel = await this.client.channels.fetch(channelId);
+      const channel = await client.channels.fetch(channelId);
+      verify();
       if (!channel || !('send' in channel)) return { ok: false, error: '无法发送到该频道' };
       await (channel as any).send(text);
       return { ok: true };
     } catch (err) {
+      if (err instanceof SendExecutionDeniedError) throw err;
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
@@ -187,9 +205,10 @@ export async function sendDiscordMessage(
   userId: string,
   channelId: string,
   message: string,
+  expectedBinding?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const conn = getOrCreateConnection(userId, getConfig);
-  return conn.sendMessage(channelId, message);
+  return conn.sendMessage(channelId, message, expectedBinding);
 }
 
 export async function reconnectDiscordForConfiguredUsers(

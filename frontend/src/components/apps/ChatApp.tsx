@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import {returnedExpertId,openReturnedExpert} from '@/utils/openNotificationLink';
 
 declare global {
   interface Window {
@@ -6,7 +7,7 @@ declare global {
   }
 }
 import { useTranslation } from 'react-i18next';
-import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link, Wand2, GitCompare, Columns } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Loader2, Clock, CheckCircle2, XCircle, ArrowRight, ChevronDown, ChevronRight, ChevronUp, Wrench, Copy, RotateCcw, Trash2, MessageSquarePlus, MessageSquare, PanelLeftClose, PanelLeft, Pencil, X, Download, ImagePlus, Square, Paperclip, FileText, FileSpreadsheet, Presentation, Image as ImageIcon, PackageCheck, Eye, Code, Search, Speaker, VolumeX, Calculator, Pin, Mic, MicOff, Bell, BarChart2, ThumbsUp, ThumbsDown, Edit2, Star, GitBranch, Archive, ArchiveRestore, Link, Wand2, GitCompare, Columns, Ellipsis, CircleHelp } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
@@ -14,29 +15,283 @@ import { useTaskStore } from '@/store/taskStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { useAiDocumentStore } from '@/store/aiDocumentStore';
 import { getSystemLogStore } from '@/store/systemLogStore';
-import { api, ApiError } from '@/utils/api';
-import { TASK_TEMPLATES, type TaskTemplateCategory } from '@/config/taskTemplates';
+import { api, ApiError, type ChatRunSnapshot } from '@/utils/api';
 import { buildComputerContext, formatComputerContextForPrompt, formatTaskSummaryForPrompt } from '@/utils/computerContext';
 import type { TaskDomain } from '@shared/index';
-import { useDomainDetection } from './ChatApp/useDomainDetection';
 import { useImageHandling } from './ChatApp/useImageHandling';
-import { useChatSessions, WELCOME_FALLBACK } from './ChatApp/useChatSessions';
+import { useChatSessions, WELCOME_FALLBACK, type ChatSessionItem } from './ChatApp/useChatSessions';
 import { useFormatChatError } from './ChatApp/useFormatChatError';
-import { getMessagesForChat } from './ChatApp/chatHelpers';
+import { getMessagesForChat, shouldSubmitChat } from './ChatApp/chatHelpers';
+import { useChatDraft } from '@/hooks/useChatDraft';
+import {useReminderMessages,mergeConcurrentReminders,type ReminderMessage} from '@/hooks/useReminderMessages';
+import { appendChatExample } from '@/utils/appendChatExample';
 import { CommandPalette, getDefaultCommands } from './ChatApp/CommandPalette';
 import { NotificationCenter } from './ChatApp/NotificationCenter';
 import { ToastContainer } from '@/components/shared/ToastContainer';
+import { ContextTreemap } from './ChatApp/ContextTreemap';
+import { useChatRun } from './ChatApp/useChatRun';
+import { ChatRunPanel } from './ChatApp/ChatRunPanel';
+import { QuickActions } from './ChatApp/components/QuickActions';
 import type { Message } from './ChatApp/Message';
-import { TASK_KEYWORDS, DEFAULT_MAX_CHAT_ROUNDS, type AgentOption } from './ChatApp/chatConstants';
-import { ToolCallBlock, MarkdownContent, MarkdownWithThink, type ToolCallRecord } from '@/components/shared';
+import { DEFAULT_MAX_CHAT_ROUNDS, type AgentOption } from './ChatApp/chatConstants';
+import { ToolCallBlock, MarkdownContent, MarkdownWithThink, MultiRenderer, type ToolCallRecord } from '@/components/shared';
 
 interface Props {
   windowId: string;
+  metadata?: Record<string, unknown>;
   /** 嵌入手机模式布局时使用，隐藏完整 header 仅保留会话切换 */
   embeddedInMobile?: boolean;
 }
 
-export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
+interface SessionGroup {
+  label: string;
+  sessions: ChatSessionItem[];
+}
+
+type DeliverableKind = 'document' | 'spreadsheet' | 'presentation' | 'image' | 'code' | 'file';
+
+interface SessionDeliverable {
+  id: string;
+  kind: DeliverableKind;
+  name: string;
+  path: string;
+  sourceMessageId: string;
+  source: 'tool' | 'message' | 'image';
+  createdAt: number;
+  remote: boolean;
+}
+
+const DELIVERABLE_PATH_PATTERN =
+  /(?:^|[\s"'“”‘’`：:（(【\[])\/*((?:文档|图片|桌面|下载|代码|数据|音频|视频|输出|output|outputs|documents|images)\/[^\\:*?"<>|\n]+?\.[a-z0-9]{1,10})(?=$|[\s"'“”‘’`，。；;！？!?)）\]】])/giu;
+
+const DELIVERABLE_TOOL_PATTERN =
+  /^(?:file\.write|file_write|file\.replace|office\.create_|(?:image|media)\.(?:create|generate)|.*\.(?:export|render))/i;
+
+function normalizeDeliverablePath(path: string): string {
+  return path
+    .trim()
+    .replace(/^["'“”‘’`]+|["'“”‘’`，。；;！？!?]+$/g, '')
+    .replace(/^\/+/, '');
+}
+
+function getDeliverableKind(path: string): DeliverableKind {
+  const extension = path.split(/[?#]/)[0]?.split('.').pop()?.toLowerCase() ?? '';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(extension)) return 'image';
+  if (extension === 'xlsx' || extension === 'xls' || extension === 'csv') return 'spreadsheet';
+  if (extension === 'pptx' || extension === 'ppt') return 'presentation';
+  if (['md', 'txt', 'docx', 'doc', 'pdf', 'rtf'].includes(extension)) return 'document';
+  if (['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'json', 'yaml', 'yml', 'toml', 'html', 'css'].includes(extension)) return 'code';
+  return 'file';
+}
+
+function getDeliverableName(path: string, fallback: string): string {
+  const rawName = path.split(/[?#]/)[0]?.split('/').pop() || fallback;
+  try {
+    return decodeURIComponent(rawName);
+  } catch {
+    return rawName;
+  }
+}
+
+function getDeliverableTypeLabel(kind: DeliverableKind): string {
+  return {
+    document: '文档',
+    spreadsheet: '表格',
+    presentation: '演示文稿',
+    image: '图片',
+    code: '代码',
+    file: '文件',
+  }[kind];
+}
+
+function DeliverableIcon({ kind, size = 16 }: { kind: DeliverableKind; size?: number }) {
+  if (kind === 'spreadsheet') return <FileSpreadsheet size={size} />;
+  if (kind === 'presentation') return <Presentation size={size} />;
+  if (kind === 'image') return <ImageIcon size={size} />;
+  if (kind === 'code') return <Code size={size} />;
+  return <FileText size={size} />;
+}
+
+function collectPathFields(value: unknown, depth = 0): string[] {
+  if (depth > 4 || value == null) return [];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+      try {
+        return collectPathFields(JSON.parse(trimmed), depth + 1);
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectPathFields(item, depth + 1));
+  }
+  if (typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  if (record.ok === false || record.success === false) return [];
+  const paths: string[] = [];
+  for (const [key, fieldValue] of Object.entries(record)) {
+    if (
+      typeof fieldValue === 'string' &&
+      ['path', 'filePath', 'savedTo', 'outputPath', 'targetPath', 'artifactPath'].includes(key)
+    ) {
+      paths.push(fieldValue);
+      continue;
+    }
+    if (typeof fieldValue === 'object' && fieldValue !== null) {
+      paths.push(...collectPathFields(fieldValue, depth + 1));
+    }
+  }
+  return paths;
+}
+
+function extractSavedPaths(content: string): string[] {
+  const paths: string[] = [];
+  for (const line of content.split('\n')) {
+    if (
+      !/(?:保存|写入|创建|生成|导出|输出).{0,24}(?:到|至|为|文件|路径|：|:)/.test(line) &&
+      !/(?:文件|交付物|输出)(?:保存)?路径\s*[：:]/.test(line)
+    ) continue;
+    DELIVERABLE_PATH_PATTERN.lastIndex = 0;
+    for (const match of line.matchAll(DELIVERABLE_PATH_PATTERN)) {
+      if (match[1]) paths.push(match[1]);
+    }
+  }
+  return paths;
+}
+
+function collectSessionDeliverables(messages: Message[]): SessionDeliverable[] {
+  const deliverables = new Map<string, SessionDeliverable>();
+  const upsert = (deliverable: SessionDeliverable) => {
+    const key = `${deliverable.remote ? 'remote' : 'local'}:${deliverable.path}`;
+    const existing = deliverables.get(key);
+    if (!existing || deliverable.createdAt > existing.createdAt || (deliverable.createdAt === existing.createdAt && existing.source === 'message')) {
+      deliverables.set(key, deliverable);
+    }
+  };
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+
+    message.images?.forEach((path, index) => {
+      const remote = /^(?:https?:|data:|blob:)/i.test(path);
+      const normalizedPath = remote ? path : normalizeDeliverablePath(path);
+      upsert({
+        id: `${message.id}-image-${index}`,
+        kind: 'image',
+        name: getDeliverableName(normalizedPath, `生成图片 ${index + 1}`),
+        path: normalizedPath,
+        sourceMessageId: message.id,
+        source: 'image',
+        createdAt: message.timestamp,
+        remote,
+      });
+    });
+
+    message.toolCalls
+      ?.filter((toolCall) => toolCall.status === 'completed' && !toolCall.error && DELIVERABLE_TOOL_PATTERN.test(toolCall.toolName))
+      .forEach((toolCall, toolIndex) => {
+        const outputPaths = collectPathFields(toolCall.output);
+        const inputPath = typeof toolCall.input?.path === 'string' ? toolCall.input.path : '';
+        const paths = outputPaths.length > 0 ? outputPaths : inputPath ? [inputPath] : [];
+        paths.forEach((path, pathIndex) => {
+          const normalizedPath = normalizeDeliverablePath(path);
+          if (!normalizedPath) return;
+          upsert({
+            id: `${message.id}-tool-${toolIndex}-${pathIndex}`,
+            kind: getDeliverableKind(normalizedPath),
+            name: getDeliverableName(normalizedPath, '交付文件'),
+            path: normalizedPath,
+            sourceMessageId: message.id,
+            source: 'tool',
+            createdAt: message.timestamp,
+            remote: false,
+          });
+        });
+      });
+
+    extractSavedPaths(message.content).forEach((path, index) => {
+      const normalizedPath = normalizeDeliverablePath(path);
+      if (!normalizedPath) return;
+      upsert({
+        id: `${message.id}-message-${index}`,
+        kind: getDeliverableKind(normalizedPath),
+        name: getDeliverableName(normalizedPath, '交付文件'),
+        path: normalizedPath,
+        sourceMessageId: message.id,
+        source: 'message',
+        createdAt: message.timestamp,
+        remote: false,
+      });
+    });
+  }
+
+  return [...deliverables.values()].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function getSessionDate(session: ChatSessionItem): Date {
+  return new Date(session.updatedAt || session.createdAt);
+}
+
+function formatSessionTime(session: ChatSessionItem): string {
+  return getSessionDate(session).toLocaleTimeString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function getSessionDisplayTitle(session: ChatSessionItem): string {
+  const title = session.title?.trim();
+  if (title) return title;
+  const summary = session.summary?.trim().replace(/\s+/g, ' ');
+  if (summary) return summary.slice(0, 30);
+  const preview = session.preview?.trim().replace(/\s+/g, ' ');
+  if (preview) return preview.slice(0, 30);
+  if (session.tags.length > 0) return `${session.tags[0]}相关对话`;
+  const date = getSessionDate(session);
+  const dateLabel = date.toLocaleDateString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    month: 'numeric',
+    day: 'numeric',
+  });
+  return `${dateLabel} ${formatSessionTime(session)} 的对话`;
+}
+
+function groupSessionsByRecency(sessions: ChatSessionItem[]): SessionGroup[] {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const yesterdayStart = todayStart - 24 * 60 * 60 * 1000;
+  const weekStart = todayStart - 7 * 24 * 60 * 60 * 1000;
+  const buckets = new Map<string, ChatSessionItem[]>([
+    ['置顶', []],
+    ['今天', []],
+    ['昨天', []],
+    ['最近 7 天', []],
+    ['更早', []],
+  ]);
+  const sorted = [...sessions].sort((a, b) => getSessionDate(b).getTime() - getSessionDate(a).getTime());
+  for (const session of sorted) {
+    const timestamp = getSessionDate(session).getTime();
+    const label = session.isPinned
+      ? '置顶'
+      : timestamp >= todayStart
+        ? '今天'
+        : timestamp >= yesterdayStart
+          ? '昨天'
+          : timestamp >= weekStart
+            ? '最近 7 天'
+            : '更早';
+    buckets.get(label)?.push(session);
+  }
+  return [...buckets.entries()]
+    .filter(([, groupedSessions]) => groupedSessions.length > 0)
+    .map(([label, groupedSessions]) => ({ label, sessions: groupedSessions }));
+}
+
+export function ChatApp({ windowId, metadata, embeddedInMobile = false }: Props) {
   const { t } = useTranslation();
   const formatChatError = useFormatChatError();
   const [messages, setMessages] = useState<Message[]>([
@@ -47,7 +302,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       timestamp: Date.now(),
     },
   ]);
-  const [input, setInput] = useState('');
+  const renderMode = useConfigStore(state=>state.renderMode);
+  const [showAdvancedTools, setShowAdvancedTools] = useState(false);
+  const [inputHistoryIndex, setInputHistoryIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [chatSyncFailed, setChatSyncFailed] = useState(false);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
@@ -56,10 +313,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   /** 对话框中附加的文档文件（发送时会上传到沙箱并作为 attachedFilePaths 传给后端） */
   const [attachedFiles, setAttachedFiles] = useState<{ name: string; file: File }[]>([]);
   const [snippetPickerOpen, setSnippetPickerOpen] = useState(false);
-  const [exportDropdownSessionId, setExportDropdownSessionId] = useState<string | null>(null);
+  /** 当前打开下拉菜单的会话 ID */
+  const [sessionDropdownId, setSessionDropdownId] = useState<string | null>(null);
   const [messageSearch, setMessageSearch] = useState('');
   const [messageSearchResults, setMessageSearchResults] = useState<string[]>([]);
   const [messageSearchIndex, setMessageSearchIndex] = useState(0);
+  const [messageSearchOpen, setMessageSearchOpen] = useState(false);
   /** 当前正在朗读的消息ID，null 表示未在朗读 */
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [snippets, setSnippets] = useState<Array<{ id: string; title: string; code: string; language: string; description?: string }>>([]);
@@ -76,6 +335,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [reminderDate, setReminderDate] = useState('');
   /** 会话统计浮层 */
   const [statsOpen, setStatsOpen] = useState(false);
+  /** 当前会话交付物统一管理浮层 */
+  const [deliverablesOpen, setDeliverablesOpen] = useState(false);
   /** 当前正在编辑的消息 ID（仅限 user 角色），null 表示未在编辑 */
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   /** 编辑中的消息内容 */
@@ -91,6 +352,25 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   /** 命令面板 */
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState('');
+  const [availableSkills, setAvailableSkills] = useState<
+    Array<{ id: string; name: string; description: string; dirName: string; requiresApiKey?: boolean }>
+  >([]);
+
+  /** 拉取当前用户可用的 Skill 列表（失败静默，不影响命令面板基本功能） */
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSkills()
+      .then((skills) => {
+        if (!cancelled) setAvailableSkills(skills ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailableSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [commandPalettePosition, setCommandPalettePosition] = useState({ top: 0, left: 0 });
   /** 会话已过时间（秒），每分钟更新 */
   const [sessionElapsed, setSessionElapsed] = useState(0);
@@ -101,9 +381,25 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sessionSearch, setSessionSearch] = useState('');
-  const [contextStats, setContextStats] = useState<{ messageCount: number; estimatedTokens: number; usagePercent: number } | null>(null);
+  const [contextStats, setContextStats] = useState<{
+    messageCount: number;
+    estimatedTokens: number;
+    modelContextLimit: number;
+    usagePercent: number;
+    treemapData: Array<{ name: string; value: number; chars: number; children: unknown[] }>;
+    breakdown: {
+      system: { tokens: number; chars: number };
+      user: { tokens: number; chars: number };
+      assistant: { tokens: number; chars: number };
+      toolCalls: { tokens: number; chars: number };
+    };
+  } | null>(null);
+  /** 上下文 treemap 浮层 */
+  const [contextTreemapOpen, setContextTreemapOpen] = useState(false);
   /** 模型对比浮层 */
   const [compareOpen, setCompareOpen] = useState(false);
+  /** 面向普通用户的能力说明浮层 */
+  const [capabilityHelpOpen, setCapabilityHelpOpen] = useState(false);
   const [comparePrompt, setComparePrompt] = useState('');
   const [compareSelectedModels, setCompareSelectedModels] = useState<Array<{ providerId: string; modelId: string }>>([]);
   const [compareLoading, setCompareLoading] = useState(false);
@@ -115,22 +411,21 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const loadedToolNamesRef = useRef<string[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputHistoryDraftRef = useRef('');
+  const globalSearchInputRef = useRef<HTMLInputElement>(null);
+  const messageSearchInputRef = useRef<HTMLInputElement>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const attachFileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   /** 已追加过「任务完成」跟帖的 taskId，避免重复 */
   const completedTaskFollowUpsRef = useRef<Set<string>>(new Set());
-  const { detectDomain } = useDomainDetection();
   const { imageUrlToBlob, blobToBase64, saveImageToSandbox, getImageExtension } = useImageHandling();
-
-  /** 停止当前正在进行的 AI 生成 */
-  const stopGenerating = useCallback(() => {
-    abortControllerRef.current?.abort();
-  }, []);
 
   const {
     sessions,
     currentSessionId,
+    isSessionLoading,
+    sessionLoadError,
     sidebarOpen,
     setSidebarOpen,
     loadSessions,
@@ -146,7 +441,50 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     generateSummary,
     autoTag,
     forkSession,
-  } = useChatSessions(setMessages);
+  } = useChatSessions(setMessages, isLoading);
+  useEffect(() => {
+    if (typeof metadata?.sessionId === 'string' && metadata.sessionId) selectSession(metadata.sessionId);
+  }, [metadata?.sessionId, selectSession]);
+  const [input, setInput, draftSaveFailed] = useChatDraft(currentSessionId, 'chat');
+
+  const activeSessionRef = useRef(currentSessionId);
+  activeSessionRef.current = currentSessionId;
+  const activeRunIdRef = useRef<string | null>(null);
+  const pendingRunRequestRef = useRef<{ sessionId: string; requestId: string } | null>(null);
+  const sendEpochRef = useRef(0);
+  const reminderArrivals=useRef(new Map<string,number>());
+  const restoreRunMessages = useCallback(async (run: ChatRunSnapshot) => {
+    const epoch = sendEpochRef.current;
+    const requestedAt=Date.now();
+    if (activeSessionRef.current !== run.sessionId) return;
+    try {
+      const saved = await api.getChatMessages(run.sessionId);
+      if (activeSessionRef.current !== run.sessionId || epoch !== sendEpochRef.current) return;
+      setMessages(previous => mergeConcurrentReminders(previous,[
+        { id: 'welcome', role: 'system', content: WELCOME_FALLBACK, timestamp: Date.now() },
+        ...saved.map((message) => ({ ...message, role: message.role as Message['role'], timestamp: new Date(message.createdAt).getTime(), toolCalls: message.toolCalls as ToolCallRecord[] | undefined, runId: message.id === run.assistantMessageId ? run.id : undefined })),
+      ],reminderArrivals.current,requestedAt));
+      refreshSessions();
+      setChatSyncFailed(false);
+      if (activeRunIdRef.current === run.id) setIsLoading(false);
+    } catch {
+      if (activeSessionRef.current === run.sessionId && epoch === sendEpochRef.current) setChatSyncFailed(true);
+    }
+  }, [refreshSessions]);
+  const chatRun = useChatRun(currentSessionId, restoreRunMessages);
+  const receiveReminder=useCallback((message:ReminderMessage)=>setMessages(previous=>previous.some(item=>item.id===message.id)?previous:[...previous,{...message,role:'assistant'}]),[setMessages]);
+  useReminderMessages(currentSessionId,isLoading||isSessionLoading||chatRun.isRunning,receiveReminder,reminderArrivals);
+  const stopGenerating = useCallback(async () => {
+    if (activeRunIdRef.current || chatRun.isRunning) { await chatRun.stop(); return; }
+    try {
+      const pending = pendingRunRequestRef.current;
+      if (pending) await api.stopChatRunRequest(pending.sessionId, pending.requestId);
+      abortControllerRef.current?.abort();
+    } catch (reason) {
+      useConnectionStore.getState().addNotification({ type: 'error', title: '停止未确认', message: reason instanceof Error ? reason.message : String(reason) });
+      void chatRun.refresh();
+    }
+  }, [chatRun.stop, chatRun.isRunning, chatRun.refresh]);
 
   // Sync sessions to shared store for SearchLauncher
   useEffect(() => {
@@ -171,7 +509,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         return (s.title ?? '').toLowerCase().includes(q);
       })
     : sessions;
+  const groupedSessions = groupSessionsByRecency(filteredSessions);
   const starredMessages = messages.filter((m) => m.bookmarked && m.content && m.id !== 'welcome');
+  const sessionDeliverables = useMemo(() => {
+    const managedMessageIds = new Set(chatRun.runs.map((run) => run.assistantMessageId));
+    const legacy = collectSessionDeliverables(messages.filter((message) => !message.runId && !managedMessageIds.has(message.id)));
+    const verified = chatRun.runs.flatMap((run) => run.artifacts.map((artifact) => ({ id: `${run.id}:${artifact.path}`, kind: getDeliverableKind(artifact.path), name: artifact.name, path: artifact.path, sourceMessageId: run.assistantMessageId ?? '', source: 'tool' as const, createdAt: run.updatedAt, remote: false })));
+    return [...verified, ...legacy];
+  }, [messages, chatRun.runs]);
   const tasks = useTaskStore((s) => s.tasks);
 
   /** 加载跨会话收藏消息 */
@@ -226,6 +571,45 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   const addNotification = useConnectionStore((s) => s.addNotification);
   const aiDoc = useAiDocumentStore();
 
+  const openDeliverable = (deliverable: SessionDeliverable) => {
+    if (deliverable.kind === 'image' && deliverable.remote) {
+      setDeliverablesOpen(false);
+      setImagePreviewUrl(deliverable.path);
+      return;
+    }
+    const extension = deliverable.name.split('.').pop()?.toLowerCase() || '';
+    if (deliverable.kind === 'image') {
+      openApp('image-viewer', { filePath: deliverable.path, fileName: deliverable.name });
+    } else if (['docx', 'xlsx', 'pptx', 'pdf'].includes(extension)) {
+      openApp('office-viewer', { filePath: deliverable.path, fileName: deliverable.name });
+    } else if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'].includes(extension)) {
+      openApp('media-viewer', { filePath: deliverable.path, fileName: deliverable.name, mediaType: 'audio' });
+    } else if (['mp4', 'webm', 'mov'].includes(extension)) {
+      openApp('media-viewer', { filePath: deliverable.path, fileName: deliverable.name, mediaType: 'video' });
+    } else if (deliverable.kind === 'file' || ['pdf', 'doc', 'xls', 'ppt'].includes(extension)) {
+      void downloadDeliverable(deliverable);
+    } else if (deliverable.kind === 'code') {
+      openApp('code-editor', { filePath: deliverable.path, fileName: deliverable.name });
+    } else {
+      openApp('text-editor', { filePath: deliverable.path, fileName: deliverable.name });
+    }
+    setDeliverablesOpen(false);
+  };
+
+  const downloadDeliverable = async (deliverable: SessionDeliverable) => {
+    if (deliverable.remote) return;
+    try {
+      await api.downloadFile(deliverable.path, deliverable.name);
+      addNotification({ type: 'info', title: '开始下载', message: deliverable.name });
+    } catch (error) {
+      addNotification({
+        type: 'error',
+        title: '下载失败',
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -237,15 +621,25 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
   useEffect(() => {
     loadedToolNamesRef.current = [];
+    setInputHistoryIndex(null);
+    inputHistoryDraftRef.current = '';
+    setDeliverablesOpen(false);
   }, [currentSessionId]);
 
-  // Load context stats when session changes
+  // Load context stats when session changes or messages update
   useEffect(() => {
     if (!currentSessionId) { setContextStats(null); return; }
     api.getSessionContextStats(currentSessionId)
-      .then((stats) => setContextStats({ messageCount: stats.messageCount, estimatedTokens: stats.estimatedTokens, usagePercent: stats.usagePercent }))
+      .then((stats) => setContextStats(stats))
       .catch(() => setContextStats(null));
-  }, [currentSessionId]);
+  }, [currentSessionId, messages.length]);
+
+  // Close session dropdown when clicking outside
+  useEffect(() => {
+    const handler = () => setSessionDropdownId(null);
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
 
   // Listen for x:select-session events from SearchLauncher
   useEffect(() => {
@@ -298,6 +692,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     setMessageSearchIndex(next);
     const el = document.getElementById(`msg-${messageSearchResults[next]}`);
     el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  const closeMessageSearch = () => {
+    setMessageSearchOpen(false);
+    setMessageSearch('');
   };
 
   // Text-to-speech for AI messages
@@ -506,6 +905,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   // Auto-resize textarea
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
+    if (inputHistoryIndex !== null) {
+      setInputHistoryIndex(null);
+      inputHistoryDraftRef.current = '';
+    }
     setInput(value);
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
@@ -514,15 +917,67 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     const slashMatch = value.match(/(?:^|\s)\/(\w*)$/);
     if (slashMatch) {
       setCommandQuery(slashMatch[1]);
-      // Position palette below the input bar
+      // Prefer opening above the input so the palette remains inside the desktop viewport.
       const rect = inputRef.current?.getBoundingClientRect();
       if (rect) {
-        setCommandPalettePosition({ top: rect.bottom + 4, left: rect.left });
+        const paletteHeight = 256;
+        const viewportGap = 8;
+        const top =
+          rect.top >= paletteHeight + viewportGap
+            ? rect.top - paletteHeight - 4
+            : Math.min(rect.bottom + 4, window.innerHeight - paletteHeight - viewportGap);
+        const left = Math.max(
+          viewportGap,
+          Math.min(rect.left, window.innerWidth - 360 - viewportGap),
+        );
+        setCommandPalettePosition({
+          top: Math.max(viewportGap, top),
+          left,
+        });
       }
       setCommandPaletteOpen(true);
     } else {
       setCommandPaletteOpen(false);
     }
+  };
+
+  const navigateInputHistory = (
+    direction: -1 | 1,
+    textarea: HTMLTextAreaElement,
+  ): boolean => {
+    const history = messages
+      .filter((message) => message.role === 'user' && message.content.trim())
+      .map((message) => message.content);
+    if (history.length === 0 || (direction === 1 && inputHistoryIndex === null)) {
+      return false;
+    }
+
+    let nextIndex: number | null;
+    if (direction === -1) {
+      if (inputHistoryIndex === null) {
+        inputHistoryDraftRef.current = input;
+        nextIndex = history.length - 1;
+      } else {
+        nextIndex = Math.max(0, inputHistoryIndex - 1);
+      }
+    } else {
+      const currentIndex = inputHistoryIndex;
+      nextIndex = currentIndex !== null && currentIndex < history.length - 1
+        ? currentIndex + 1
+        : null;
+    }
+
+    const nextValue = nextIndex === null
+      ? inputHistoryDraftRef.current
+      : history[nextIndex] ?? '';
+    setInputHistoryIndex(nextIndex);
+    setInput(nextValue);
+    requestAnimationFrame(() => {
+      textarea.style.height = 'auto';
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+      textarea.setSelectionRange(nextValue.length, nextValue.length);
+    });
+    return true;
   };
 
   const insertSnippet = (code: string) => {
@@ -540,16 +995,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
   };
 
   /** Handle command palette selection */
-  const handleCommandSelect = (command: { insertText?: string; action?: () => void }) => {
+  const handleCommandSelect = (command: { id?: string; insertText?: string; action?: () => void }) => {
+    setInput((prev) => prev.replace(/\/\w*$/, command.insertText ?? ''));
+    setCommandPaletteOpen(false);
     if (command.action) {
       command.action();
     }
-    if (command.insertText !== undefined) {
-      // Replace the /query with the insertText
-      setInput((prev) => prev.replace(/\/\w*$/, command.insertText || ''));
-    }
-    setCommandPaletteOpen(false);
-    setTimeout(() => inputRef.current?.focus(), 0);
+    setTimeout(() => {
+      if (command.id === 'search') {
+        globalSearchInputRef.current?.focus();
+        return;
+      }
+      inputRef.current?.focus();
+    }, 0);
   };
 
   /** Build default commands with current app actions */
@@ -557,13 +1015,39 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     onSearch: () => { setGlobalSearchQuery(''); setSidebarOpen(true); },
     onReminder: () => { setReminderOpen(true); },
     onVoice: () => { toggleVoiceInput(); },
-    onExport: () => { /* no current session id — handled via insertText */ },
+    onExport: () => {
+      if (!currentSessionId) {
+        addNotification({ type: 'info', title: '导出会话', message: '请先发送消息创建会话' });
+        return;
+      }
+      setSidebarOpen(true);
+      setTimeout(() => setSessionDropdownId(currentSessionId), 0);
+    },
     onNewChat: () => { startNewChat(); },
     onBookmarks: () => { setShowStarred(true); setSidebarOpen(true); },
     onArchive: () => { setShowArchived(true); setSidebarOpen(true); },
     onCalculator: () => { setCalcOpen(true); },
-    onPromptTemplate: undefined,
+    onPromptTemplate: () => { setTemplatePickerOpen(true); },
   });
+
+  /** 把已发现的 Skill 转成面板项：选中后把末尾 /query 替换为 /<dirName> + 空格，便于继续输入参数 */
+  const skillCommands: Array<{
+    id: string;
+    name: string;
+    description: string;
+    icon: React.ReactNode;
+    insertText: string;
+    group: 'skill';
+  }> = availableSkills.map((s) => ({
+    id: `skill:${s.dirName || s.id}`,
+    name: `/${s.dirName || s.id}`,
+    description: s.description || s.name,
+    icon: <Wand2 size={13} />,
+    insertText: `/${s.dirName || s.id} `,
+    group: 'skill',
+  }));
+
+  const allCommands = [...defaultCommands, ...skillCommands];
 
   /** 将附带的文档文件上传到沙箱 文档/对话上传/，返回沙箱路径列表（失败则跳过该个） */
   const uploadAttachedFilesToSandbox = useCallback(async (files: { name: string; file: File }[]): Promise<string[]> => {
@@ -584,22 +1068,21 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     return paths;
   }, []);
 
-  /** 将附带的图片上传到沙箱 图片/对话上传/，返回沙箱路径列表（失败则跳过该张） */
+  /** 将附带的图片上传到沙箱 图片/对话上传/，返回沙箱路径列表 */
   const uploadAttachedImagesToSandbox = useCallback(async (dataUrls: string[]): Promise<string[]> => {
     const ts = Date.now();
     const paths: string[] = [];
+    let total = 0;
     for (let i = 0; i < dataUrls.length; i++) {
       const dataUrl = dataUrls[i]!;
-      try {
-        const blob = await imageUrlToBlob(dataUrl);
-        const ext = getImageExtension(dataUrl, blob);
-        const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1]! : await blobToBase64(blob);
-        const path = `图片/对话上传/${ts}-${i + 1}${ext}`;
-        await api.writeFileBinary(path, base64);
-        paths.push(path);
-      } catch {
-        /* 单张失败跳过 */
-      }
+      const blob = await imageUrlToBlob(dataUrl);
+      total += blob.size;
+      if (blob.size > 5 * 1024 * 1024 || total > 10 * 1024 * 1024) throw new Error('每张图片最多5 MiB，本轮图片合计最多10 MiB');
+      const ext = getImageExtension(dataUrl, blob);
+      const base64 = dataUrl.includes(',') ? dataUrl.split(',')[1]! : await blobToBase64(blob);
+      const path = `图片/对话上传/${ts}-${i + 1}${ext}`;
+      await api.writeFileBinary(path, base64);
+      paths.push(path);
     }
     return paths;
   }, []);
@@ -609,7 +1092,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     const hasText = text.length > 0;
     const hasImages = !overrideText && attachedImages.length > 0;
     const hasFiles = !overrideText && attachedFiles.length > 0;
-    if ((!hasText && !hasImages && !hasFiles) || isLoading) return;
+    if ((!hasText && !hasImages && !hasFiles) || isLoading || isSessionLoading || chatRun.isRunning || chatRun.restoring) return;
+    const sendEpoch = ++sendEpochRef.current;
+    activeRunIdRef.current = null;
+    setIsLoading(true);
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
 
     const parts: string[] = [];
     if (hasImages) parts.push('图片');
@@ -623,16 +1111,22 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     if (hasImages) {
       try {
         referenceImagePaths = await uploadAttachedImagesToSandbox(attachedImages);
-      } catch {
-        /* 上传失败继续发消息，仅无参考图 */
+      } catch (error) {
+        setIsLoading(false);
+        addNotification({ type: 'error', title: '图片尚未发送', message: error instanceof Error ? error.message : '图片上传失败，请重试' });
+        return;
       }
     }
-    if (hasFiles) {
+    if (hasFiles && !signal.aborted) {
       try {
         attachedFilePaths = await uploadAttachedFilesToSandbox(attachedFiles);
       } catch {
         /* 上传失败继续发消息，仅无附加文件路径 */
       }
+    }
+    if (signal.aborted) {
+      setIsLoading(false);
+      return;
     }
 
     const userMsg: Message = {
@@ -649,13 +1143,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     setMessages((prev) => [...prev, userMsg]);
     if (!overrideText) {
       setInput('');
+      setInputHistoryIndex(null);
+      inputHistoryDraftRef.current = '';
       setAttachedImages([]);
       setAttachedFiles([]);
     }
     if (inputRef.current) inputRef.current.style.height = 'auto';
-    setIsLoading(true);
-    abortControllerRef.current = new AbortController();
-    const signal = abortControllerRef.current.signal;
     // D.2: 先拿到会话 id，后续所有分支统一持久化到云端
     const llmConfig = useLLMConfigStore.getState().llmConfig;
     const chatSel = llmConfig?.defaultByModality?.chat;
@@ -664,13 +1157,16 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     const chatModelId = chatSel?.modelId ?? '__custom__';
     const chatBaseUrl = chatProvider?.baseUrl ?? '';
     let sid: string = '';
+    let shouldGenerateSessionTitle = false;
     try {
       const res = await ensureSessionId();
       sid = res.id;
-      if (res.isNew) {
-        api.generateSessionTitle(sid, chatProviderId ?? '', chatModelId, chatBaseUrl).catch(() => {});
+      shouldGenerateSessionTitle = res.isNew;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        setIsLoading(false);
+        return;
       }
-    } catch {
       setChatSyncFailed(true);
     }
 
@@ -679,7 +1175,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       files: attachedFiles.map((f, i) => ({ name: f.name, path: attachedFilePaths[i] ?? '' })),
     };
     /** 将本轮用户+助手消息写入当前会话（云端持久化） */
-    const persistRound = (assistantContent: string, images?: string[]) => {
+    const persistRound = (assistantContent: string, images?: string[], toolCalls?: ToolCallRecord[]) => {
       if (!sid) return;
       api
         .addChatMessage(
@@ -690,7 +1186,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           userAttachmentsForPersist.images.length ? userAttachmentsForPersist.images : undefined,
           userAttachmentsForPersist.files.length ? userAttachmentsForPersist.files : undefined,
         )
-        .then(() => api.addChatMessage(sid, 'assistant', assistantContent, undefined, images))
+        .then(() => Promise.all([
+          api.addChatMessage(sid, 'assistant', assistantContent, toolCalls, images),
+          shouldGenerateSessionTitle
+            ? api.generateSessionTitle(sid, chatProviderId ?? '', chatModelId, chatBaseUrl).catch(() => ({ title: '' }))
+            : Promise.resolve({ title: '' }),
+        ]))
         .then(() => {
           setChatSyncFailed(false);
           refreshSessions();
@@ -709,7 +1210,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       buildComputerContext({
         windows: desktopState.windows,
         activeWindowId: desktopState.activeWindowId,
-        executionMode: configState.executionMode,
         tasks: useTaskStore.getState().tasks,
         taskbarPinned: configState.taskbarPinned,
         notifications: connectionState.notifications,
@@ -759,6 +1259,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     } catch {
       /* 召回失败则继续无记忆对话 */
     }
+    if(signal.aborted){setIsLoading(false);return;}
 
     try {
       const sel = llmConfig?.defaultByModality?.chat;
@@ -775,12 +1276,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         return;
       }
 
-      const { intent, suggestedPath } = await api.classifyWritingIntent({
+      const classification = await api.classifyWritingIntent({
         userMessage: text,
         hasOpenAiDocument,
         providerId,
         modelId: sel?.modelId ?? '__custom__',
-      });
+      },{signal});
+      if(signal.aborted){setIsLoading(false);return;}
+      // “保存到具体文件”必须走主 Agent 的 file.write 工具并真正落盘；
+      // 旧编辑器助手只把内容写入临时编辑器状态，且在核心模式下不会挂载。
+      const intent =
+        classification.intent === 'generate_and_save_to_editor'
+          ? 'normal_chat'
+          : classification.intent;
 
       // 图片生成：仅当用户未附带参考图时走直接文生图；附带了图片则必须走 Agent 流程，以便主脑使用 llm.edit_image 等工具基于参考图修改
       if (intent === 'generate_image' && referenceImagePaths.length === 0) {
@@ -903,7 +1411,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 toolCalls: toolCallRecords.length ? toolCallRecords : undefined,
               },
             ]);
-            persistRound(replyContent);
+            persistRound(replyContent, undefined, toolCallRecords);
           } else {
             log.addLog({
               level: 'warning',
@@ -924,16 +1432,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               },
             ]);
             persistRound(replyContent);
-          }
-          const replyForMemory = (result?.content ?? '').trim() || '已写入编辑器。';
-          if (replyForMemory) {
-            api.memoryConsiderCapture({
-              userMessage: text,
-              assistantReply: replyForMemory,
-              providerId,
-              modelId: sel?.modelId ?? '__custom__',
-              vectorConfig,
-            }).catch(() => {});
           }
         } catch (err: any) {
           const msg = err?.message ?? String(err);
@@ -957,59 +1455,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         return;
       }
 
-      // 1) 生成内容并写入编辑器：由主 AI 驱动「编辑器 Agent」，实时流式输出到编辑器
-      if (intent === 'generate_and_save_to_editor' && suggestedPath) {
-        const editorWindowId = openApp('text-editor', { aiDocument: true, suggestedPath });
-        const fileName = suggestedPath.split('/').pop() || suggestedPath;
-        setWindowTitle(editorWindowId, `文本编辑器 — ${fileName} (编辑器助手生成中)`);
-        aiDoc.init(editorWindowId, suggestedPath);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `msg-${Date.now()}`,
-            role: 'assistant',
-            content: '正在让编辑器助手根据你的要求撰写内容，并实时输出到编辑器中…',
-            timestamp: Date.now(),
-          },
-        ]);
-        try {
-          await api.editorAgentStream({
-            windowId: editorWindowId,
-            instruction: text,
-            providerId,
-            modelId: sel?.modelId ?? '__custom__',
-          });
-          const replyContent = `编辑器助手已开始写入「${fileName}」，请在编辑器中查看实时输出，确认后点击保存。`;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `msg-${Date.now()}`,
-              role: 'assistant',
-              content: replyContent,
-              timestamp: Date.now(),
-            },
-          ]);
-          persistRound(replyContent);
-        } catch (err: any) {
-          aiDoc.setStreaming(editorWindowId, false);
-          setWindowTitle(editorWindowId, `文本编辑器 — ${fileName} ●`);
-          const replyContent = `启动编辑器助手失败：${err.message}`;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `msg-${Date.now()}`,
-              role: 'assistant',
-              content: replyContent,
-              timestamp: Date.now(),
-            },
-          ]);
-          persistRound(replyContent);
-        }
-        setIsLoading(false);
-        return;
-      }
-
-      // 2) 后续对话：修改当前 AI 文档内容（主脑 edit_current_document 场景）
+      // 后续对话：修改当前 AI 文档内容（主脑 edit_current_document 场景）
       if (intent === 'edit_current_document' && activeAiWindowId && activeAiContent != null) {
           const editMessages = [
             { role: 'user' as const, content: `【当前文档内容】\n${activeAiContent}\n\n【用户要求】\n${text}` },
@@ -1053,56 +1499,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           return;
       }
 
-      if (intent === 'create_task') {
-        // Submit as a real task to backend（带上 LLM 配置，供任务内 llm.generate 等工具使用）
-        const domain = detectDomain(text);
-        const llmState = useLLMConfigStore.getState();
-        const cfg = llmState.llmConfig;
-        const sel = cfg?.defaultByModality?.chat;
-        const providerId = sel?.providerId ?? cfg?.providers?.[0]?.id;
-        const provider = cfg?.providers?.find((p: { id: string }) => p.id === providerId);
-        const taskLlmConfig =
-          providerId && provider
-            ? {
-                providerId,
-                modelId: sel?.modelId ?? '__custom__',
-                baseUrl: provider?.baseUrl ?? undefined,
-                apiKey: '', // API Key 由服务器端统一管理
-              }
-            : undefined;
-        const chatContext = messages
-          .slice(-20)
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' }));
-        const task = await api.createTask({
-          domain,
-          title: text.slice(0, 50),
-          description: text,
-          mode: 'auto',
-          llmConfig: taskLlmConfig,
-          chatContext: chatContext.length > 0 ? chatContext : undefined,
-        }) as any;
-
-        // 写入桌面 store，后续 task_complete 通过 WebSocket 更新同一任务，对话里「查看任务详情」状态会从旋转变为已完成
-        useTaskStore.getState().upsertTask(task.id, task);
-
-        const domainLabel = { chat: '聊天', coding: '编程', agent: '智能体', office: '办公' }[domain];
-
-        const reply: Message = {
-          id: `msg-${Date.now()}`,
-          role: 'assistant',
-          content: `任务已创建 ✓\n\n**${text}**\n\n• 域: ${domainLabel}\n• 步骤数: ${task.steps?.length || 0}\n• 状态: ${task.status === 'awaiting_approval' ? '⏳ 等待审批' : '⚡ 执行中'}\n\n${
-            task.status === 'awaiting_approval'
-              ? '请在任务时间线中确认后继续执行。'
-              : 'AI 正在执行，你可以在任务时间线中查看进度。'
-          }`,
-          timestamp: Date.now(),
-          taskId: task.id,
-          taskStatus: task.status,
-        };
-        setMessages((prev) => [...prev, reply]);
-        persistRound(reply.content);
-      } else {
+      {
         // 普通对话：走设置中的大模型（P2）
         const llmConfig = useLLMConfigStore.getState().llmConfig;
         const sel = llmConfig.defaultByModality?.chat;
@@ -1131,14 +1528,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               toolCalls: [],
             },
           ]);
+          const streamedToolCalls: ToolCallRecord[] = [];
           try {
             const chatMessages = getMessagesForChat(messages, userMsg, DEFAULT_MAX_CHAT_ROUNDS);
+            const requestId = crypto.randomUUID();
+            pendingRunRequestRef.current = sid ? { sessionId: sid, requestId } : null;
             const fullReply = await api.chatAgentStream(
               {
                 messages: chatMessages,
                 providerId,
                 modelId,
                 scene: 'normal_chat',
+                sessionId: sid || undefined,
+                requestId,
+                userMessage: { content: displayContent, images: referenceImagePaths, attachedFiles: attachedFiles.map((file, index) => ({ name: file.name, path: attachedFilePaths[index] ?? '' })) },
                 computerContext: computerContextStr,
                 taskSummary: taskSummaryStr,
                 memory: memoryStr,
@@ -1148,6 +1551,28 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 loadedToolNames: loadedToolNamesRef.current.length > 0 ? loadedToolNamesRef.current : undefined,
               },
               (ev) => {
+                if (ev.type === 'tool_start' && ev.id && ev.toolName) {
+                  const existing = streamedToolCalls.findIndex((toolCall) => toolCall.id === ev.id);
+                  const nextToolCall: ToolCallRecord = {
+                    id: ev.id,
+                    toolName: ev.toolName,
+                    status: 'running',
+                    input: ev.input as Record<string, unknown>,
+                  };
+                  if (existing >= 0) streamedToolCalls[existing] = nextToolCall;
+                  else streamedToolCalls.push(nextToolCall);
+                } else if (ev.type === 'tool_complete' && ev.id) {
+                  const existing = streamedToolCalls.findIndex((toolCall) => toolCall.id === ev.id);
+                  if (existing >= 0) {
+                    streamedToolCalls[existing] = {
+                      ...streamedToolCalls[existing],
+                      status: ev.error ? 'failed' : 'completed',
+                      output: ev.output,
+                      error: ev.error,
+                      duration: ev.duration,
+                    };
+                  }
+                }
                 setMessages((prev) => {
                   const idx = prev.findIndex((m) => m.id === replyId);
                   if (idx < 0) return prev;
@@ -1183,6 +1608,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               },
               {
                 signal,
+                onRunStarted: (run) => {
+                  if (sendEpoch !== sendEpochRef.current) return;
+                  activeRunIdRef.current = run.runId;
+                  chatRun.track(run);
+                  setMessages((previous) => previous.map((message) => message.id === replyId ? { ...message, runId: run.runId } : message));
+                },
                 onContentChunk: (chunk) => {
                   setMessages((prev) => {
                     const idx = prev.findIndex((m) => m.id === replyId);
@@ -1194,6 +1625,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 },
               },
             );
+            if (sendEpoch !== sendEpochRef.current) return;
             const content = typeof fullReply === 'string' ? fullReply : fullReply?.content ?? '';
             if (fullReply && typeof fullReply === 'object' && Array.isArray(fullReply.loadedToolNames)) {
               loadedToolNamesRef.current = fullReply.loadedToolNames;
@@ -1206,14 +1638,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               next[idx] = { ...next[idx], content: trimmed || '（无回复内容）' };
               return next;
             });
-            if (trimmed) {
-              api.memoryConsiderCapture({
-                userMessage: text,
-                assistantReply: trimmed,
-                providerId,
-                modelId,
-                vectorConfig,
-              }).catch(() => {});
+            if (trimmed && (!fullReply.status || fullReply.status === 'completed')) {
               api
                 .suggestFollowUps({
                   userMessage: text,
@@ -1234,7 +1659,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 })
                 .catch(() => {});
             }
-            persistRound(trimmed || '（无回复内容）');
+            if (fullReply.serverPersisted && fullReply.runId) {
+              void api.getChatRun(fullReply.runId).then(chatRun.accept).catch(() => {});
+            } else persistRound(trimmed || '（无回复内容）', undefined, streamedToolCalls);
           } catch (err: any) {
             if (err?.name === 'AbortError') {
               setMessages((prev) => {
@@ -1244,7 +1671,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 next[idx] = { ...next[idx], content: '（已停止）' };
                 return next;
               });
-              persistRound('（已停止）');
+              if (!sid) persistRound('（已停止）');
+              else void chatRun.refresh();
             } else {
               const { content: errContent, quotaError } = formatChatError(err);
               const fallback = quotaError ? errContent : `对话请求失败：${errContent}\n\n请检查设置中的 Base URL、模型与 API Key 是否正确。`;
@@ -1255,7 +1683,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 next[idx] = { ...next[idx], content: fallback, quotaError };
                 return next;
               });
-              persistRound(fallback);
+              if (!sid) persistRound(fallback);
+              else void chatRun.refresh();
             }
           }
         }
@@ -1277,9 +1706,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         persistRound(fallback);
       }
     } finally {
-      setIsLoading(false);
+      if (sendEpoch === sendEpochRef.current) {
+        pendingRunRequestRef.current = null;
+        setIsLoading(false);
+      }
     }
-  }, [messages, input, attachedImages, attachedFiles, isLoading, addNotification, ensureSessionId, refreshSessions, selectedAgentId, uploadAttachedImagesToSandbox, uploadAttachedFilesToSandbox, formatChatError]);
+  }, [messages, input, attachedImages, attachedFiles, isLoading, isSessionLoading, addNotification, ensureSessionId, refreshSessions, selectedAgentId, uploadAttachedImagesToSandbox, uploadAttachedFilesToSandbox, formatChatError, chatRun.isRunning, chatRun.restoring, chatRun.track, chatRun.accept, chatRun.refresh]);
 
   /** 复制消息正文到剪贴板 */
   const copyMessage = useCallback((msg: Message) => {
@@ -1341,7 +1773,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
   /** 编辑消息并重新生成：更新内容 → 删除后续消息 → 触发重新发送 */
   const handleEditSubmit = useCallback(async () => {
-    if (!editingMessageId || !editingContent.trim() || isLoading) return;
+    if (!editingMessageId || !editingContent.trim() || isLoading || isSessionLoading) return;
     const trimmed = editingContent.trim();
     const idx = messages.findIndex((m) => m.id === editingMessageId);
     if (idx < 0) return;
@@ -1359,11 +1791,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     setEditingContent('');
     // 触发重新发送
     await sendMessage(trimmed);
-  }, [editingMessageId, editingContent, messages, currentSessionId, isLoading, sendMessage]);
+  }, [editingMessageId, editingContent, messages, currentSessionId, isLoading, isSessionLoading, sendMessage]);
 
   /** 重试：删除当前 AI 消息并用上一条用户消息重新请求 */
   const retryAssistantMessage = useCallback(async (assistantMsg: Message) => {
-    if (assistantMsg.role !== 'assistant' || isLoading) return;
+    if (assistantMsg.role !== 'assistant' || isLoading || isSessionLoading || chatRun.isRunning || chatRun.restoring) return;
+    const sendEpoch = ++sendEpochRef.current;
+    activeRunIdRef.current = null;
+    pendingRunRequestRef.current = null;
     const idx = messages.findIndex((m) => m.id === assistantMsg.id);
     if (idx <= 0) return;
     const prevMsg = messages[idx - 1];
@@ -1384,7 +1819,6 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       buildComputerContext({
         windows: desktopState.windows,
         activeWindowId: desktopState.activeWindowId,
-        executionMode: configState.executionMode,
         tasks: useTaskStore.getState().tasks,
         taskbarPinned: configState.taskbarPinned,
         notifications: connectionState.notifications,
@@ -1425,12 +1859,17 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     }
     try {
       const chatMessages = getMessagesForChat(messagesAfterRemoval, prevMsg, DEFAULT_MAX_CHAT_ROUNDS);
+      const requestId = crypto.randomUUID();
+      pendingRunRequestRef.current = currentSessionId ? { sessionId: currentSessionId, requestId } : null;
       const fullReply = await api.chatAgentStream(
         {
           messages: chatMessages,
           providerId,
           modelId: sel?.modelId ?? '__custom__',
           scene: 'normal_chat',
+          sessionId: currentSessionId ?? undefined,
+          requestId,
+          userMessage: { content: prevMsg.content, images: prevMsg.images, attachedFiles: prevMsg.attachedFiles },
           computerContext: computerContextStr,
           taskSummary: taskSummaryStr,
           memory: memoryStr,
@@ -1457,6 +1896,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         },
         {
           signal,
+          onRunStarted: (run) => {
+            if (sendEpoch !== sendEpochRef.current) return;
+            activeRunIdRef.current = run.runId;
+            chatRun.track(run);
+            setMessages((previous) => previous.map((message) => message.id === replyId ? { ...message, runId: run.runId } : message));
+          },
           onContentChunk: (chunk) => {
             setMessages((prev) => {
               const i = prev.findIndex((m) => m.id === replyId);
@@ -1468,6 +1913,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           },
         },
       );
+      if (sendEpoch !== sendEpochRef.current) return;
       const content = typeof fullReply === 'string' ? fullReply : fullReply?.content ?? '';
       if (fullReply && typeof fullReply === 'object' && Array.isArray(fullReply.loadedToolNames)) {
         loadedToolNamesRef.current = fullReply.loadedToolNames;
@@ -1480,14 +1926,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         next[i] = { ...next[i], content: trimmed || '（无回复内容）' };
         return next;
       });
-      if (trimmed) {
-        api.memoryConsiderCapture({
-          userMessage: prevMsg.content,
-          assistantReply: trimmed,
-          providerId,
-          modelId: sel?.modelId ?? '__custom__',
-          vectorConfig,
-        }).catch(() => {});
+      if (trimmed && (!fullReply.status || fullReply.status === 'completed')) {
         api
           .suggestFollowUps({
             userMessage: prevMsg.content,
@@ -1509,6 +1948,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           .catch(() => {});
       }
     } catch (err: any) {
+      if (currentSessionId) void chatRun.refresh();
       if (err?.name === 'AbortError') {
         setMessages((prev) => {
           const i = prev.findIndex((m) => m.id === replyId);
@@ -1529,9 +1969,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         });
       }
     } finally {
-      setIsLoading(false);
+      if (sendEpoch === sendEpochRef.current) {
+        pendingRunRequestRef.current = null;
+        setIsLoading(false);
+      }
     }
-  }, [messages, isLoading, addNotification, ensureSessionId, refreshSessions, selectedAgentId, formatChatError]);
+  }, [messages, isLoading, isSessionLoading, addNotification, ensureSessionId, refreshSessions, selectedAgentId, formatChatError, currentSessionId, chatRun.isRunning, chatRun.restoring, chatRun.track, chatRun.refresh]);
+
+  const progressPanel=(<ChatRunPanel run={chatRun.run} error={chatRun.error} onStop={() => void chatRun.stop()} onResume={() => void chatRun.resume()} onRefresh={chatRun.refresh} onRunChanged={chatRun.follow} sessionId={currentSessionId} onOpen={(artifact) => openDeliverable({ id: artifact.path, kind: getDeliverableKind(artifact.path), name: artifact.name, path: artifact.path, sourceMessageId: '', source: 'tool', createdAt: Date.now(), remote: false })} />);
 
   // Available models for comparison
   const availableModelsForCompare = (() => {
@@ -1546,83 +1991,91 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
     return allModels.slice(0, 20);
   })();
 
-  // Quick action suggestions (i18n)
-  const quickActions = [
-    { labelKey: 'chat.exampleOrganizeEmail', textKey: 'chat.exampleOrganizeEmail' },
-    { labelKey: 'chat.exampleWriteCode', textKey: 'chat.exampleWriteCode' },
-    { labelKey: 'chat.exampleWeeklyReport', textKey: 'chat.exampleWeeklyReport' },
-    { labelKey: 'chat.exampleSummarizeDoc', textKey: 'chat.exampleSummarizeDoc' },
-    { labelKey: 'chat.exampleExplainCode', textKey: 'chat.exampleExplainCode' },
-    { labelKey: 'chat.exampleSearchWeb', textKey: 'chat.exampleSearchWeb' },
-  ];
-
   return (
-    <div className="h-full flex">
+    <div className="h-full flex chat-theme relative" data-simple={!showAdvancedTools}>
       {/* 会话列表侧边栏 */}
       {sidebarOpen && (
-        <div className="w-full sm:w-56 shrink-0 border-r border-white/5 bg-white/[0.02] flex flex-col absolute sm:relative inset-x-0 top-12 sm:top-0 bottom-0 sm:bottom-auto z-20 sm:z-auto">
-          <button
-            className="flex items-center gap-2 px-3 py-2.5 m-2 rounded-lg bg-desktop-highlight/20 hover:bg-desktop-highlight/30 text-desktop-text text-xs transition-colors"
-            onClick={startNewChat}
-          >
-            <MessageSquarePlus size={14} />
-            新对话
-          </button>
-          <button
-            className="flex items-center gap-2 px-3 py-1.5 mx-2 rounded-lg hover:bg-white/10 text-desktop-muted text-xs transition-colors"
-            onClick={() => setStatsOpen(true)}
-            title="会话统计"
-          >
-            <BarChart2 size={13} />
-          </button>
-          <button
-            className={`flex items-center gap-2 px-3 py-1.5 mx-2 rounded-lg text-xs transition-colors ${showStarred ? 'bg-desktop-accent/20 text-desktop-accent' : 'hover:bg-white/10 text-desktop-muted'}`}
-            onClick={() => setShowStarred((v) => !v)}
-            title="收藏消息"
-          >
-            <Star size={13} />
-            {allBookmarks.length > 0 && (
-              <span className="text-[10px] bg-desktop-accent/30 px-1 rounded-full">{allBookmarks.length}</span>
-            )}
-          </button>
-          <button
-            className={`flex items-center gap-2 px-3 py-1.5 mx-2 rounded-lg text-xs transition-colors ${showArchived ? 'bg-yellow-500/20 text-yellow-400' : 'hover:bg-white/10 text-desktop-muted'}`}
-            onClick={() => setShowArchived((v) => !v)}
-            title="已归档会话"
-          >
-            <Archive size={13} />
-            {archivedSessions.length > 0 && (
-              <span className="text-[10px] bg-yellow-500/30 px-1 rounded-full">{archivedSessions.length}</span>
-            )}
-          </button>
-          <div className="px-2 mb-1">
+        <div className="w-full sm:w-64 sm:h-full shrink-0 border-r border-white/[0.07] bg-gradient-to-b from-[#10131A]/98 to-[#090B10]/98 backdrop-blur-xl flex flex-col absolute sm:relative inset-x-0 top-12 sm:top-0 bottom-0 sm:bottom-auto z-30">
+          <div className="px-3 pt-3 pb-2 border-b border-white/[0.06]">
+            <div className="flex items-center justify-between mb-2.5">
+              <div>
+                <div className="text-xs font-semibold text-gray-100">会话</div>
+                <div className="text-[9px] text-gray-500 mt-0.5">{sessions.length} 个对话</div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  className="relative w-7 h-7 rounded-lg flex items-center justify-center text-gray-500 hover:text-gray-200 hover:bg-white/[0.06] transition-colors"
+                  onClick={() => setStatsOpen(true)}
+                  title="会话统计"
+                >
+                  <BarChart2 size={13} />
+                </button>
+                <button
+                  type="button"
+                  className={`relative w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${showStarred ? 'bg-amber-500/15 text-amber-300' : 'text-gray-500 hover:text-gray-200 hover:bg-white/[0.06]'}`}
+                  onClick={() => setShowStarred((value) => !value)}
+                  title="收藏消息"
+                >
+                  <Star size={13} />
+                  {allBookmarks.length > 0 && (
+                    <span className="absolute -top-0.5 -right-0.5 min-w-3 h-3 px-0.5 rounded-full bg-amber-400 text-[8px] leading-3 text-[#17120A] text-center font-bold">
+                      {allBookmarks.length > 9 ? '9+' : allBookmarks.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className={`relative w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${showArchived ? 'bg-amber-500/15 text-amber-300' : 'text-gray-500 hover:text-gray-200 hover:bg-white/[0.06]'}`}
+                  onClick={() => setShowArchived((value) => !value)}
+                  title="已归档会话"
+                >
+                  <Archive size={13} />
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-gradient-to-r from-amber-500/25 to-orange-500/15 border border-amber-400/15 hover:border-amber-400/30 hover:from-amber-500/30 hover:to-orange-500/20 text-amber-50 text-xs font-medium shadow-[0_8px_30px_rgba(245,158,11,0.08)] transition-all"
+              onClick={startNewChat}
+            >
+              <MessageSquarePlus size={14} />
+              开始新对话
+            </button>
+          </div>
+          <div className="px-3 pt-2.5 pb-1 space-y-1.5">
+            <div className="relative">
+              <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
             <input
               type="text"
               placeholder="搜索会话..."
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none"
+                className="w-full bg-white/[0.035] border border-white/[0.06] rounded-lg pl-7 pr-2 py-2 text-[11px] text-gray-200 placeholder:text-gray-600 outline-none focus:border-amber-500/30 focus:bg-white/[0.05] transition-colors"
               value={sessionSearch}
               onChange={(e) => setSessionSearch(e.target.value)}
             />
-          </div>
-          <div className="px-2 mb-1">
+            </div>
+            <div className="relative">
+              <Sparkles size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-600 pointer-events-none" />
             <input
+              ref={globalSearchInputRef}
               type="text"
-              placeholder="搜索所有消息... 🔍"
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none focus:border-desktop-accent/40"
+                placeholder="搜索全部消息内容..."
+                className="w-full bg-white/[0.025] border border-white/[0.05] rounded-lg pl-7 pr-2 py-2 text-[11px] text-gray-200 placeholder:text-gray-600 outline-none focus:border-amber-500/30 focus:bg-white/[0.05] transition-colors"
               value={globalSearchQuery}
               onChange={(e) => setGlobalSearchQuery(e.target.value)}
             />
+            </div>
           </div>
           {globalSearchQuery.trim() && (
             <div className="px-2 mb-1 max-h-48 overflow-auto">
               {globalSearchResults.length === 0 ? (
-                <div className="text-[10px] text-desktop-muted/60 px-3 py-2">无结果</div>
+                <div className="text-[10px] text-gray-400/60 px-3 py-2">无结果</div>
               ) : (
                 globalSearchResults.map((r) => (
                   <button
                     key={r.id}
                     type="button"
-                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-desktop-muted text-[10px] leading-snug mb-0.5"
+                    className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/[0.03] text-gray-400 text-[10px] leading-snug mb-0.5"
                     onClick={() => {
                       if (currentSessionId !== r.sessionId) selectSession(r.sessionId);
                       setTimeout(() => {
@@ -1632,7 +2085,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       setGlobalSearchQuery('');
                     }}
                   >
-                    <div className="text-[9px] text-desktop-accent/70 truncate mb-0.5">
+                    <div className="text-[9px] text-amber-400/70 truncate mb-0.5">
                       {r.sessionTitle || '会话'} · {r.role === 'user' ? '用户' : '助手'}
                     </div>
                     <div className="truncate opacity-80">{r.snippet}</div>
@@ -1654,8 +2107,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     onClick={() => setSessionSearch((prev) => prev === `#${tag}` ? '' : `#${tag}`)}
                     className={`text-[10px] px-1.5 py-0.5 rounded-full border transition-colors ${
                       sessionSearch === `#${tag}`
-                        ? 'bg-desktop-accent/30 border-desktop-accent text-desktop-accent'
-                        : 'bg-white/5 border-white/10 text-desktop-muted hover:border-white/20'
+                        ? 'bg-amber-500/30 border-amber-500/30 text-amber-400'
+                        : 'bg-[#161616] border-white/5 text-gray-400 hover:border-gray-500'
                     }`}
                   >
                     #{tag}
@@ -1666,11 +2119,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
           })()}
           {showStarred && (
             <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
-              <div className="text-[10px] text-desktop-muted px-3 py-1 flex items-center gap-1">
+              <div className="text-[10px] text-gray-400 px-3 py-1 flex items-center gap-1">
                 <Star size={10} /> 全部收藏 ({allBookmarks.length})
               </div>
               {allBookmarks.length === 0 ? (
-                <div className="text-[10px] text-desktop-muted/60 px-3 py-2">暂无收藏</div>
+                <div className="text-[10px] text-gray-400/60 px-3 py-2">暂无收藏</div>
               ) : (
                 allBookmarks.map((msg) => {
                   const session = sessions.find((s) => s.id === msg.sessionId);
@@ -1679,7 +2132,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     <button
                       key={msg.id}
                       type="button"
-                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-desktop-muted text-[10px] leading-snug"
+                      className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-gray-400 text-[10px] leading-snug"
                       onClick={() => {
                         if (isCurrentSession) {
                           document.getElementById(`msg-${msg.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -1689,14 +2142,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                         }
                       }}
                     >
-                      <div className="flex items-center gap-1 text-desktop-accent mb-0.5">
+                      <div className="flex items-center gap-1 text-amber-400 mb-0.5">
                         <Star size={9} />
-                        <span className="text-desktop-muted/70 truncate flex-1">
+                        <span className="text-gray-400/70 truncate flex-1">
                           {session?.title?.trim() || '会话'} {isCurrentSession ? '' : '→'}
                         </span>
                       </div>
                       <div className="truncate opacity-80">{msg.content?.slice(0, 60)}</div>
-                      <div className="text-[9px] text-desktop-muted/50 mt-0.5">
+                      <div className="text-[9px] text-gray-400/50 mt-0.5">
                         {new Date(msg.createdAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                       </div>
                     </button>
@@ -1711,7 +2164,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 <Archive size={10} /> 已归档会话 ({archivedSessions.length})
               </div>
               {archivedSessions.length === 0 ? (
-                <div className="text-[10px] text-desktop-muted/60 px-3 py-2">暂无归档会话</div>
+                <div className="text-[10px] text-gray-400/60 px-3 py-2">暂无归档会话</div>
               ) : (
                 archivedSessions.map((s) => (
                   <div
@@ -1721,7 +2174,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     <button
                       type="button"
                       className={`flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg text-xs transition-colors truncate flex flex-col gap-0.5 ${
-                        currentSessionId === s.id ? 'text-yellow-400' : 'text-desktop-muted hover:text-desktop-text'
+                        currentSessionId === s.id ? 'text-yellow-400' : 'text-gray-400 hover:text-gray-200'
                       }`}
                       onClick={() => selectSession(s.id)}
                     >
@@ -1736,7 +2189,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     </button>
                     <button
                       type="button"
-                      className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-green-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="shrink-0 p-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-green-400 opacity-0 group-hover:opacity-100 transition-opacity"
                       title="取消归档"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1750,248 +2203,290 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
             </div>
           )}
-          <div className="flex-1 overflow-auto px-2 pb-2 space-y-0.5">
-            {filteredSessions.map((s) => (
+          {!showStarred && !showArchived && (
+            <div className="flex-1 overflow-auto px-2.5 pb-3">
+            {groupedSessions.length === 0 && (
+              <div className="mx-1 mt-6 rounded-xl border border-dashed border-white/[0.08] px-4 py-6 text-center">
+                <MessageSquare size={20} className="mx-auto mb-2 text-gray-600" />
+                <div className="text-[11px] text-gray-400">没有找到相关会话</div>
+                <div className="mt-1 text-[9px] text-gray-600">换个关键词，或开始一段新对话</div>
+              </div>
+            )}
+            {groupedSessions.map((sessionGroup) => (
+              <section key={sessionGroup.label} className="mb-2.5">
+                <div className="sticky top-0 z-10 flex items-center justify-between bg-[#0B0D12]/95 px-1.5 py-1.5 backdrop-blur">
+                  <span className="text-[9px] font-medium uppercase tracking-[0.12em] text-gray-600">
+                    {sessionGroup.label}
+                  </span>
+                  <span className="text-[9px] text-gray-700">{sessionGroup.sessions.length}</span>
+                </div>
+                <div className="space-y-1">
+                  {sessionGroup.sessions.map((s) => (
               <div
                 key={s.id}
-                className={`group flex items-center gap-0.5 rounded-lg ${
-                  currentSessionId === s.id ? 'bg-desktop-accent/30' : 'hover:bg-white/5'
+                className={`group relative flex items-center rounded-xl border transition-all ${
+                  currentSessionId === s.id
+                    ? 'border-amber-400/20 bg-gradient-to-r from-amber-500/15 to-amber-500/[0.04] shadow-[inset_2px_0_0_rgba(251,191,36,0.55)]'
+                    : 'border-transparent bg-white/[0.018] hover:border-white/[0.07] hover:bg-white/[0.045]'
                 }`}
               >
                 <button
                   type="button"
-                  className={`flex-1 min-w-0 text-left px-3 py-1.5 rounded-lg text-xs transition-colors truncate flex flex-col gap-0.5 ${
-                    currentSessionId === s.id ? 'text-desktop-text' : 'text-desktop-muted hover:text-desktop-text'
-                  }`}
+                  className="flex min-w-0 flex-1 items-start gap-2.5 px-2.5 py-2 text-left"
                   onClick={() => selectSession(s.id)}
                 >
-                  <span className="truncate">{s.title?.trim() || '新对话'}</span>
-                  {s.tags.length > 0 && (
-                    <span className="flex gap-0.5 flex-wrap">
-                      {s.tags.slice(0, 3).map((tag) => (
-                        <span key={tag} className="text-[9px] px-1 py-0 rounded-full bg-desktop-accent/20 text-desktop-accent">#{tag}</span>
-                      ))}
-                      {s.tags.length > 3 && <span className="text-[9px] text-desktop-muted">+{s.tags.length - 3}</span>}
+                  <span className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${
+                    currentSessionId === s.id ? 'bg-amber-400/15 text-amber-300' : 'bg-white/[0.045] text-gray-600'
+                  }`}>
+                    {s.isPinned ? <Pin size={11} /> : <MessageSquare size={11} />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className={`flex items-center gap-1.5 text-[11px] font-medium leading-4 ${
+                      currentSessionId === s.id ? 'text-amber-100' : 'text-gray-300'
+                    }`}>
+                      <span className="truncate" title={s.title?.trim() || getSessionDisplayTitle(s)}>
+                        {getSessionDisplayTitle(s)}
+                      </span>
                     </span>
-                  )}
-                  {s.summary && (
-                    <span className="text-[9px] text-desktop-muted/60 truncate block max-w-[140px]" title={s.summary}>{s.summary}</span>
-                  )}
+                    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[9px] leading-3 text-gray-600">
+                      <span className="shrink-0">{formatSessionTime(s)}</span>
+                      {s.summary && s.title?.trim() && (
+                        <>
+                          <span className="text-gray-700">·</span>
+                          <span className="truncate" title={s.summary}>{s.summary}</span>
+                        </>
+                      )}
+                    </span>
+                    {s.tags.length > 0 && (
+                      <span className="mt-1 flex gap-1 overflow-hidden">
+                        {s.tags.slice(0, 2).map((tag) => (
+                          <span key={tag} className="max-w-[72px] truncate rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[8px] text-amber-400/80">#{tag}</span>
+                        ))}
+                        {s.tags.length > 2 && <span className="text-[8px] leading-4 text-gray-600">+{s.tags.length - 2}</span>}
+                      </span>
+                    )}
+                  </span>
                 </button>
                 <button
                   type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-text opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="重命名"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const newTitle = window.prompt('会话标题', s.title?.trim() || '新对话');
-                    if (newTitle !== null && newTitle.trim()) updateSessionTitle(s.id, newTitle.trim());
-                  }}
-                >
-                  <Pencil size={12} />
-                </button>
-                <button
-                  type="button"
-                  className={`shrink-0 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity ${
-                    s.isPinned ? 'text-desktop-accent' : 'text-desktop-muted hover:text-desktop-text hover:bg-white/10'
+                  className={`mr-1.5 shrink-0 rounded-lg p-1.5 text-gray-600 transition-all hover:bg-white/10 hover:text-gray-200 ${
+                    sessionDropdownId === s.id ? 'bg-white/10 text-gray-200' : 'opacity-0 group-hover:opacity-100 focus:opacity-100'
                   }`}
-                  title={s.isPinned ? '取消置顶' : '置顶会话'}
-                  onClick={(e) => { e.stopPropagation(); togglePin(s.id); }}
-                >
-                  <Pin size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="标签"
+                  title="更多操作"
                   onClick={(e) => {
                     e.stopPropagation();
-                    const tagInput = window.prompt('添加标签（多个用逗号分隔）', s.tags.join(', '));
-                    if (tagInput !== null) {
-                      const tags = tagInput.split(',').map((t) => t.trim()).filter(Boolean);
-                      updateSessionTags(s.id, tags);
-                    }
+                    setSessionDropdownId(sessionDropdownId === s.id ? null : s.id);
                   }}
                 >
-                  <span className="text-[10px] font-bold">#</span>
+                  <Ellipsis size={12} />
                 </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="AI 自动标签"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (!chatProviderId) { addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' }); return; }
-                    try {
-                      await autoTag(s.id, chatProviderId, chatModelId, chatBaseUrl);
-                      addNotification({ type: 'info', title: '标签已更新', message: '' });
-                    } catch {
-                      addNotification({ type: 'error', title: '自动标签失败', message: '' });
-                    }
-                  }}
-                >
-                  <Wand2 size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-yellow-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="归档会话"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleArchive(s.id);
-                  }}
-                >
-                  <Archive size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-purple-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="生成摘要"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    if (!chatProviderId) { addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' }); return; }
-                    try {
-                      await generateSummary(s.id, chatProviderId, chatModelId, chatBaseUrl);
-                      addNotification({ type: 'info', title: '摘要已生成', message: '' });
-                    } catch {
-                      addNotification({ type: 'error', title: '摘要生成失败', message: '' });
-                    }
-                  }}
-                >
-                  <Sparkles size={12} />
-                </button>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="分享链接"
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    try {
-                      const { token } = await api.shareChatSession(s.id);
-                      const url = `${window.location.origin}/shared/${token}`;
-                      await navigator.clipboard.writeText(url);
-                      addNotification({ type: 'info', title: '已复制', message: '分享链接已复制到剪贴板（7天有效）' });
-                    } catch {
-                      addNotification({ type: 'error', title: '分享失败', message: '请重试' });
-                    }
-                  }}
-                >
-                  <Link size={12} />
-                </button>
-                <div className="relative">
-                  <button
-                    type="button"
-                    className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="导出"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExportDropdownSessionId(exportDropdownSessionId === s.id ? null : s.id);
-                    }}
-                  >
-                    <Download size={12} />
-                  </button>
-                  {exportDropdownSessionId === s.id && (
-                    <div className="absolute right-0 top-full mt-1 bg-desktop-surface border border-white/20 rounded-lg shadow-xl z-50 min-w-[140px] py-1">
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
-                        onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionMarkdown(s.id), '_blank'); setExportDropdownSessionId(null); }}
-                      >
-                        <FileText size={12} /> Markdown
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
-                        onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionHtml(s.id), '_blank'); setExportDropdownSessionId(null); }}
-                      >
-                        <FileText size={12} /> HTML
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          api.exportChatSessionPdf(s.id).catch(console.error);
-                          setExportDropdownSessionId(null);
-                        }}
-                      >
-                        <FileText size={12} /> PDF
-                      </button>
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          api.exportChatSessionDocx(s.id).catch(console.error);
-                          setExportDropdownSessionId(null);
-                        }}
-                      >
-                        <FileText size={12} /> Word (DOCX)
-                      </button>
-                      <div className="border-t border-white/10 my-1" />
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 text-xs text-desktop-text hover:bg-white/10 flex items-center gap-2"
-                        onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionJson(s.id), '_blank'); setExportDropdownSessionId(null); }}
-                      >
-                        <FileText size={12} /> JSON
-                      </button>
-                    </div>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-                  title="删除会话"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (window.confirm('确定删除该会话？')) deleteSession(s.id);
-                  }}
-                >
-                  <Trash2 size={12} />
-                </button>
+                {sessionDropdownId === s.id && (
+                <div className="absolute right-0 top-full mt-1 bg-[#161616] border border-white/10 rounded-lg shadow-xl z-50 py-1 min-w-[150px]">
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      title="重命名"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const newTitle = window.prompt('会话标题', s.title?.trim() || '新对话');
+                        if (newTitle !== null && newTitle.trim()) updateSessionTitle(s.id, newTitle.trim());
+                      }}
+                    >
+                      <Pencil size={12} /> 重命名
+                    </button>
+                    <button
+                      type="button"
+                      className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 ${
+                        s.isPinned ? 'text-amber-400' : 'text-gray-200 hover:bg-white/10'
+                      }`}
+                      title={s.isPinned ? '取消置顶' : '置顶会话'}
+                      onClick={(e) => { e.stopPropagation(); togglePin(s.id); }}
+                    >
+                      <Pin size={12} /> {s.isPinned ? '取消置顶' : '置顶'}
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      title="标签"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const tagInput = window.prompt('添加标签（多个用逗号分隔）', s.tags.join(', '));
+                        if (tagInput !== null) {
+                          const tags = tagInput.split(',').map((t) => t.trim()).filter(Boolean);
+                          updateSessionTags(s.id, tags);
+                        }
+                      }}
+                    >
+                      <span className="text-[10px] font-bold w-3 text-center">#</span> 标签
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      title="AI 自动标签"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!chatProviderId) { addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' }); return; }
+                        try {
+                          await autoTag(s.id, chatProviderId, chatModelId, chatBaseUrl);
+                          addNotification({ type: 'info', title: '标签已更新', message: '' });
+                        } catch {
+                          addNotification({ type: 'error', title: '自动标签失败', message: '' });
+                        }
+                      }}
+                    >
+                      <Wand2 size={12} /> AI 自动标签
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      title="归档会话"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleArchive(s.id);
+                      }}
+                    >
+                      <Archive size={12} /> 归档
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      title="生成摘要"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!chatProviderId) { addNotification({ type: 'warning', title: '请先配置 AI 模型', message: '' }); return; }
+                        try {
+                          await generateSummary(s.id, chatProviderId, chatModelId, chatBaseUrl);
+                          addNotification({ type: 'info', title: '摘要已生成', message: '' });
+                        } catch {
+                          addNotification({ type: 'error', title: '摘要生成失败', message: '' });
+                        }
+                      }}
+                    >
+                      <Sparkles size={12} /> 生成摘要
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      title="分享链接"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try {
+                          const { token } = await api.shareChatSession(s.id);
+                          const url = window.location.origin + '/shared/' + token;
+                          await navigator.clipboard.writeText(url);
+                          addNotification({ type: 'info', title: '已复制', message: '分享链接已复制到剪贴板（7天有效）' });
+                        } catch {
+                          addNotification({ type: 'error', title: '分享失败', message: '请重试' });
+                        }
+                      }}
+                    >
+                      <Link size={12} /> 分享链接
+                    </button>
+                    <div className="border-t border-white/10 my-1" />
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionMarkdown(s.id), '_blank'); }}
+                    >
+                      <FileText size={12} /> 导出 Markdown
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionHtml(s.id), '_blank'); }}
+                    >
+                      <FileText size={12} /> 导出 HTML
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        api.exportChatSessionPdf(s.id).catch(console.error);
+                      }}
+                    >
+                      <FileText size={12} /> 导出 PDF
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        api.exportChatSessionDocx(s.id).catch(console.error);
+                      }}
+                    >
+                      <FileText size={12} /> 导出 Word (DOCX)
+                    </button>
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-white/10 flex items-center gap-2"
+                      onClick={(e) => { e.stopPropagation(); window.open(api.exportChatSessionJson(s.id), '_blank'); }}
+                    >
+                      <FileText size={12} /> 导出 JSON
+                    </button>
+                    <div className="border-t border-white/10 my-1" />
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 flex items-center gap-2"
+                      title="删除会话"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (window.confirm('确定删除该会话？')) deleteSession(s.id);
+                      }}
+                    >
+                      <Trash2 size={12} /> 删除会话
+                    </button>
+                  </div>
+                )}
               </div>
+                  ))}
+                </div>
+              </section>
             ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
-      <div className={`flex-1 flex flex-col min-w-0 ${sidebarOpen ? 'hidden sm:flex' : 'flex'}`}>
+      <div className={`flex-1 flex flex-col min-h-0 min-w-0 ${sidebarOpen ? 'hidden sm:flex' : 'flex'}`}>
       {/* Header：手机嵌入模式仅保留会话切换；否则显示完整 header */}
       {embeddedInMobile ? (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5 bg-transparent">
+        <div className="flex flex-wrap items-center gap-1 px-3 py-2 border-b border-white/5 bg-transparent">
           <button
-            className="p-2 rounded-lg hover:bg-white/10 text-desktop-muted hover:text-desktop-text transition-colors touch-manipulation"
+            className="p-2 rounded-lg hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors touch-manipulation"
             onClick={() => setSidebarOpen((o) => !o)}
             title={sidebarOpen ? '收起会话列表' : '展开会话列表'}
           >
             {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
           </button>
           <button
-            className="text-xs text-desktop-muted hover:text-desktop-text px-2 py-1 rounded hover:bg-white/5"
+            className="text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded hover:bg-white/5"
             onClick={startNewChat}
             title="新建对话 (⌘⇧N)"
           >
-            新对话
+            开个新话题
           </button>
+          <button type="button" aria-expanded={showAdvancedTools} onClick={()=>setShowAdvancedTools(value=>!value)} className="rounded-lg px-3 py-2 text-sm">{showAdvancedTools?'收起更多':'更多功能'}</button>
+          {progressPanel}
+          <div className="ml-auto"><NotificationCenter /></div>
         </div>
       ) : (
-        <div className="flex items-center gap-2 px-4 py-2.5 border-b border-white/5 bg-white/[0.02]">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 border-b border-white/5 bg-[#161616]/50">
           <button
-            className="p-1 rounded hover:bg-white/5 text-desktop-muted hover:text-desktop-text transition-colors"
+            className="p-1 rounded hover:bg-white/5 text-gray-400 hover:text-gray-200 transition-colors"
             onClick={() => setSidebarOpen((o) => !o)}
             title={sidebarOpen ? '收起会话列表 (⌘B)' : '展开会话列表 (⌘B)'}
           >
             {sidebarOpen ? <PanelLeftClose size={14} /> : <PanelLeft size={14} />}
           </button>
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-desktop-highlight to-purple-500 flex items-center justify-center">
+          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#C8A96E] to-amber-600 flex items-center justify-center">
             <Sparkles size={14} className="text-white" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-medium text-desktop-text">AI 助手</span>
-              <select
-                className="text-[10px] bg-white/5 border border-white/10 rounded px-2 py-1 text-desktop-text focus:ring-1 focus:ring-desktop-accent outline-none max-w-[140px] truncate"
+              <span className="text-xs font-medium text-gray-200">AI 助手</span>
+              {showAdvancedTools && <select
+                className="text-[10px] bg-white/5 border border-white/10 rounded px-2 py-1 text-gray-200 focus:ring-1 focus:ring-amber-400 outline-none max-w-[140px] truncate"
                 value={selectedAgentId ?? ''}
                 onChange={(e) => setSelectedAgentId(e.target.value ? e.target.value : null)}
                 title="选择对话对象：默认 AI 助手，或与某智能体对话"
@@ -2002,12 +2497,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     {a.name}
                   </option>
                 ))}
-              </select>
+              </select>}
             </div>
-            <div className="text-[10px] text-desktop-muted mt-0.5 flex items-center gap-1.5 flex-wrap">
+            <div hidden={!showAdvancedTools} className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1.5 flex-wrap">
               <span>{tasks.length} 个任务</span>
               {sessionElapsed > 0 && (
-                <span className="flex items-center gap-0.5 text-desktop-accent/70">
+                <span className="flex items-center gap-0.5 text-amber-400/70">
                   <Clock size={9} />
                   {sessionElapsed < 60
                     ? `${sessionElapsed} 分钟`
@@ -2015,15 +2510,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 </span>
               )}
               {contextStats && (
-                <span className={`text-[9px] ml-1 ${
-                  contextStats.usagePercent > 80 ? 'text-red-400' :
-                  contextStats.usagePercent > 60 ? 'text-yellow-400' :
-                  'text-green-400/70'
-                }`} title={`约 ${contextStats.estimatedTokens.toLocaleString()} tokens（基于字符数估算）`}>
+                <button
+                  type="button"
+                  className={`text-[9px] ml-1 hover:underline ${
+                    contextStats.usagePercent > 80 ? 'text-red-400' :
+                    contextStats.usagePercent > 60 ? 'text-yellow-400' :
+                    'text-green-400/70'
+                  }`}
+                  title={`约 ${contextStats.estimatedTokens.toLocaleString()} tokens（基于字符数估算）`}
+                  onClick={() => setContextTreemapOpen(true)}
+                >
                   · {contextStats.estimatedTokens >= 1000
                     ? `~${Math.round(contextStats.estimatedTokens / 1000)}K / 128K`
                     : `~${contextStats.estimatedTokens} / 128K`}
-                </span>
+                </button>
               )}
               {selectedAgentId && agents.find((a) => a.id === selectedAgentId) && (
                 <span className="ml-1">· 与「{agents.find((a) => a.id === selectedAgentId)!.name}」对话</span>
@@ -2035,9 +2535,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
             </div>
           </div>
-          {currentSessionId && (
+          {showAdvancedTools && currentSessionId && (
             <button
-              className="flex items-center gap-1 text-[10px] text-desktop-muted hover:text-purple-400 px-2 py-1 rounded hover:bg-white/5 transition-colors"
+              className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-purple-400 px-2 py-1 rounded hover:bg-white/5 transition-colors"
               onClick={async () => {
                 try {
                   const newId = await forkSession(currentSessionId);
@@ -2054,75 +2554,49 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             </button>
           )}
           <button
-            className="flex items-center gap-1 text-[10px] text-desktop-muted hover:text-desktop-accent px-2 py-1 rounded hover:bg-white/5 transition-colors"
+            type="button"
+            className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded transition-colors ${
+              sessionDeliverables.length > 0
+                ? 'text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
+                : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+            }`}
+            onClick={() => setDeliverablesOpen(true)}
+            title={`查看当前会话交付物（${sessionDeliverables.length}）`}
+          >
+            <PackageCheck size={11} />
+            我的作品
+            <span className="min-w-[16px] rounded-full bg-black/20 px-1 text-center text-[9px]">
+              {sessionDeliverables.length}
+            </span>
+          </button>
+          {showAdvancedTools && <button
+            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-amber-400 px-2 py-1 rounded hover:bg-white/5 transition-colors"
             onClick={() => setCompareOpen(true)}
             title="多模型对比"
           >
             <GitCompare size={11} />
             对比
-          </button>
+          </button>}
           <button
-            className="text-[10px] text-desktop-muted hover:text-desktop-text px-2 py-1 rounded hover:bg-white/5 transition-colors"
-            onClick={() => openApp('task-timeline')}
+            type="button"
+            className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-amber-400 px-2 py-1 rounded hover:bg-white/5 transition-colors"
+            onClick={() => setCapabilityHelpOpen(true)}
+            title={t('chat.whatCanYouDo')}
           >
-            查看任务 →
+            <CircleHelp size={11} />
+            {t('chat.whatCanYouDo')}
           </button>
+          {progressPanel}
+          <button type="button" aria-expanded={showAdvancedTools} onClick={()=>setShowAdvancedTools(value=>!value)} className="rounded-lg px-3 py-2 text-sm text-gray-300 hover:bg-white/10">{showAdvancedTools?'收起更多':'更多功能'}</button>
           <NotificationCenter />
         </div>
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-auto px-2 sm:px-4 py-3 space-y-3 sm:space-y-4 relative">
-        {currentSessionId && (
-          <div className="sticky top-0 z-10 pb-2 -mx-1 sm:-mx-2">
-            <div className="flex items-center gap-2 bg-desktop-surface/95 backdrop-blur-sm border border-white/10 rounded-xl px-3 py-2 shadow-sm">
-              <Search size={13} className="text-desktop-muted shrink-0" />
-              <input
-                type="text"
-                id="chat-message-search"
-                placeholder="搜索消息内容..."
-                className="flex-1 bg-transparent outline-none text-xs text-desktop-text placeholder:text-desktop-muted"
-                value={messageSearch}
-                onChange={(e) => setMessageSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') setMessageSearch('');
-                }}
-              />
-              {messageSearch && (
-                <button
-                  type="button"
-                  onClick={() => setMessageSearch('')}
-                  className="text-desktop-muted hover:text-desktop-text p-0.5"
-                >
-                  <X size={12} />
-                </button>
-              )}
-              {messageSearchResults.length > 0 && (
-                <span className="text-[10px] text-desktop-accent shrink-0">
-                  {messageSearchIndex + 1}/{messageSearchResults.length}
-                </span>
-              )}
-              {messageSearchResults.length > 0 && (
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => navigateSearch(-1)}
-                    className="p-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
-                    title="上一个"
-                  >
-                    <ChevronUp size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => navigateSearch(1)}
-                    className="p-1 rounded text-desktop-muted hover:text-desktop-text hover:bg-white/10"
-                    title="下一个"
-                  >
-                    <ChevronDown size={12} />
-                  </button>
-                </div>
-              )}
-            </div>
+      <div role="region" aria-label="对话消息" className="flex-1 min-h-0 overflow-auto px-2 sm:px-6 py-4 space-y-5 sm:space-y-6 relative">
+        {(isSessionLoading || sessionLoadError) && (
+          <div role="status" className="rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-200 text-xs px-3 py-2">
+            {isSessionLoading ? '正在同步对话记录，请稍候…' : sessionLoadError}
           </div>
         )}
         {chatSyncFailed && (
@@ -2136,88 +2610,74 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             id={`msg-${msg.id}`}
             className={`flex gap-2 sm:gap-2.5 ${msg.role === 'user' ? 'flex-row-reverse' : ''} ${
               messageSearchResults.length > 0 && messageSearchResults[messageSearchIndex] === msg.id
-                ? 'ring-2 ring-desktop-accent rounded-xl'
+                ? 'ring-2 ring-amber-400 rounded-xl'
                 : ''
             }`}
           >
             {msg.role !== 'user' && (
-              <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0 mt-0.5">
-                <Bot size={14} className="text-desktop-highlight" />
+              <div className="w-7 h-7 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <Bot size={13} className="text-amber-400" />
               </div>
             )}
             <div
-              className={`max-w-[90%] sm:max-w-[85%] rounded-xl px-2 sm:px-3 py-2 sm:py-2.5 text-xs leading-relaxed ${
+              className={`max-w-[90%] sm:max-w-[85%] text-base leading-relaxed msg-enter ${
                 msg.role === 'user'
-                  ? 'bg-desktop-highlight/20 text-desktop-text'
+                  ? 'bg-[#1A1A1A] border border-white/5 rounded-2xl px-4 py-3 text-gray-200'
                   : msg.role === 'system'
-                    ? 'bg-desktop-accent/30 text-desktop-muted'
-                    : 'bg-white/5 text-desktop-text/90'
+                    ? 'text-gray-500 text-[11px] italic px-1'
+                    : 'border-l-2 border-amber-500/30 pl-4 text-gray-200'
               }`}
             >
               {/* 工具调用列表：可展开查看详情 */}
               {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
-                <div className="space-y-1">
+                <details open={showAdvancedTools} className="space-y-1">
+                  <summary className="cursor-pointer py-2 text-sm text-gray-400">看看我是怎么做的</summary>
                   {msg.toolCalls.map((tc) => (
                     <ToolCallBlock key={tc.id} tc={tc} />
                   ))}
-                </div>
+                </details>
               )}
               {(msg.content || (msg.role === 'assistant' && isLoading && messages[messages.length - 1]?.id === msg.id)) && (
                 <div className={msg.toolCalls?.length ? 'mt-2' : ''}>
                   {msg.role === 'assistant' ? (
                     <div className="relative group">
+                      {!showAdvancedTools && <button type="button" disabled={!msg.content} onClick={()=>speakText(msg.id,msg.content)} className="mb-2 rounded-lg bg-white/5 px-3 py-2 text-sm">{speakingMsgId===msg.id?'不听了':'听一听'}</button>}
                       <button
                         type="button"
                         onClick={() => speakText(msg.id, msg.content)}
                         title={speakingMsgId === msg.id ? '停止朗读' : '朗读'}
                         className={`absolute -top-1 right-0 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity ${
-                          speakingMsgId === msg.id ? 'text-desktop-accent opacity-100' : 'text-desktop-muted hover:text-desktop-text'
+                          speakingMsgId === msg.id ? 'text-amber-400 opacity-100' : 'text-gray-400 hover:text-gray-200'
                         }`}
                       >
                         {speakingMsgId === msg.id ? <VolumeX size={13} /> : <Speaker size={13} />}
                       </button>
-                      <div className="absolute -top-1 right-6 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                        {['👍', '❤️', '😮', '😂', '😢'].map((emoji) => {
-                          const isActive = msg.reactions?.[emoji];
-                          return (
-                            <button
-                              key={emoji}
-                              type="button"
-                              title={emoji}
-                              onClick={async () => {
-                                const next = { ...(msg.reactions ?? {}), [emoji]: !(msg.reactions?.[emoji] ?? false) };
-                                setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, reactions: next } : m)));
-                                try { await api.setMessageReaction(msg.id, next); } catch { /* revert on error */ }
-                              }}
-                              className={`text-[13px] px-1 py-0.5 rounded transition-colors ${isActive ? 'bg-desktop-accent/20 scale-110' : 'text-desktop-muted hover:text-desktop-text hover:bg-white/10'}`}
-                            >
-                              {emoji}
-                            </button>
-                          );
-                        })}
+                      <div className="absolute -top-1 right-0 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           type="button"
                           title="复制"
                           onClick={() => copyMessage(msg)}
-                          className="p-1 rounded text-desktop-muted hover:text-desktop-text transition-colors"
+                          className="p-1 rounded text-gray-400 hover:text-gray-200 transition-colors"
                         >
                           <Copy size={13} />
                         </button>
                       </div>
-                      <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
-                        <MarkdownWithThink content={msg.content} />
+                      <div className="chat-markdown text-xs text-gray-200/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-[#C8A96E] [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
+                        {renderMode!=='markdown' && (renderMode==='react'?/```(?:jsx|tsx|react)|^\s*(?:export\s+default|function\s+Message)\b/.test(msg.content):/```html|^\s*<(?:!doctype|html|div|section|svg)/i.test(msg.content))
+                          ? isLoading&&msg.id===messages.at(-1)?.id?<p>正在准备内容…</p>:<MultiRenderer content={msg.content} mode={renderMode}/>
+                          : <MarkdownWithThink content={msg.content} />}
                       </div>
                     </div>
                   ) : msg.role === 'system' ? (
-                    <div className="chat-markdown text-xs text-desktop-text/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-desktop-highlight [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
-                      <MarkdownContent content={msg.content} />
+                    <div className="chat-markdown text-xs text-gray-200/90 leading-relaxed [&_p]:my-1 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1 [&_li]:block [&_li]:my-0.5 [&_li]:leading-relaxed [&_code]:bg-white/10 [&_code]:px-1 [&_code]:rounded [&_code]:text-[11px] [&_pre]:bg-white/10 [&_pre]:p-2 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_strong]:font-semibold [&_a]:text-[#C8A96E] [&_a]:underline [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-xs [&_table]:border-collapse [&_th]:border [&_th]:border-white/20 [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-white/20 [&_td]:px-2 [&_td]:py-1">
+                      <MarkdownContent content={msg.id === 'welcome' && !showAdvancedTools ? '你好，我是 X。告诉我想做什么，我们一起试试！' : msg.content} />
                     </div>
                   ) : editingMessageId === msg.id ? (
                     <div className="space-y-2">
                       <textarea
                         autoFocus
                         rows={Math.max(2, editingContent.split('\n').length)}
-                        className="w-full bg-white/10 border border-desktop-accent/40 rounded-lg px-3 py-2 text-xs text-desktop-text resize-none focus:outline-none focus:border-desktop-accent"
+                        className="w-full bg-white/10 border border-amber-500/40 rounded-lg px-3 py-2 text-xs text-gray-200 resize-none focus:outline-none focus:border-amber-500/30"
                         value={editingContent}
                         onChange={(e) => setEditingContent(e.target.value)}
                         onKeyDown={(e) => {
@@ -2228,7 +2688,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       <div className="flex gap-2">
                         <button
                           type="button"
-                          className="px-3 py-1 rounded-lg bg-desktop-accent hover:bg-desktop-accent/80 text-desktop-highlight text-[11px] font-medium transition-colors disabled:opacity-40"
+                          className="px-3 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/80 text-[#C8A96E] text-[11px] font-medium transition-colors disabled:opacity-40"
                           onClick={handleEditSubmit}
                           disabled={!editingContent.trim() || isLoading}
                         >
@@ -2236,7 +2696,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                         </button>
                         <button
                           type="button"
-                          className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-desktop-text/70 text-[11px] transition-colors"
+                          className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-gray-200/70 text-[11px] transition-colors"
                           onClick={() => setEditingMessageId(null)}
                         >
                           取消
@@ -2250,7 +2710,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     <div className="mt-2">
                       <button
                         type="button"
-                        className="px-3 py-1.5 rounded-lg bg-desktop-accent/40 hover:bg-desktop-accent/60 text-desktop-text text-[11px] font-medium transition-colors"
+                        className="px-3 py-1.5 rounded-lg bg-amber-500/40 hover:bg-amber-500/60 text-gray-200 text-[11px] font-medium transition-colors"
                         onClick={() => openApp('subscription')}
                       >
                         {t('errors.quotaUpgradeLink')}
@@ -2272,14 +2732,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     <div key={i} className="rounded-lg border border-white/10 overflow-hidden max-w-[200px] bg-white/5">
                       <button
                         type="button"
-                        className="w-full max-h-[180px] block focus:outline-none focus:ring-2 focus:ring-desktop-accent/50 rounded-t-lg overflow-hidden"
+                        className="w-full max-h-[180px] block focus:outline-none focus:ring-2 focus:ring-amber-400/50 rounded-t-lg overflow-hidden"
                         onClick={() => setImagePreviewUrl(imgSrc)}
                       >
                         <img src={imgSrc} alt={msg.role === 'user' ? `附带图片 ${i + 1}` : `生成图 ${i + 1}`} className="w-full h-full object-cover block" />
                       </button>
                       <button
                         type="button"
-                        className="w-full flex items-center justify-center gap-1 py-1.5 text-[10px] text-desktop-muted hover:text-desktop-text hover:bg-white/10 transition-colors"
+                        className="w-full flex items-center justify-center gap-1 py-1.5 text-[10px] text-gray-400 hover:text-gray-200 hover:bg-white/10 transition-colors"
                         onClick={async () => {
                           const path = await saveImageToSandbox(imgSrc, `生成图-${i + 1}.png`);
                           if (path) addNotification({ type: 'info', title: '已保存到沙箱', message: path });
@@ -2296,13 +2756,53 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 </div>
               )}
 
+              {msg.role === 'assistant' && (() => {
+                const deliverables = sessionDeliverables.filter(
+                  (deliverable) => deliverable.sourceMessageId === msg.id && deliverable.source !== 'image',
+                );
+                if (deliverables.length === 0) return null;
+                return (
+                  <div className="mt-2 space-y-1.5">
+                    <div className="flex items-center gap-1 text-[10px] font-medium text-emerald-300/80">
+                      <PackageCheck size={12} />
+                      本次交付 {deliverables.length} 项
+                    </div>
+                    <div className="grid gap-1.5 sm:grid-cols-2">
+                      {deliverables.map((deliverable) => (
+                        <button
+                          key={deliverable.id}
+                          type="button"
+                          onClick={() => openDeliverable(deliverable)}
+                          className="group flex min-w-0 items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.07] px-2.5 py-2 text-left transition-colors hover:border-emerald-400/40 hover:bg-emerald-500/10"
+                          title={`打开 ${deliverable.path}`}
+                        >
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-300">
+                            <DeliverableIcon kind={deliverable.kind} size={14} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[11px] font-medium text-gray-200">
+                              {deliverable.name}
+                            </span>
+                            <span className="block truncate text-[9px] text-gray-500">
+                              {getDeliverableTypeLabel(deliverable.kind)} · 点击查看
+                            </span>
+                          </span>
+                          <Eye size={12} className="shrink-0 text-gray-500 transition-colors group-hover:text-emerald-300" />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {msg.role==='assistant'&&returnedExpertId(msg.id)&&<button type="button" onClick={()=>void openReturnedExpert(msg.id).catch(error=>addNotification({type:'error',title:'暂时打不开作品',message:error instanceof Error?error.message:String(error)}))} className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-200">查看专家作品，决定是否满意</button>}
               {/* 用户附带文档：在对话中单独展示 */}
               {msg.role === 'user' && msg.attachedFiles && msg.attachedFiles.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
                   {msg.attachedFiles.map((f, i) => (
                     <span
                       key={i}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/10 text-[10px] text-desktop-muted"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-white/10 text-[10px] text-gray-400"
                       title={f.path}
                     >
                       <FileText size={12} />
@@ -2318,7 +2818,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 const displayStatus = task?.status ?? msg.taskStatus;
                 return (
                   <button
-                    className="mt-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-desktop-accent/30 hover:bg-desktop-accent/50 text-[10px] text-desktop-muted hover:text-desktop-text transition-colors"
+                    className="mt-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-500/30 hover:bg-amber-500/50 text-[10px] text-gray-400 hover:text-gray-200 transition-colors"
                     onClick={() => openApp('task-timeline')}
                   >
                     {displayStatus === 'awaiting_approval' ? (
@@ -2337,12 +2837,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               })()}
 
               <div className="flex items-center justify-end gap-0.5 mt-1.5">
-                <span className="text-[9px] text-desktop-muted/40 mr-1">
+                <span className="text-[9px] text-gray-400/40 mr-1">
                   {new Date(msg.timestamp).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' })}
                 </span>
                 <button
                   type="button"
-                  className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text transition-colors"
+                  className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
                   onClick={() => copyMessage(msg)}
                   title="复制"
                   disabled={!msg.content}
@@ -2352,7 +2852,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 {msg.role === 'assistant' && (
                   <button
                     type="button"
-                    className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text transition-colors"
+                    className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
                     onClick={() => retryAssistantMessage(msg)}
                     title="重试"
                     disabled={isLoading}
@@ -2363,7 +2863,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 {msg.role === 'user' && !isLoading && (
                   <button
                     type="button"
-                    className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text transition-colors"
+                    className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200 transition-colors"
                     onClick={() => {
                       setEditingMessageId(msg.id);
                       setEditingContent(msg.content);
@@ -2376,7 +2876,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 {msg.id !== 'welcome' && (
                   <button
                     type="button"
-                    className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-red-400 transition-colors"
+                    className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-red-400 transition-colors"
                     onClick={() => deleteMessage(msg.id)}
                     title="删除"
                   >
@@ -2386,7 +2886,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 {msg.id !== 'welcome' && (
                   <button
                     type="button"
-                    className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-accent transition-colors"
+                    className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-amber-400 transition-colors"
                     onClick={async () => {
                       try {
                         const newSession = await api.branchSession(msg.id);
@@ -2406,7 +2906,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 {msg.id !== 'welcome' && (
                   <button
                     type="button"
-                    className={`p-1 rounded transition-colors ${msg.bookmarked ? 'text-desktop-accent' : 'text-desktop-muted hover:text-desktop-accent hover:bg-white/10'}`}
+                    className={`p-1 rounded transition-colors ${msg.bookmarked ? 'text-amber-400' : 'text-gray-400 hover:text-amber-400 hover:bg-white/10'}`}
                     onClick={async () => {
                       const next = !msg.bookmarked;
                       setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, bookmarked: next } : m)));
@@ -2424,7 +2924,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     <button
                       key={i}
                       type="button"
-                      className="px-2.5 py-1 rounded-lg text-[10px] bg-white/10 hover:bg-white/20 text-desktop-text/90 hover:text-desktop-text border border-white/10 transition-colors text-left max-w-full truncate"
+                      className="px-2.5 py-1 rounded-lg text-[10px] bg-white/10 hover:bg-white/20 text-gray-200/90 hover:text-gray-200 border border-white/10 transition-colors text-left max-w-full truncate"
                       title={q}
                       onClick={() => {
                         setInput(q);
@@ -2438,8 +2938,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               )}
             </div>
             {msg.role === 'user' && (
-              <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-surface flex items-center justify-center shrink-0 mt-0.5">
-                <User size={14} className="text-desktop-muted" />
+              <div className="w-7 h-7 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 mt-0.5">
+                <User size={13} className="text-amber-400" />
               </div>
             )}
           </div>
@@ -2447,78 +2947,69 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
         {isLoading && (
           <div className="flex gap-2 sm:gap-2.5">
-            <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-desktop-accent flex items-center justify-center shrink-0">
-              <Bot size={14} className="text-desktop-highlight" />
+            <div className="w-8 sm:w-7 h-8 sm:h-7 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0">
+              <Bot size={14} className="text-[#C8A96E]" />
             </div>
             <div className="bg-white/5 rounded-xl px-4 py-3 flex items-center gap-2">
-              <Loader2 size={14} className="text-desktop-highlight animate-spin" />
-              <span className="text-xs text-desktop-muted">思考中...</span>
+              <Loader2 size={14} className="text-[#C8A96E] animate-spin" />
+              <span className="text-xs text-gray-500">思考中...</span>
             </div>
           </div>
         )}
 
-        {/* Quick actions & task templates (only show when few messages) - 放在滚动区内，避免遮住底部输入框 */}
+        {/* 新手能力入口放在滚动区内，避免遮住底部输入框 */}
         {!messages.some((m) => m.role === 'user') && (
-          <div className="space-y-4 pt-2">
-          <div className="space-y-2">
-            <div className="text-[11px] text-desktop-muted font-medium">{t('chat.tryThese')}</div>
-            <div className="flex flex-wrap gap-2">
-              {quickActions.map((action) => (
-                <button
-                  key={action.labelKey}
-                  className="shrink-0 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] text-desktop-muted hover:text-desktop-text border border-white/5 transition-colors"
-                  onClick={() => {
-                    setInput(t(action.textKey));
-                    inputRef.current?.focus();
-                  }}
-                >
-                  {t(action.labelKey)}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2">
-            <div className="text-[11px] text-desktop-muted font-medium">{t('templates.quickTasks')}</div>
-            <div className="space-y-2">
-              {(['student', 'office', 'research', 'dev'] as TaskTemplateCategory[]).map((cat) => {
-                const items = TASK_TEMPLATES.filter((tm) => tm.category === cat);
-                if (items.length === 0) return null;
-                return (
-                  <div key={cat} className="flex flex-wrap gap-2 items-center">
-                    <span className="text-[10px] text-desktop-muted/80 w-12 shrink-0">{t(`templates.category${cat.charAt(0).toUpperCase() + cat.slice(1)}`)}</span>
-                    {items.map((tm) => (
-                      <button
-                        key={tm.id}
-                        className="shrink-0 px-2.5 py-1.5 rounded-lg bg-desktop-accent/20 hover:bg-desktop-accent/30 text-[11px] text-desktop-muted hover:text-desktop-text border border-desktop-accent/30 transition-colors"
-                        onClick={() => sendMessage(t(tm.textKey))}
-                      >
-                        {t(tm.labelKey)}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+          <QuickActions
+            onSetInput={value=>setInput(current=>appendChatExample(current,value))}
+            onFocusInput={() => inputRef.current?.focus()}
+          />
+        )}
         <div ref={messagesEndRef} />
 
       {/* Close h-full flex container before fixed overlay */}
       </div>
 
+      {/* Beginner capability help panel */}
+      {capabilityHelpOpen && (
+        <div
+          className="fixed inset-0 z-[99997] flex items-center justify-center px-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setCapabilityHelpOpen(false);
+          }}
+        >
+          <div className="absolute inset-0 bg-black/55 backdrop-blur-sm" onClick={() => setCapabilityHelpOpen(false)} />
+          <div className="relative w-full max-w-[620px] rounded-2xl shadow-2xl">
+            <button
+              type="button"
+              className="absolute right-3 top-3 z-10 p-1.5 rounded-lg bg-black/25 text-gray-400 hover:text-gray-100 hover:bg-black/40 transition-colors"
+              onClick={() => setCapabilityHelpOpen(false)}
+              aria-label={t('common.close')}
+            >
+              <X size={15} />
+            </button>
+            <QuickActions
+              onSetInput={(value) => {
+                setInput(current=>appendChatExample(current,value));
+                setCapabilityHelpOpen(false);
+              }}
+              onFocusInput={() => inputRef.current?.focus()}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Model Comparison Panel */}
       {compareOpen && (
         <div className="fixed inset-0 z-[99997] flex items-start justify-center pt-[6vh] px-3 sm:px-0" onClick={(e) => { if (e.target === e.currentTarget) setCompareOpen(false); }}>
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setCompareOpen(false)} />
-          <div className="relative w-full max-w-[680px] bg-desktop-surface/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-fade-in max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+          <div className="relative w-full max-w-[680px] bg-[#161616]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-fade-in max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 shrink-0">
               <div className="flex items-center gap-2">
-                <GitCompare size={16} className="text-desktop-accent" />
-                <span className="text-sm font-medium text-desktop-text">多模型对比</span>
+                <GitCompare size={16} className="text-amber-400" />
+                <span className="text-sm font-medium text-gray-200">多模型对比</span>
               </div>
-              <button className="p-1 rounded hover:bg-white/10 text-desktop-muted hover:text-desktop-text" onClick={() => setCompareOpen(false)}>
+              <button className="p-1 rounded hover:bg-white/10 text-gray-400 hover:text-gray-200" onClick={() => setCompareOpen(false)}>
                 <X size={16} />
               </button>
             </div>
@@ -2527,9 +3018,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             <div className="flex-1 overflow-auto px-4 py-3 space-y-3">
               {/* Prompt input */}
               <div>
-                <label className="text-[10px] text-desktop-muted/70 uppercase tracking-wide mb-1 block">问题</label>
+                <label className="text-[10px] text-gray-400/70 uppercase tracking-wide mb-1 block">问题</label>
                 <textarea
-                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-desktop-text placeholder:text-desktop-muted/40 outline-none focus:border-desktop-accent/50 resize-none"
+                  className="w-full bg-transparent rounded-lg px-1 py-1 text-xs text-gray-200 placeholder:text-gray-500 outline-none resize-none"
                   rows={3}
                   value={comparePrompt}
                   onChange={(e) => setComparePrompt(e.target.value)}
@@ -2539,7 +3030,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
               {/* Model selector */}
               <div>
-                <label className="text-[10px] text-desktop-muted/70 uppercase tracking-wide mb-1.5 block">选择模型（最多 4 个）</label>
+                <label className="text-[10px] text-gray-400/70 uppercase tracking-wide mb-1.5 block">选择模型（最多 4 个）</label>
                 <div className="flex flex-wrap gap-1.5">
                   {availableModelsForCompare.map((m) => {
                     const isSelected = compareSelectedModels.some((sm) => sm.providerId === m.providerId && sm.modelId === m.modelId);
@@ -2548,8 +3039,8 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                         key={`${m.providerId}-${m.modelId}`}
                         className={`text-[10px] px-2 py-1 rounded border transition-colors ${
                           isSelected
-                            ? 'bg-desktop-accent/20 border-desktop-accent/50 text-desktop-accent'
-                            : 'bg-white/5 border-white/10 text-desktop-muted hover:border-white/20'
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
+                            : 'bg-[#161616] border-white/5 text-gray-400 hover:border-gray-500'
                         }`}
                         onClick={() => {
                           if (isSelected) {
@@ -2565,14 +3056,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                   })}
                 </div>
                 {compareSelectedModels.length === 0 && (
-                  <p className="text-[10px] text-desktop-muted/50 mt-1">请从上方选择至少一个模型</p>
+                  <p className="text-[10px] text-gray-400/50 mt-1">请从上方选择至少一个模型</p>
                 )}
               </div>
 
               {/* Run button */}
               <div className="flex gap-2">
                 <button
-                  className="flex items-center gap-1.5 px-4 py-2 bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 text-desktop-accent rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-400 rounded-lg text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                   disabled={compareLoading || !comparePrompt.trim() || compareSelectedModels.length === 0}
                   onClick={async () => {
                     if (!comparePrompt.trim() || compareSelectedModels.length === 0) return;
@@ -2593,7 +3084,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 </button>
                 {compareResults && (
                   <button
-                    className="px-3 py-2 text-desktop-muted hover:text-desktop-text text-xs rounded-lg hover:bg-white/5 transition-colors"
+                    className="px-3 py-2 text-gray-400 hover:text-gray-200 text-xs rounded-lg hover:bg-white/5 transition-colors"
                     onClick={() => { setCompareResults(null); setComparePrompt(''); setCompareSelectedModels([]); }}
                   >
                     清除结果
@@ -2604,13 +3095,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               {/* Results */}
               {compareResults && (
                 <div className="space-y-2 pt-1">
-                  <div className="text-[10px] text-desktop-muted/70 uppercase tracking-wide">结果对比</div>
+                  <div className="text-[10px] text-gray-400/70 uppercase tracking-wide">结果对比</div>
                   {compareResults.results.map((r, i) => (
                     <div key={i} className="rounded-lg border border-white/10 bg-white/[0.02] overflow-hidden">
                       <div className="flex items-center justify-between px-3 py-2 bg-white/[0.02] border-b border-white/5">
                         <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium text-desktop-text">{r.modelId}</span>
-                          <span className="text-[10px] text-desktop-muted/50">{r.providerId}</span>
+                          <span className="text-xs font-medium text-gray-200">{r.modelId}</span>
+                          <span className="text-[10px] text-gray-400/50">{r.providerId}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           {r.error ? (
@@ -2620,7 +3111,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                           )}
                         </div>
                       </div>
-                      <div className="px-3 py-2 text-xs text-desktop-text/80 whitespace-pre-wrap max-h-[200px] overflow-auto">
+                      <div className="px-3 py-2 text-xs text-gray-200/80 whitespace-pre-wrap max-h-[200px] overflow-auto">
                         {r.error ? (
                           <span className="text-red-400/80">{r.error}</span>
                         ) : (
@@ -2630,12 +3121,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     </div>
                   ))}
                   {compareResults.synthesis && (
-                    <div className="rounded-lg border border-desktop-accent/20 bg-desktop-accent/5 overflow-hidden">
-                      <div className="flex items-center gap-2 px-3 py-2 border-b border-desktop-accent/10">
-                        <Sparkles size={12} className="text-desktop-accent" />
-                        <span className="text-xs font-medium text-desktop-accent">综合分析</span>
+                    <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-2 border-b border-amber-500/10">
+                        <Sparkles size={12} className="text-amber-400" />
+                        <span className="text-xs font-medium text-amber-400">综合分析</span>
                       </div>
-                      <div className="px-3 py-2 text-xs text-desktop-text/80 whitespace-pre-wrap max-h-[200px] overflow-auto">
+                      <div className="px-3 py-2 text-xs text-gray-200/80 whitespace-pre-wrap max-h-[200px] overflow-auto">
                         {compareResults.synthesis}
                       </div>
                     </div>
@@ -2648,11 +3139,11 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
       )}
 
       {/* Input - shrink-0 保证不被预置场景挤压，始终可见 */}
-      <div className="shrink-0 px-3 py-2 border-t border-white/5 bg-white/[0.02]">
+      <div className="shrink-0 px-3 py-2 border-t border-white/5 bg-[#0D0D0D] relative">
         <input
           ref={attachFileInputRef}
           type="file"
-          accept=".txt,.md,.pdf,.doc,.docx,.csv,.json,.xlsx,.xls"
+          accept=".txt,.md,.pdf,.doc,.docx,.csv,.json,.xlsx,.xls,.pptx"
           multiple
           className="hidden"
           onChange={(e) => {
@@ -2695,15 +3186,15 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             {attachedFiles.map((item, i) => (
               <div
                 key={i}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-[11px] text-desktop-text shrink-0"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-white/10 border border-white/10 text-[11px] text-gray-200 shrink-0"
               >
-                <Paperclip size={12} className="text-desktop-muted shrink-0" />
+                <Paperclip size={12} className="text-gray-400 shrink-0" />
                 <span className="max-w-[120px] truncate" title={item.name}>
                   {item.name}
                 </span>
                 <button
                   type="button"
-                  className="p-0.5 rounded hover:bg-red-500/30 text-desktop-muted hover:text-red-400 transition-colors shrink-0"
+                  className="p-0.5 rounded hover:bg-red-500/30 text-gray-400 hover:text-red-400 transition-colors shrink-0"
                   onClick={() => setAttachedFiles((prev) => prev.filter((_, j) => j !== i))}
                   aria-label="移除"
                 >
@@ -2730,120 +3221,230 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             ))}
           </div>
         )}
-        <div className="flex items-end gap-1 sm:gap-2 bg-white/5 rounded-xl px-2 sm:px-3 py-2 border border-white/10 focus-within:border-desktop-highlight/30 transition-colors relative">
-          <button
-            type="button"
-            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-            onClick={() => attachFileInputRef.current?.click()}
-            title={attachedFiles.length >= 5 ? '最多 5 个文件' : '附加文档（txt、md、pdf、doc、csv、json 等）'}
-          >
-            <Paperclip size={16} className="sm:size-4" />
-          </button>
-          <button
-            type="button"
-            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-            onClick={() => attachInputRef.current?.click()}
-            title={attachedImages.length >= 3 ? '最多 3 张参考图' : '上传参考图（1–3 张），将随消息发送供图像编辑使用'}
-          >
-            <ImagePlus size={16} className="sm:size-4" />
-          </button>
-          <button
-            type="button"
-            className={`p-2 sm:p-1 rounded-lg sm:rounded transition-colors shrink-0 mb-0.5 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
-              recordingId
-                ? 'text-red-400 bg-red-400/20 animate-pulse'
-                : 'text-desktop-muted hover:text-desktop-text hover:bg-white/10'
-            }`}
-            onClick={toggleVoiceInput}
-            title={recordingId ? '停止录音' : '语音输入'}
-          >
-            {recordingId ? <MicOff size={16} className="sm:size-4" /> : <Mic size={16} className="sm:size-4" />}
-          </button>
-          <button
-            type="button"
-            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-            onClick={() => setSnippetPickerOpen((o) => !o)}
-            title="插入代码片段"
-          >
-            <Code size={16} className="sm:size-4" />
-          </button>
-          <button
-            type="button"
-            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-            onClick={() => setTemplatePickerOpen((o) => !o)}
-            title="插入提示模板"
-          >
-            <FileText size={16} className="sm:size-4" />
-          </button>
-          <button
-            type="button"
-            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center relative"
-            onClick={() => { setCalcOpen((o) => !o); setSnippetPickerOpen(false); }}
-            title="计算器"
-          >
-            <Calculator size={16} className="sm:size-4" />
-          </button>
-          <button
-            type="button"
-            className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 mb-0.5 text-desktop-muted hover:text-desktop-text touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-            onClick={() => setReminderOpen((o) => !o)}
-            title="设置提醒"
-          >
-            <Bell size={16} className="sm:size-4" />
-          </button>
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-              }
-            }}
-            placeholder="输入消息或任务描述... / 调出命令 (Shift+Enter 换行)"
-            className="flex-1 bg-transparent outline-none text-sm sm:text-xs text-desktop-text resize-none max-h-[120px] min-h-[32px] sm:min-h-[24px] py-1.5 sm:py-0.5 placeholder:text-desktop-muted/50 leading-relaxed"
-            rows={1}
-          />
-          {isLoading ? (
-            <button
-              className="p-2 sm:p-1.5 rounded-lg transition-all shrink-0 mb-0.5 bg-red-500/20 hover:bg-red-500/30 text-red-400 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
-              onClick={stopGenerating}
-              title="停止生成"
-            >
-              <Square size={14} className="sm:size-[13px]" />
-            </button>
-          ) : (
-            <button
-              className={`p-2 sm:p-1.5 rounded-lg transition-all shrink-0 mb-0.5 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
-                input.trim() || attachedImages.length || attachedFiles.length
-                  ? 'bg-desktop-highlight hover:bg-desktop-highlight/80 text-white scale-100'
-                  : 'bg-white/5 text-desktop-muted scale-95'
-              }`}
-              onClick={() => sendMessage()}
-              disabled={!input.trim() && !attachedImages.length && !attachedFiles.length}
-            >
-              <Send size={14} className="sm:size-[13px]" />
-            </button>
+        <div className="flex flex-col gap-2 bg-[#161616] rounded-xl px-2 sm:px-3 py-2 border border-white/10 focus-within:border-amber-500/30 focus-within:shadow-[0_0_24px_rgba(200,169,110,0.12)] transition-all relative">
+          {messageSearchOpen && currentSessionId && (
+            <div className="absolute bottom-full left-0 right-0 z-30 mb-2 rounded-xl border border-white/10 bg-[#15171D]/98 p-2 shadow-2xl backdrop-blur-xl">
+              <div className="flex items-center gap-2">
+                <Search size={13} className="shrink-0 text-amber-400/80" />
+                <input
+                  ref={messageSearchInputRef}
+                  type="text"
+                  id="chat-message-search"
+                  aria-label="搜索当前会话消息"
+                  placeholder="搜索当前会话消息..."
+                  className="min-w-0 flex-1 bg-transparent text-xs text-gray-200 outline-none placeholder:text-gray-500"
+                  value={messageSearch}
+                  onChange={(e) => setMessageSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') closeMessageSearch();
+                    if (e.key === 'Enter' && messageSearchResults.length > 0) {
+                      e.preventDefault();
+                      navigateSearch(e.shiftKey ? -1 : 1);
+                    }
+                  }}
+                />
+                {messageSearch && (
+                  <span className="shrink-0 text-[10px] text-gray-500">
+                    {messageSearchResults.length > 0 ? `${messageSearchIndex + 1}/${messageSearchResults.length}` : '无结果'}
+                  </span>
+                )}
+                {messageSearchResults.length > 0 && (
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() => navigateSearch(-1)}
+                      className="rounded-md p-1 text-gray-500 hover:bg-white/10 hover:text-gray-200"
+                      title="上一个结果"
+                    >
+                      <ChevronUp size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateSearch(1)}
+                      className="rounded-md p-1 text-gray-500 hover:bg-white/10 hover:text-gray-200"
+                      title="下一个结果"
+                    >
+                      <ChevronDown size={13} />
+                    </button>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={closeMessageSearch}
+                  className="shrink-0 rounded-md p-1 text-gray-500 hover:bg-white/10 hover:text-gray-200"
+                  title="关闭搜索"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
           )}
+          {/* 工具按钮行 */}
+          <div className="flex items-center gap-1 sm:gap-2 flex-wrap">
+            <button
+              type="button"
+              className={`p-2 sm:p-1 rounded-lg sm:rounded transition-colors shrink-0 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
+                messageSearchOpen
+                  ? 'bg-amber-500/15 text-amber-300'
+                  : 'text-gray-400 hover:bg-white/10 hover:text-gray-200'
+              } ${currentSessionId ? '' : 'cursor-not-allowed opacity-40'}`}
+              hidden={!showAdvancedTools}
+              disabled={!currentSessionId}
+              onClick={() => {
+                setMessageSearchOpen((open) => {
+                  const next = !open;
+                  if (next) setTimeout(() => messageSearchInputRef.current?.focus(), 0);
+                  else setMessageSearch('');
+                  return next;
+                });
+              }}
+              title={currentSessionId ? '搜索当前会话消息' : '开始对话后可搜索消息'}
+            >
+              <Search size={16} className="sm:size-4" />
+            </button>
+            <button
+              type="button"
+              className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+              onClick={() => attachFileInputRef.current?.click()}
+              title={attachedFiles.length >= 5 ? '最多 5 个文件' : '附加文档（txt、md、pdf、doc、csv、json 等）'}
+            >
+              <Paperclip size={16} className="sm:size-4" /><span className="ml-1 text-sm">加文件</span>
+            </button>
+            <button
+              type="button"
+              className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+              onClick={() => attachInputRef.current?.click()}
+              title={attachedImages.length >= 3 ? '最多 3 张参考图' : '上传参考图（1–3 张），将随消息发送供图像编辑使用'}
+            >
+              <ImagePlus size={16} className="sm:size-4" /><span className="ml-1 text-sm">加图片</span>
+            </button>
+            <button
+              type="button"
+              className={`p-2 sm:p-1 rounded-lg sm:rounded transition-colors shrink-0 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
+                recordingId
+                  ? 'text-red-400 bg-red-400/20 animate-pulse'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-white/10'
+              }`}
+              onClick={toggleVoiceInput}
+              title={recordingId ? '停止录音' : '语音输入'}
+            >
+              {recordingId ? <MicOff size={16} className="sm:size-4" /> : <Mic size={16} className="sm:size-4" />}<span className="ml-1 text-sm">{recordingId?'说完了':'说话'}</span>
+            </button>
+            <button
+              type="button"
+              className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+              onClick={() => setSnippetPickerOpen((o) => !o)}
+              hidden={!showAdvancedTools}
+              title="插入代码片段"
+            >
+              <Code size={16} className="sm:size-4" />
+            </button>
+            <button
+              type="button"
+              className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+              onClick={() => setTemplatePickerOpen((o) => !o)}
+              hidden={!showAdvancedTools}
+              title="插入提示模板"
+            >
+              <FileText size={16} className="sm:size-4" />
+            </button>
+            <button
+              type="button"
+              className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center relative"
+              onClick={() => { setCalcOpen((o) => !o); setSnippetPickerOpen(false); }}
+              hidden={!showAdvancedTools}
+              title="计算器"
+            >
+              <Calculator size={16} className="sm:size-4" />
+            </button>
+            <button
+              type="button"
+              className="p-2 sm:p-1 rounded-lg sm:rounded hover:bg-white/10 transition-colors shrink-0 text-gray-400 hover:text-gray-200 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+              onClick={() => setReminderOpen((o) => !o)}
+              title="设置提醒"
+            >
+              <Bell size={16} className="sm:size-4" />
+            </button>
+          </div>
+          <p className="text-sm text-gray-400" aria-live="polite">{draftSaveFailed ? '草稿没能存好，关页面前请先复制这段话。' : isLoading || chatRun.isRunning ? '我还在做。你可以先写下一句话，等做好后再发送。' : '没发出去的话会留在这里，下次可以接着写。'}</p>
+          {/* 输入行 */}
+          <div className="flex items-end gap-1 sm:gap-2">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={(e) => {
+                const selectionStart = e.currentTarget.selectionStart;
+                const selectionEnd = e.currentTarget.selectionEnd;
+                const hasSelection = selectionStart !== selectionEnd;
+                const hasModifier = e.altKey || e.ctrlKey || e.metaKey || e.shiftKey;
+                const isFirstLine = !e.currentTarget.value.slice(0, selectionStart).includes('\n');
+                const isLastLine = !e.currentTarget.value.slice(selectionEnd).includes('\n');
+                if (
+                  !e.nativeEvent.isComposing &&
+                  !commandPaletteOpen &&
+                  !hasSelection &&
+                  !hasModifier &&
+                  ((e.key === 'ArrowUp' && isFirstLine) || (e.key === 'ArrowDown' && isLastLine))
+                ) {
+                  const direction = e.key === 'ArrowUp' ? -1 : 1;
+                  if (navigateInputHistory(direction, e.currentTarget)) {
+                    e.preventDefault();
+                    return;
+                  }
+                }
+                if (shouldSubmitChat(e)) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder={isSessionLoading ? '正在同步对话记录…' : '告诉我，你想做什么？'}
+              disabled={isSessionLoading || (isLoading && !currentSessionId)}
+              aria-label="告诉我，你想做什么？"
+              title="输入后按回车发送；Shift+Enter换行"
+              className="flex-1 bg-transparent outline-none text-sm sm:text-xs text-gray-200 resize-none max-h-[120px] min-h-[32px] sm:min-h-[24px] py-1.5 sm:py-0.5 placeholder:text-gray-400/50 leading-relaxed"
+              rows={1}
+            />
+            {isLoading ? (
+              <button
+                className="p-2 sm:p-1.5 rounded-lg transition-all shrink-0 bg-red-500/20 hover:bg-red-500/30 text-red-400 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center"
+                onClick={stopGenerating}
+                title="停止生成"
+              >
+                <Square size={14} className="sm:size-[13px]" /><span className="ml-1">先停一下</span>
+              </button>
+            ) : (
+              <button
+                className={`p-2 sm:p-1.5 rounded-lg transition-all shrink-0 touch-manipulation min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 flex items-center justify-center ${
+                  input.trim() || attachedImages.length || attachedFiles.length
+                    ? 'bg-[#C8A96E] hover:bg-[#C8A96E]/80 text-white scale-100'
+                    : 'bg-white/5 text-gray-400 scale-95'
+                }`}
+                onClick={() => sendMessage()}
+                disabled={chatRun.isRunning || chatRun.restoring || isSessionLoading || (!input.trim() && !attachedImages.length && !attachedFiles.length)}
+              >
+                <Send size={14} className="sm:size-[13px]" /><span className="ml-1">发送</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Code Snippet Picker */}
         {snippetPickerOpen && (
-          <div className="absolute bottom-full left-0 right-0 mb-2 bg-desktop-surface border border-white/20 rounded-xl shadow-2xl z-50 max-h-80 overflow-hidden flex flex-col">
+          <div className="absolute bottom-full left-0 right-0 mb-2 bg-[#161616] border border-white/20 rounded-xl shadow-2xl z-50 max-h-80 overflow-hidden flex flex-col">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
               <input
                 type="text"
                 placeholder="搜索代码片段..."
                 value={snippetFilter}
                 onChange={(e) => setSnippetFilter(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-400 outline-none"
                 autoFocus
               />
               <button
                 type="button"
                 onClick={() => { setSnippetPickerOpen(false); setSnippetFilter(''); }}
-                className="text-desktop-muted hover:text-desktop-text p-1"
+                className="text-gray-400 hover:text-gray-200 p-1"
               >
                 <X size={14} />
               </button>
@@ -2855,7 +3456,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 s.code.toLowerCase().includes(snippetFilter.toLowerCase()) ||
                 s.language.toLowerCase().includes(snippetFilter.toLowerCase())
               ).length === 0 ? (
-                <div className="text-xs text-desktop-muted text-center py-6">
+                <div className="text-xs text-gray-400 text-center py-6">
                   {snippets.length === 0 ? '暂无代码片段，去设置中添加' : '没有匹配的片段'}
                 </div>
               ) : (
@@ -2872,10 +3473,10 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                     onClick={() => insertSnippet(snippet.code)}
                   >
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-desktop-accent/20 text-desktop-accent">{snippet.language}</span>
-                      <span className="text-xs font-medium text-desktop-text">{snippet.title}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400">{snippet.language}</span>
+                      <span className="text-xs font-medium text-gray-200">{snippet.title}</span>
                     </div>
-                    <pre className="text-[10px] text-desktop-muted font-mono truncate max-w-full">{snippet.code.split('\n')[0]}</pre>
+                    <pre className="text-[10px] text-gray-400 font-mono truncate max-w-full">{snippet.code.split('\n')[0]}</pre>
                   </button>
                 ))
               )}
@@ -2885,20 +3486,20 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
         {/* Prompt Template Picker */}
         {templatePickerOpen && (
-          <div className="absolute bottom-full left-0 right-0 mb-2 bg-desktop-surface border border-white/20 rounded-xl shadow-2xl z-50 max-h-80 overflow-hidden flex flex-col">
+          <div className="absolute bottom-full left-0 right-0 mb-2 bg-[#161616] border border-white/20 rounded-xl shadow-2xl z-50 max-h-80 overflow-hidden flex flex-col">
             <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10">
               <input
                 type="text"
                 placeholder="搜索提示模板..."
                 value={templateFilter}
                 onChange={(e) => setTemplateFilter(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted outline-none"
+                className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-400 outline-none"
                 autoFocus
               />
               <button
                 type="button"
                 onClick={() => { setTemplatePickerOpen(false); setTemplateFilter(''); }}
-                className="text-desktop-muted hover:text-desktop-text p-1"
+                className="text-gray-400 hover:text-gray-200 p-1"
               >
                 <X size={14} />
               </button>
@@ -2910,7 +3511,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 t.prompt.toLowerCase().includes(templateFilter.toLowerCase()) ||
                 (t.category ?? '').toLowerCase().includes(templateFilter.toLowerCase())
               ).length === 0 ? (
-                <div className="text-xs text-desktop-muted text-center py-6">
+                <div className="text-xs text-gray-400 text-center py-6">
                   {promptTemplates.length === 0 ? '暂无提示模板，可在设置中添加' : '没有匹配的模板'}
                 </div>
               ) : (
@@ -2930,9 +3531,9 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                       {tpl.category && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">{tpl.category}</span>
                       )}
-                      <span className="text-xs font-medium text-desktop-text">{tpl.title}</span>
+                      <span className="text-xs font-medium text-gray-200">{tpl.title}</span>
                     </div>
-                    <p className="text-[10px] text-desktop-muted truncate max-w-full">{tpl.prompt.split('\n')[0]}</p>
+                    <p className="text-[10px] text-gray-400 truncate max-w-full">{tpl.prompt.split('\n')[0]}</p>
                   </button>
                 ))
               )}
@@ -2942,13 +3543,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
         {/* Inline Calculator */}
         {calcOpen && (
-          <div className="border-t border-white/10 bg-desktop-bg/95 backdrop-blur-sm p-3 flex flex-col gap-2">
+          <div className="border-t border-white/10 bg-[#0D0D0D]/95 backdrop-blur-sm p-3 flex flex-col gap-2">
             <div className="flex items-center gap-2">
-              <Calculator size={14} className="text-desktop-accent shrink-0" />
-              <span className="text-xs font-medium text-desktop-text">计算器</span>
+              <Calculator size={14} className="text-amber-400 shrink-0" />
+              <span className="text-xs font-medium text-gray-200">计算器</span>
               <button
                 type="button"
-                className="ml-auto text-desktop-muted hover:text-desktop-text transition-colors"
+                className="ml-auto text-gray-400 hover:text-gray-200 transition-colors"
                 onClick={() => { setCalcOpen(false); setCalcExpr(''); }}
               >
                 <X size={14} />
@@ -2960,12 +3561,12 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               onChange={(e) => handleCalcInput(e.target.value)}
               onKeyDown={handleCalcKey}
               placeholder="输入表达式，如 2^10、sqrt(2)、sin(pi/2)"
-              className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-desktop-text placeholder:text-desktop-muted/50 outline-none focus:border-desktop-accent/50 font-mono"
+              className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-sm text-gray-200 placeholder:text-gray-400/50 outline-none focus:border-amber-500/50 font-mono"
               autoFocus
             />
             {calcExpr && (
-              <div className="text-xs text-desktop-muted font-mono min-h-[20px]">
-                = <span className="text-desktop-accent font-semibold">{evalCalc(calcExpr) || '无效表达式'}</span>
+              <div className="text-xs text-gray-400 font-mono min-h-[20px]">
+                = <span className="text-amber-400 font-semibold">{evalCalc(calcExpr) || '无效表达式'}</span>
               </div>
             )}
             <div className="flex flex-wrap gap-1">
@@ -2973,7 +3574,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 <button
                   key={op}
                   type="button"
-                  className="px-2 py-1 text-xs bg-white/5 hover:bg-white/10 border border-white/10 rounded text-desktop-text transition-colors font-mono"
+                  className="px-2 py-1 text-xs bg-white/5 hover:bg-white/10 border border-white/10 rounded text-gray-200 transition-colors font-mono"
                   onClick={() => handleCalcInput(calcExpr + op)}
                 >
                   {op}
@@ -2993,7 +3594,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 <button
                   key={label}
                   type="button"
-                  className="px-1.5 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-desktop-muted hover:text-desktop-text transition-colors"
+                  className="px-1.5 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-gray-400 hover:text-gray-200 transition-colors"
                   onClick={() => handleCalcInput(calcExpr + val)}
                 >
                   {label}
@@ -3001,14 +3602,14 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               ))}
               <button
                 type="button"
-                className="px-2 py-1 text-xs bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-desktop-accent transition-colors"
+                className="px-2 py-1 text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded text-amber-400 transition-colors"
                 onClick={() => setCalcExpr(calcExpr.slice(0, -1))}
               >
                 DEL
               </button>
               <button
                 type="button"
-                className="px-2 py-1 text-xs bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-desktop-accent transition-colors"
+                className="px-2 py-1 text-xs bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded text-amber-400 transition-colors"
                 onClick={() => setCalcExpr('')}
               >
                 C
@@ -3016,7 +3617,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             </div>
             <button
               type="button"
-              className="w-full py-1.5 bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-xs text-desktop-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded text-xs text-amber-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={insertCalcResult}
               disabled={!calcExpr || !evalCalc(calcExpr)}
             >
@@ -3027,13 +3628,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
 
         {/* Reminder Popover */}
         {reminderOpen && (
-          <div className="border-t border-white/10 bg-desktop-bg/95 backdrop-blur-sm p-3 flex flex-col gap-2">
+          <div className="border-t border-white/10 bg-[#0D0D0D]/95 backdrop-blur-sm p-3 flex flex-col gap-2">
             <div className="flex items-center gap-2">
-              <Bell size={14} className="text-desktop-accent shrink-0" />
-              <span className="text-xs font-medium text-desktop-text">设置提醒</span>
+              <Bell size={14} className="text-amber-400 shrink-0" />
+              <span className="text-xs font-medium text-gray-200">设置提醒</span>
               <button
                 type="button"
-                className="ml-auto text-desktop-muted hover:text-desktop-text transition-colors"
+                className="ml-auto text-gray-400 hover:text-gray-200 transition-colors"
                 onClick={() => setReminderOpen(false)}
               >
                 <X size={14} />
@@ -3043,7 +3644,7 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               value={reminderMsg}
               onChange={(e) => setReminderMsg(e.target.value)}
               placeholder="提醒内容..."
-              className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-xs text-desktop-text placeholder:text-desktop-muted/50 outline-none focus:border-desktop-accent/50 resize-none"
+              className="w-full bg-white/5 border border-white/10 rounded px-3 py-1.5 text-xs text-gray-200 placeholder:text-gray-400/50 outline-none focus:border-amber-500/50 resize-none"
               rows={2}
             />
             <div className="flex gap-2">
@@ -3051,19 +3652,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
                 type="date"
                 value={reminderDate}
                 onChange={(e) => setReminderDate(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-desktop-text outline-none focus:border-desktop-accent/50"
+                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-amber-500/50"
                 min={new Date().toISOString().split('T')[0]}
               />
               <input
                 type="time"
                 value={reminderTime}
                 onChange={(e) => setReminderTime(e.target.value)}
-                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-desktop-text outline-none focus:border-desktop-accent/50"
+                className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-gray-200 outline-none focus:border-amber-500/50"
               />
             </div>
             <button
               type="button"
-              className="w-full py-1.5 bg-desktop-accent/20 hover:bg-desktop-accent/30 border border-desktop-accent/30 rounded text-xs text-desktop-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="w-full py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 rounded text-xs text-amber-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               onClick={submitReminder}
               disabled={!reminderMsg.trim() || !reminderDate || !reminderTime}
             >
@@ -3073,6 +3674,138 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         )}
       </div>
       </div>
+
+      {/* Session Deliverables Modal */}
+      {deliverablesOpen && (() => {
+        const documentCount = sessionDeliverables.filter((item) =>
+          ['document', 'spreadsheet', 'presentation'].includes(item.kind),
+        ).length;
+        const imageCount = sessionDeliverables.filter((item) => item.kind === 'image').length;
+        const otherCount = sessionDeliverables.length - documentCount - imageCount;
+        const timeFormatter = new Intl.DateTimeFormat('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+
+        return (
+          <div
+            className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/65 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="会话交付物"
+            onClick={() => setDeliverablesOpen(false)}
+          >
+            <div
+              className="flex max-h-[78vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/15 bg-[#141516] shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
+                  <PackageCheck size={18} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm font-semibold text-gray-100">当前会话交付物</h3>
+                  <p className="mt-0.5 text-[10px] text-gray-500">
+                    AI 创建的文件和图片集中在这里，可直接查看或下载
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
+                  onClick={() => setDeliverablesOpen(false)}
+                  aria-label="关闭交付物管理"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-4 gap-2 border-b border-white/5 px-5 py-3">
+                {[
+                  { label: '全部', value: sessionDeliverables.length, tone: 'text-emerald-300' },
+                  { label: '办公文档', value: documentCount, tone: 'text-blue-300' },
+                  { label: '图片', value: imageCount, tone: 'text-purple-300' },
+                  { label: '其他', value: otherCount, tone: 'text-amber-300' },
+                ].map((stat) => (
+                  <div key={stat.label} className="rounded-xl bg-white/[0.045] px-3 py-2">
+                    <div className={`text-base font-semibold ${stat.tone}`}>{stat.value}</div>
+                    <div className="text-[9px] text-gray-500">{stat.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                {sessionDeliverables.length === 0 ? (
+                  <div className="flex min-h-56 flex-col items-center justify-center gap-3 text-center">
+                    <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/5 text-gray-600">
+                      <PackageCheck size={26} />
+                    </span>
+                    <div>
+                      <p className="text-xs font-medium text-gray-300">当前会话还没有交付物</p>
+                      <p className="mt-1 text-[10px] text-gray-500">让 AI 创建 Word、PPT、表格、文件或图片后会自动出现在这里</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {sessionDeliverables.map((deliverable) => (
+                      <div
+                        key={`${deliverable.path}-${deliverable.id}`}
+                        className="group flex items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 transition-colors hover:border-white/10 hover:bg-white/[0.045]"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => openDeliverable(deliverable)}
+                          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                          title={`打开 ${deliverable.path}`}
+                        >
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-300">
+                            <DeliverableIcon kind={deliverable.kind} size={18} />
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-medium text-gray-200">
+                              {deliverable.name}
+                            </span>
+                            <span className="mt-0.5 block truncate text-[9px] text-gray-500">
+                              {deliverable.remote ? '生成图片' : deliverable.path}
+                            </span>
+                            <span className="mt-1 flex items-center gap-1.5 text-[9px] text-gray-600">
+                              <span>{getDeliverableTypeLabel(deliverable.kind)}</span>
+                              <span>·</span>
+                              <span>{timeFormatter.format(deliverable.createdAt)}</span>
+                            </span>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openDeliverable(deliverable)}
+                          className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-emerald-500/10 hover:text-emerald-300"
+                          title="查看"
+                          aria-label={`查看 ${deliverable.name}`}
+                        >
+                          <Eye size={15} />
+                        </button>
+                        {!deliverable.remote && (
+                          <button
+                            type="button"
+                            onClick={() => downloadDeliverable(deliverable)}
+                            className="rounded-lg p-2 text-gray-500 transition-colors hover:bg-white/10 hover:text-gray-200"
+                            title="下载"
+                            aria-label={`下载 ${deliverable.name}`}
+                          >
+                            <Download size={15} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Session Stats Modal */}
       {statsOpen && (() => {
@@ -3103,17 +3836,17 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
             onClick={() => setStatsOpen(false)}
           >
             <div
-              className="bg-desktop-surface border border-white/20 rounded-xl shadow-2xl w-full max-w-sm p-5 flex flex-col gap-4"
+              className="bg-[#161616] border border-white/20 rounded-xl shadow-2xl w-full max-w-sm p-5 flex flex-col gap-4"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <BarChart2 size={16} className="text-desktop-accent" />
-                  <h3 className="text-sm font-semibold text-desktop-text">会话统计</h3>
+                  <BarChart2 size={16} className="text-amber-400" />
+                  <h3 className="text-sm font-semibold text-gray-200">会话统计</h3>
                 </div>
                 <button
                   type="button"
-                  className="text-desktop-muted hover:text-desktop-text transition-colors"
+                  className="text-gray-400 hover:text-gray-200 transition-colors"
                   onClick={() => setStatsOpen(false)}
                 >
                   <X size={16} />
@@ -3122,13 +3855,13 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
               <div className="grid grid-cols-2 gap-3">
                 {stats.map((s) => (
                   <div key={s.label} className="bg-white/5 rounded-lg px-3 py-2.5 flex flex-col gap-0.5">
-                    <span className="text-[10px] text-desktop-muted uppercase tracking-wide">{s.label}</span>
-                    <span className="text-sm font-semibold text-desktop-text">{s.value}</span>
+                    <span className="text-[10px] text-gray-400 uppercase tracking-wide">{s.label}</span>
+                    <span className="text-sm font-semibold text-gray-200">{s.value}</span>
                   </div>
                 ))}
               </div>
               {totalMsgs > 0 && (
-                <div className="text-[11px] text-desktop-muted text-center">
+                <div className="text-[11px] text-gray-400 text-center">
                   {(() => {
                     const d = new Date(firstMsg!.timestamp);
                     const df = new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -3186,12 +3919,19 @@ export function ChatApp({ windowId, embeddedInMobile = false }: Props) {
         query={commandQuery}
         visible={commandPaletteOpen}
         position={commandPalettePosition}
-        commands={defaultCommands}
+        commands={allCommands}
         onSelect={handleCommandSelect}
         onClose={() => setCommandPaletteOpen(false)}
       />
       <ToastContainer />
+
+      {/* Context Treemap */}
+      {contextTreemapOpen && (
+        <ContextTreemap
+          stats={contextStats}
+          onClose={() => setContextTreemapOpen(false)}
+        />
+      )}
     </div>
   );
 }
-

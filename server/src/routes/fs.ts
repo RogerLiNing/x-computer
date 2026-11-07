@@ -2,7 +2,10 @@ import { Router } from 'express';
 import multer from 'multer';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
-import { readDocx, readXlsx, createDocx, createXlsx, type SheetData } from '../office/index.js';
+import { readDocx, readXlsx, readPptx, createDocx, createXlsx, type SheetData } from '../office/index.js';
+import { readPdf } from '../office/pdf.js';
+import { createHash } from 'node:crypto';
+import { saveOfficeEdit } from '../office/edit.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -135,8 +138,11 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
     }
   });
 
-  /** 读取办公文档为可编辑内容：docx 返回纯文本，xlsx 返回 sheets，pptx 暂不支持 */
+  /** 读取办公文档内容；PPTX 按实际页序返回文字，不还原版式。 */
   router.get('/read-office', async (req, res) => {
+    const controller = new AbortController();
+    const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+    res.once('close', disconnected);
     try {
       const fs = await getUserFS(req, sandboxFS, userSandboxManager);
       const filePath = (req.query.path as string)?.replace(/^\//, '') || '';
@@ -145,25 +151,55 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
         return;
       }
       const ext = filePath.split('.').pop()?.toLowerCase() || '';
-      const buf = await fs.readBinary(filePath);
+      if (req.query.ocr !== undefined && req.query.ocr !== 'true' && req.query.ocr !== 'false') {
+        res.status(400).json({ error: '识别选项无效' }); return;
+      }
+      const ocr = req.query.ocr === 'true', expectedSha = req.query.expected_sha256;
+      if (ocr && ext !== 'pdf') { res.status(400).json({ error: '扫描文字识别仅支持 PDF' }); return; }
+      if ((ocr || expectedSha !== undefined) && (typeof expectedSha !== 'string' || !/^[a-f0-9]{64}$/i.test(expectedSha))) {
+        res.status(400).json({ error: '请先打开文件，再识别扫描文字' }); return;
+      }
+      const buf = await fs.readBinaryBounded(filePath);
+      const sha256 = createHash('sha256').update(buf).digest('hex');
+      if (typeof expectedSha === 'string' && expectedSha.toLowerCase() !== sha256) {
+        res.status(409).json({ error: '文件已变化，请重新打开后再识别' }); return;
+      }
+      if (ext === 'pdf') {
+        res.json({ type: 'pdf', path: filePath, sha256, ...await readPdf(buf, controller.signal, ocr) });
+        return;
+      }
       if (ext === 'docx') {
         const text = await readDocx(buf);
-        res.json({ type: 'docx', path: filePath, text });
+        res.json({ type: 'docx', path: filePath, text, sha256 });
         return;
       }
       if (ext === 'xlsx') {
         const sheets = readXlsx(buf);
-        res.json({ type: 'xlsx', path: filePath, sheets });
+        res.json({ type: 'xlsx', path: filePath, sheets, sha256 });
         return;
       }
       if (ext === 'pptx') {
-        res.status(200).json({ type: 'pptx', path: filePath, unsupported: true, message: 'PPT 暂仅支持由 X 生成，本地预览与编辑即将支持' });
+        res.json({ type: 'pptx', path: filePath, sha256, slides: await readPptx(buf) });
         return;
       }
-      res.status(400).json({ error: 'Unsupported office format. Use .docx or .xlsx' });
+      res.status(400).json({ error: '支持 PDF、DOCX、XLSX 和 PPTX 文件' });
     } catch (err: any) {
-      res.status(400).json({ error: err.message || String(err) });
+      if (!controller.signal.aborted) res.status(400).json({ error: /^PDF OCR (不可用|缺少|当前需要)/.test(err.message ?? '')
+        ? '文字识别还没准备好，请联系管理员配置。' : err.message || String(err) });
+    } finally {
+      res.removeListener('close', disconnected);
     }
+  });
+
+  router.post('/edit-office', async (req, res) => {
+    try {
+      const body = req.body;
+      if (!body || typeof body.path !== 'string' || !body.path || body.path.includes('..') || !body.content || typeof body.content !== 'object' || Array.isArray(body.content)) {
+        res.status(400).json({ error: '文件路径或修改内容无效' }); return;
+      }
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      res.json(await saveOfficeEdit(fs, body.path, body.expectedSha256, body.content));
+    } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : '修改未保存，请检查后重试' }); }
   });
 
   /** 保存办公文档：docx 传 { text, title? }，xlsx 传 { sheets: [{ name, rows }] } */
@@ -180,24 +216,25 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
         return;
       }
       const pathNorm = filePath.replace(/^\//, '');
+      if (!['docx', 'xlsx'].includes(officeType) || !pathNorm.toLowerCase().endsWith('.' + officeType)) { res.status(400).json({ error: '文件扩展名与类型不一致' }); return; }
       if (officeType === 'docx') {
         const text = typeof content.text === 'string' ? content.text : '';
         const title = typeof content.title === 'string' ? content.title : undefined;
         const buf = await createDocx(text, title);
-        await fs.writeBinary(pathNorm, buf);
+        await fs.writeBinaryNew(pathNorm, buf);
         res.json({ success: true, path: pathNorm });
         return;
       }
       if (officeType === 'xlsx') {
         const sheets = Array.isArray(content.sheets) ? content.sheets as SheetData[] : [];
         const buf = createXlsx(sheets);
-        await fs.writeBinary(pathNorm, buf);
+        await fs.writeBinaryNew(pathNorm, buf);
         res.json({ success: true, path: pathNorm });
         return;
       }
       res.status(400).json({ error: 'Unsupported type. Use docx or xlsx' });
     } catch (err: any) {
-      res.status(400).json({ error: err.message || String(err) });
+      res.status(err.code === 'EEXIST' ? 409 : 400).json({ error: err.code === 'EEXIST' ? '原文件会保留，请使用修改副本功能或另选文件名' : err.message || String(err) });
     }
   });
 

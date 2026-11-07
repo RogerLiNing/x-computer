@@ -5,8 +5,6 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   timestamp: number;
-  taskId?: string;
-  taskStatus?: string;
   /** 工具/MCP 调用记录，可展开查看详情 */
   toolCalls?: ToolCallRecord[];
   /** 图片：助手为生成图 URL；用户为附带图片的沙箱路径（显示时用 /api/fs/read-binary 加载） */
@@ -21,4 +19,10 @@ export interface Message {
   reactions?: Record<string, boolean>;
   /** 是否被收藏 */
   bookmarked?: boolean;
+  /** 服务端持久交办编号。 */
+  runId?: string;
+  /** 关联的任务 ID */
+  taskId?: string;
+  /** 关联的任务状态 */
+  taskStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'awaiting_approval';
 }

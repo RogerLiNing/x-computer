@@ -94,7 +94,8 @@ export function createMemoryRouter(
     const typeMap = { PREFERENCE: 'preference' as const, DECISION: 'decision' as const, FACT: 'fact' as const };
     const type = typeMap[typeLine as keyof typeof typeMap] ?? 'fact';
     const content = (lines.slice(1).join(' ').trim() || lines[0] || trimmed).trim();
-    if (!content) return;
+    // 质量门槛：内容必须有足够上下文，至少 8 字符
+    if (!content || content.length < 8) return;
     await memoryService.capture(content, type);
     const date = new Date().toISOString().slice(0, 10);
     fireHook('memory_captured', {

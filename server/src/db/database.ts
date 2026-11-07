@@ -44,6 +44,7 @@ export interface ChatSessionRow {
   summary?: string | null;
   /** 父会话 ID（分支会话） */
   parent_session_id?: string | null;
+  first_user_message?: string | null;
 }
 
 export interface NotificationRow {
@@ -230,7 +231,8 @@ export class SqliteAppDatabase {
         enabled INTEGER NOT NULL DEFAULT 1,
         next_run INTEGER,
         created_at INTEGER NOT NULL,
-        session_id TEXT
+        session_id TEXT,
+        scope_json TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_user ON scheduled_jobs(user_id);
 
@@ -399,6 +401,10 @@ export class SqliteAppDatabase {
       }
     } catch {
       /* 忽略 */
+    }
+    const scheduledColumns = this.db.prepare('PRAGMA table_info(scheduled_jobs)').all() as { name: string }[];
+    if (!scheduledColumns.some(column => column.name === 'scope_json')) {
+      this.db.exec('ALTER TABLE scheduled_jobs ADD COLUMN scope_json TEXT');
     }
     // 兼容旧库：为已有 chat_messages 表补充 images_json、attached_files_json 列
     try {
@@ -808,20 +814,27 @@ export class SqliteAppDatabase {
   }
 
   listSessions(userId: string, limit = 50, scene?: string | null, includeArchived = false): ChatSessionRow[] {
-    const orderBy = 'ORDER BY is_pinned DESC, updated_at DESC';
-    const archivedFilter = includeArchived ? '' : 'AND is_archived = 0';
+    const select = `SELECT s.*, (
+      SELECT m.content
+      FROM chat_messages m
+      WHERE m.session_id = s.id AND m.role = 'user'
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    ) AS first_user_message FROM chat_sessions s`;
+    const orderBy = 'ORDER BY s.is_pinned DESC, s.updated_at DESC';
+    const archivedFilter = includeArchived ? '' : 'AND s.is_archived = 0';
     if (scene === 'x_direct') {
       return this.db
-        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${archivedFilter} ${orderBy} LIMIT ?`)
+        .prepare(`${select} WHERE s.user_id = ? AND s.scene = ? ${archivedFilter} ${orderBy} LIMIT ?`)
         .all(userId, 'x_direct', limit) as ChatSessionRow[];
     }
     if (scene === 'normal_chat' || scene == null || scene === '') {
       return this.db
-        .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${archivedFilter} ${orderBy} LIMIT ?`)
+        .prepare(`${select} WHERE s.user_id = ? AND (s.scene IS NULL OR s.scene = ?) ${archivedFilter} ${orderBy} LIMIT ?`)
         .all(userId, 'normal_chat', limit) as ChatSessionRow[];
     }
     return this.db
-      .prepare(`SELECT * FROM chat_sessions WHERE user_id = ? ${archivedFilter} ${orderBy} LIMIT ?`)
+      .prepare(`${select} WHERE s.user_id = ? ${archivedFilter} ${orderBy} LIMIT ?`)
       .all(userId, limit) as ChatSessionRow[];
   }
 
@@ -915,6 +928,33 @@ export class SqliteAppDatabase {
       bookmarked: 0,
       created_at: now,
     };
+  }
+
+  /** 按运行分配的稳定 ID 保存消息；重试不新增记录，也不转移消息所属会话或角色。 */
+  upsertRunMessage(
+    sessionId: string,
+    messageId: string,
+    role: 'user' | 'assistant',
+    content: string,
+    toolCallsJson?: string,
+    imagesJson?: string,
+    attachedFilesJson?: string,
+  ): ChatMessageRow {
+    return this.db.transaction(() => {
+      const existing = this.db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(messageId) as ChatMessageRow | undefined;
+      if (existing && (existing.session_id !== sessionId || existing.role !== role)) {
+        throw new Error('消息 ID 已属于其他会话或角色');
+      }
+      this.db.prepare(
+        `INSERT INTO chat_messages (id, session_id, role, content, tool_calls_json, images_json, attached_files_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET content = excluded.content, tool_calls_json = excluded.tool_calls_json,
+           images_json = COALESCE(excluded.images_json, chat_messages.images_json),
+           attached_files_json = COALESCE(excluded.attached_files_json, chat_messages.attached_files_json)`,
+      ).run(messageId, sessionId, role, content, toolCallsJson ?? null, imagesJson ?? null, attachedFilesJson ?? null, new Date().toISOString());
+      this.touchSession(sessionId);
+      return this.db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(messageId) as ChatMessageRow;
+    })();
   }
 
   updateMessageReactions(messageId: string, reactions: string): void {
@@ -1278,12 +1318,13 @@ export class SqliteAppDatabase {
     next_run?: number | null;
     created_at: number;
     session_id?: string | null;
+    scope_json?: string | null;
   }): void {
     this.db
       .prepare(
-        'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at, session_id, scope_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at, job.session_id ?? null);
+      .run(job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at, job.session_id ?? null, job.scope_json ?? null);
   }
 
   updateScheduledJobRunAt(id: string, runAt: number): void {
@@ -1309,10 +1350,10 @@ export class SqliteAppDatabase {
 
   getAllScheduledJobs(): {
     id: string; user_id: string; name: string | null; intent: string;
-    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null;
+    run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null; scope_json: string | null;
   }[] {
     return this.db
-      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id FROM scheduled_jobs ORDER BY next_run ASC')
+      .prepare('SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id, scope_json FROM scheduled_jobs ORDER BY next_run ASC')
       .all() as any;
   }
 
@@ -1490,8 +1531,8 @@ export class SqliteAppDatabase {
   ): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO whatsapp_messages (id, user_id, message_id, from_jid, to_jid, text, timestamp, is_group, unseen, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))`,
+        `INSERT INTO whatsapp_messages (id, user_id, message_id, from_jid, to_jid, text, timestamp, is_group, unseen, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now')) ON CONFLICT(id) DO NOTHING`,
       )
       .run(
         msg.id,
@@ -1545,8 +1586,8 @@ export class SqliteAppDatabase {
   ): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO channel_messages (id, user_id, channel, channel_message_id, from_id, from_name, chat_id, text, timestamp, is_group, unseen, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))`,
+        `INSERT INTO channel_messages (id, user_id, channel, channel_message_id, from_id, from_name, chat_id, text, timestamp, is_group, unseen, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now')) ON CONFLICT(id) DO NOTHING`,
       )
       .run(msg.id, userId, msg.channel, msg.channelMessageId ?? null, msg.fromId, msg.fromName ?? null, msg.chatId ?? null, msg.text ?? null, msg.timestamp ?? null, msg.isGroup ? 1 : 0);
   }
@@ -2035,7 +2076,7 @@ export class SqliteAppDatabase {
     const now = new Date().toISOString();
     this.db.prepare(
       `INSERT INTO delegations (id, user_id, title, description, delegated_to, due_at, last_checked_at, status, follow_up_count, notes, source, tags, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, NULL, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting', 0, NULL, ?, ?, ?, ?)`,
     ).run(id, params.userId, params.title, params.description ?? null, params.delegatedTo,
       params.dueAt ?? null, null, params.source ?? null, JSON.stringify(params.tags ?? []), now, now);
     return this.getDelegation(id, params.userId)!;
@@ -2450,6 +2491,17 @@ export class SqliteDatabaseAdapter {
       this.db.addMessage(sessionId, role, content, toolCallsJson, imagesJson, attachedFilesJson),
     );
   }
+  async upsertRunMessage(
+    sessionId: string,
+    messageId: string,
+    role: 'user' | 'assistant',
+    content: string,
+    toolCallsJson?: string,
+    imagesJson?: string,
+    attachedFilesJson?: string,
+  ): Promise<ChatMessageRow> {
+    return this.db.upsertRunMessage(sessionId, messageId, role, content, toolCallsJson, imagesJson, attachedFilesJson);
+  }
   getMessages(sessionId: string, limit?: number): Promise<ChatMessageRow[]> {
     return Promise.resolve(this.db.getMessages(sessionId, limit));
   }
@@ -2541,7 +2593,7 @@ export class SqliteDatabaseAdapter {
     return Promise.resolve();
   }
   getAllScheduledJobs(): Promise<
-    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null; scope_json: string | null }[]
   > {
     return Promise.resolve(this.db.getAllScheduledJobs());
   }

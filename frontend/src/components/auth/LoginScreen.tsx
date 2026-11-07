@@ -40,6 +40,7 @@ interface OAuthStatus {
 export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   const { t, i18n } = useTranslation();
   const [allowRegister, setAllowRegister] = useState(true);
+  const [passwordResetAvailable,setPasswordResetAvailable]=useState(false);
   const [tab, setTab] = useState<Tab>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -56,7 +57,6 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [resetDevCode, setResetDevCode] = useState('');
   const [resetSuccess, setResetSuccess] = useState(false);
 
   const fetchCaptcha = useCallback(async () => {
@@ -72,7 +72,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   }, [t]);
 
   useEffect(() => {
-    api.authGetSettings().then((s) => setAllowRegister(s.allowRegister)).catch(() => setAllowRegister(true));
+    api.authGetSettings().then((s) => {setAllowRegister(s.allowRegister);setPasswordResetAvailable(s.passwordResetAvailable===true);}).catch(() => setAllowRegister(true));
   }, []);
 
   useEffect(() => {
@@ -131,7 +131,6 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
       const res = await api.authRequestPasswordReset(resetEmail);
       if (res.success) {
         setResetStep('code');
-        if (res.code) setResetDevCode(res.code);
       } else {
         setResetStep('code');
       }
@@ -148,8 +147,8 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
       setError(t('auth.passwordMismatch'));
       return;
     }
-    if (newPassword.length < 6) {
-      setError(t('auth.passwordPlaceholderRegister'));
+    if (newPassword.length < 8||newPassword.length>256) {
+      setError(t('auth.resetPasswordLength'));
       return;
     }
     setError('');
@@ -165,7 +164,6 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
           setResetCode('');
           setNewPassword('');
           setConfirmPassword('');
-          setResetDevCode('');
           setResetSuccess(false);
         }, 2000);
       } else {
@@ -283,13 +281,15 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
               </div>
             ) : resetStep === 'email' ? (
               <>
-                <p className="text-white/50 text-sm text-center mb-2">{t('auth.resetPasswordDesc')}</p>
+                {passwordResetAvailable&&<p className="text-white/50 text-sm text-center mb-2">{t('auth.resetPasswordDesc')}</p>}
+                {!passwordResetAvailable&&<p role="status" className="text-sm text-amber-200">{t('auth.resetUnavailable')}</p>}
                 <div className="flex items-center bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 focus-within:border-desktop-highlight/50 transition-colors">
                   <Mail size={16} className="text-white/50 mr-3 shrink-0" />
                   <input
                     type="email"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
+                    disabled={loading||!passwordResetAvailable}
                     placeholder={t('auth.emailPlaceholder')}
                     className="flex-1 bg-transparent outline-none text-white placeholder:text-white/30"
                     autoComplete="email"
@@ -301,7 +301,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
                 <button
                   type="button"
                   onClick={handleRequestResetCode}
-                  disabled={loading || !resetEmail}
+                  disabled={loading || !resetEmail||!passwordResetAvailable}
                   className="w-full py-3 rounded-xl bg-desktop-highlight/30 hover:bg-desktop-highlight/50 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium transition-colors flex items-center justify-center gap-2"
                 >
                   {loading ? <span className="animate-pulse">{t('auth.processing')}</span> : <>{t('auth.sendResetCode')} <ArrowRight size={18} /></>}
@@ -309,20 +309,16 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
               </>
             ) : (
               <>
-                {resetDevCode && (
-                  <div className="text-sm text-blue-400 bg-blue-500/10 border border-blue-500/30 rounded-lg px-4 py-2 text-center">
-                    {t('auth.resetCodeSent')}：<span className="font-mono font-bold">{resetDevCode}</span>
-                  </div>
-                )}
                 <div className="flex items-center bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 focus-within:border-desktop-highlight/50 transition-colors">
                   <KeyRound size={16} className="text-white/50 mr-3 shrink-0" />
                   <input
                     type="text"
                     value={resetCode}
-                    onChange={(e) => setResetCode(e.target.value.replace(/\D/g, ''))}
+                    onChange={(e) => setResetCode(e.target.value.trim())}
                     placeholder={t('auth.enterResetCode')}
                     className="flex-1 bg-transparent outline-none text-white placeholder:text-white/30"
-                    maxLength={6}
+                    maxLength={32}
+                    autoComplete="one-time-code"
                   />
                 </div>
                 <div className="flex items-center bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 focus-within:border-desktop-highlight/50 transition-colors">
@@ -333,7 +329,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder={t('auth.newPassword')}
                     className="flex-1 bg-transparent outline-none text-white placeholder:text-white/30"
-                    minLength={6}
+                    minLength={8}
                     autoComplete="new-password"
                   />
                 </div>
@@ -345,7 +341,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder={t('auth.confirmNewPassword')}
                     className="flex-1 bg-transparent outline-none text-white placeholder:text-white/30"
-                    minLength={6}
+                    minLength={8}
                     autoComplete="new-password"
                   />
                 </div>

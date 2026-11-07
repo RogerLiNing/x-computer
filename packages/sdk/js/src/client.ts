@@ -81,7 +81,10 @@ interface RequestOptions {
   params?: Record<string, string | number | boolean | undefined>;
 }
 
+interface Identity { userId?: string; cookie?: string }
+
 interface HttpResponse<T> {
+  cookie?: string;
   ok: boolean;
   status: number;
   data?: T;
@@ -92,7 +95,7 @@ async function request<T>(
   baseUrl: string,
   path: string,
   options: RequestOptions,
-  userId?: string,
+  identity?: Identity,
 ): Promise<HttpResponse<T>> {
   const { method = 'GET', body, timeoutMs = DEFAULT_TIMEOUT_MS, params } = options;
 
@@ -108,10 +111,11 @@ async function request<T>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   };
-  if (userId && userId !== 'anonymous') {
-    headers['X-User-Id'] = userId;
+  if (identity?.userId && identity.userId !== 'anonymous') {
+    headers['X-User-Id'] = identity.userId;
   }
 
+  if(identity?.cookie)headers.Cookie=identity.cookie;
   let timer: ReturnType<typeof setTimeout>;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new XComputerError(`Request timed out after ${timeoutMs}ms`, 'NETWORK_ERROR')), timeoutMs);
@@ -122,6 +126,7 @@ async function request<T>(
     res = await Promise.race([
       fetch(url, {
         method,
+        credentials: 'include',
         headers,
         body: body !== undefined ? JSON.stringify(body) : undefined,
       }),
@@ -154,27 +159,27 @@ async function request<T>(
     error = `HTTP ${status}`;
   }
 
-  return { ok: status >= 200 && status < 300, status, data, error };
+  return { ok: status >= 200 && status < 300, status, data, error, cookie:res.headers.get('set-cookie')?.split(';')[0] };
 }
 
-async function get<T>(baseUrl: string, path: string, userId?: string, params?: Record<string, string | number | boolean | undefined>): Promise<HttpResponse<T>> {
-  return request<T>(baseUrl, path, { method: 'GET', params }, userId);
+async function get<T>(baseUrl: string, path: string, identity?: Identity, params?: Record<string, string | number | boolean | undefined>): Promise<HttpResponse<T>> {
+  return request<T>(baseUrl, path, { method: 'GET', params }, identity);
 }
 
-async function post<T>(baseUrl: string, path: string, body: unknown, userId?: string, timeoutMs?: number): Promise<HttpResponse<T>> {
-  return request<T>(baseUrl, path, { method: 'POST', body, timeoutMs }, userId);
+async function post<T>(baseUrl: string, path: string, body: unknown, identity?: Identity, timeoutMs?: number): Promise<HttpResponse<T>> {
+  return request<T>(baseUrl, path, { method: 'POST', body, timeoutMs }, identity);
 }
 
-async function put<T>(baseUrl: string, path: string, body: unknown, userId?: string): Promise<HttpResponse<T>> {
-  return request<T>(baseUrl, path, { method: 'PUT', body }, userId);
+async function put<T>(baseUrl: string, path: string, body: unknown, identity?: Identity): Promise<HttpResponse<T>> {
+  return request<T>(baseUrl, path, { method: 'PUT', body }, identity);
 }
 
-async function patch<T>(baseUrl: string, path: string, body: unknown, userId?: string): Promise<HttpResponse<T>> {
-  return request<T>(baseUrl, path, { method: 'PATCH', body }, userId);
+async function patch<T>(baseUrl: string, path: string, body: unknown, identity?: Identity): Promise<HttpResponse<T>> {
+  return request<T>(baseUrl, path, { method: 'PATCH', body }, identity);
 }
 
-async function del<T>(baseUrl: string, path: string, userId?: string): Promise<HttpResponse<T>> {
-  return request<T>(baseUrl, path, { method: 'DELETE' }, userId);
+async function del<T>(baseUrl: string, path: string, identity?: Identity): Promise<HttpResponse<T>> {
+  return request<T>(baseUrl, path, { method: 'DELETE' }, identity);
 }
 
 function throwOnError<T>(res: HttpResponse<T>, context?: string): T {
@@ -221,6 +226,8 @@ export class XComputerClient {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private _userId: string | undefined;
+  private sessionCookie: string | undefined;
+  private get identity(): Identity {return {userId:this._userId,cookie:this.sessionCookie};}
 
   constructor(options: XComputerClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
@@ -230,9 +237,15 @@ export class XComputerClient {
 
   // ── User / Auth ───────────────────────────────────────────
 
-  /** Set or update the active user ID (used for all subsequent requests) */
+  /** Update the identity hint; authentication still requires login or register. */
   setUserId(userId: string): void {
     this._userId = userId;
+  }
+
+  /** Revoke the current server session before discarding its local credential. */
+  async logout(): Promise<void> {
+    const response=await post(this.baseUrl,'/api/auth/logout',{},this.identity);
+    throwOnError(response);this._userId=undefined;this.sessionCookie=undefined;
   }
 
   /** Get the current user ID */
@@ -266,7 +279,7 @@ export class XComputerClient {
       captchaAnswer,
     });
     const data = throwOnError(res);
-    if (data?.userId) this._userId = data.userId;
+    if (data?.userId) {this._userId = data.userId;this.sessionCookie=res.cookie;}
     return data;
   }
 
@@ -284,7 +297,7 @@ export class XComputerClient {
       captchaAnswer,
     });
     const data = throwOnError(res);
-    if (data?.userId) this._userId = data.userId;
+    if (data?.userId) {this._userId = data.userId;this.sessionCookie=res.cookie;}
     return data;
   }
 
@@ -302,7 +315,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_LLM_IMPORT_MODELS,
       req,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -330,7 +343,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT,
       { messages, providerId, modelId, stream, scene, vectorConfig },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -351,7 +364,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT_WITH_TOOLS,
       { messages, providerId, modelId, tools, scene },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -373,7 +386,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT_AGENT,
       opts,
-      this._userId,
+      this.identity,
       120_000,
     );
     return throwOnError(res);
@@ -402,7 +415,9 @@ export class XComputerClient {
       headers['X-User-Id'] = this._userId;
     }
 
+    if(this.sessionCookie)headers.Cookie=this.sessionCookie;
     const res = await fetch(url, {
+      credentials:'include',
       method: 'POST',
       headers,
       body: JSON.stringify(opts),
@@ -465,7 +480,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT_CLASSIFY_INTENT,
       opts,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -481,7 +496,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT_SUGGEST_FOLLOW_UPS,
       opts,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -503,7 +518,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT_TASK_COMPLETION_REPLY,
       opts,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -518,7 +533,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_CHAT_GENERATE_IMAGE,
       opts,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -527,19 +542,19 @@ export class XComputerClient {
 
   /** Create and run a new task */
   async createTask(req: CreateTaskRequest): Promise<Task> {
-    const res = await post<Task>(this.baseUrl, ENDPOINT_TASKS, req, this._userId);
+    const res = await post<Task>(this.baseUrl, ENDPOINT_TASKS, req, this.identity);
     return throwOnError(res);
   }
 
   /** List all tasks (filtered to current user if authenticated) */
   async listTasks(): Promise<Task[]> {
-    const res = await get<Task[]>(this.baseUrl, ENDPOINT_TASKS, this._userId);
+    const res = await get<Task[]>(this.baseUrl, ENDPOINT_TASKS, this.identity);
     return throwOnError(res);
   }
 
   /** Get a specific task by ID */
   async getTask(id: string): Promise<Task> {
-    const res = await get<Task>(this.baseUrl, `${ENDPOINT_TASKS}/${id}`, this._userId);
+    const res = await get<Task>(this.baseUrl, `${ENDPOINT_TASKS}/${id}`, this.identity);
     return throwOnError(res);
   }
 
@@ -549,7 +564,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TASK_PAUSE(id),
       {},
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).success;
   }
@@ -560,7 +575,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TASK_RESUME(id),
       {},
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).success;
   }
@@ -571,7 +586,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TASK_APPROVE(taskId, stepId),
       {},
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).success;
   }
@@ -582,7 +597,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TASK_REJECT(taskId, stepId),
       {},
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).success;
   }
@@ -593,7 +608,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TASK_RETRY(id),
       { mode },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).success;
   }
@@ -605,7 +620,7 @@ export class XComputerClient {
     const res = await get<{ agents: AgentDefinition[] }>(
       this.baseUrl,
       ENDPOINT_AGENTS,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).agents;
   }
@@ -625,7 +640,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_AGENTS,
       opts,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -648,7 +663,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_AGENT_UPDATE(id),
       opts,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -658,7 +673,7 @@ export class XComputerClient {
     const res = await del<{ message: string }>(
       this.baseUrl,
       ENDPOINT_AGENT_UPDATE(id),
-      this._userId,
+      this.identity,
     );
     throwOnError(res);
   }
@@ -667,7 +682,7 @@ export class XComputerClient {
 
   /** List all agent teams */
   async listTeams(): Promise<AgentTeam[]> {
-    const res = await get<{ teams: AgentTeam[] }>(this.baseUrl, ENDPOINT_TEAMS, this._userId);
+    const res = await get<{ teams: AgentTeam[] }>(this.baseUrl, ENDPOINT_TEAMS, this.identity);
     return throwOnError(res).teams;
   }
 
@@ -677,7 +692,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TEAMS,
       { name, agent_ids: agentIds },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -688,7 +703,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_TEAM_UPDATE(id),
       { name: opts.name, agent_ids: opts.agentIds },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -698,7 +713,7 @@ export class XComputerClient {
     const res = await del<{ message: string }>(
       this.baseUrl,
       ENDPOINT_TEAM_UPDATE(id),
-      this._userId,
+      this.identity,
     );
     throwOnError(res);
   }
@@ -707,7 +722,7 @@ export class XComputerClient {
 
   /** List all agent groups */
   async listGroups(): Promise<AgentGroup[]> {
-    const res = await get<{ groups: AgentGroup[] }>(this.baseUrl, ENDPOINT_GROUPS, this._userId);
+    const res = await get<{ groups: AgentGroup[] }>(this.baseUrl, ENDPOINT_GROUPS, this.identity);
     return throwOnError(res).groups;
   }
 
@@ -717,7 +732,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_GROUPS,
       { name, agent_ids: agentIds },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -728,7 +743,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_GROUP_UPDATE(id),
       { name: opts.name, agent_ids: opts.agentIds },
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -738,7 +753,7 @@ export class XComputerClient {
     const res = await del<{ message: string }>(
       this.baseUrl,
       ENDPOINT_GROUP_UPDATE(id),
-      this._userId,
+      this.identity,
     );
     throwOnError(res);
   }
@@ -747,7 +762,7 @@ export class XComputerClient {
 
   /** Get memory system status */
   async getMemoryStatus(): Promise<MemoryStatus> {
-    const res = await get<MemoryStatus>(this.baseUrl, ENDPOINT_MEMORY_STATUS, this._userId);
+    const res = await get<MemoryStatus>(this.baseUrl, ENDPOINT_MEMORY_STATUS, this.identity);
     return throwOnError(res);
   }
 
@@ -764,7 +779,7 @@ export class XComputerClient {
     const res = await get<{ content: string; truncated?: boolean }>(
       this.baseUrl,
       ENDPOINT_MEMORY_READ,
-      this._userId,
+      this.identity,
       { path, from: opts?.from, lines: opts?.lines },
     );
     return throwOnError(res);
@@ -776,7 +791,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_MEMORY_RECALL,
       req,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -787,7 +802,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_MEMORY_CAPTURE,
       req,
-      this._userId,
+      this.identity,
     );
     throwOnError(res);
   }
@@ -798,7 +813,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_MEMORY_TEST_EMBEDDING,
       req,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res);
   }
@@ -809,7 +824,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_MEMORY_REBUILD_INDEX,
       req,
-      this._userId,
+      this.identity,
       300_000,
     );
     return throwOnError(res);
@@ -822,7 +837,7 @@ export class XComputerClient {
     const res = await get<{ ok: boolean; items: XBoardItem[] }>(
       this.baseUrl,
       ENDPOINT_X_BOARD,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).items;
   }
@@ -833,7 +848,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_X_BOARD,
       req,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).item;
   }
@@ -844,7 +859,7 @@ export class XComputerClient {
       this.baseUrl,
       ENDPOINT_X_BOARD_ITEM(id),
       req,
-      this._userId,
+      this.identity,
     );
     return throwOnError(res).item;
   }
@@ -854,7 +869,7 @@ export class XComputerClient {
     const res = await del<{ ok: boolean }>(
       this.baseUrl,
       ENDPOINT_X_BOARD_ITEM(id),
-      this._userId,
+      this.identity,
     );
     throwOnError(res);
   }

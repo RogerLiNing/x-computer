@@ -164,7 +164,7 @@ export function FileManagerApp({ windowId, metadata }: Props) {
     const fullPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
     const ext = name.split('.').pop()?.toLowerCase() || '';
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'];
-    const officeExts = ['docx', 'xlsx', 'pptx'];
+    const officeExts = ['docx', 'xlsx', 'pptx', 'pdf'];
     const codeExts = ['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'json', 'yaml', 'yml', 'toml'];
     const audioExts = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'];
     const videoExts = ['mp4', 'webm', 'mov', 'ogg'];

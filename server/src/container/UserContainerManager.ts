@@ -1,3 +1,4 @@
+import { mkdir } from 'node:fs/promises';
 /**
  * UserContainerManager - 用户容器管理器
  * 
@@ -13,7 +14,30 @@
 
 import Docker from 'dockerode';
 import path from 'path';
+import { createHash } from 'node:crypto';
+import { PassThrough, Transform } from 'node:stream';
+import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+
+function completeDockerFrames() {
+  let header=Buffer.alloc(0),remaining=0;
+  return new Transform({
+    transform(chunk:Buffer,_encoding,callback){
+      let offset=0;
+      while(offset<chunk.length){
+        if(remaining){const count=Math.min(remaining,chunk.length-offset);remaining-=count;offset+=count;continue;}
+        const count=Math.min(8-header.length,chunk.length-offset);header=Buffer.concat([header,chunk.subarray(offset,offset+count)]);offset+=count;
+        if(header.length===8){
+          remaining=header.readUInt32BE(4);
+          if(![1,2].includes(header[0])||header[1]||header[2]||header[3]||remaining>4*1024*1024){callback(new UncertainToolOutcomeError('容器回执帧无效'));return;}
+          header=Buffer.alloc(0);
+        }
+      }
+      callback(null,chunk);
+    },
+    flush(callback){callback(header.length||remaining?new UncertainToolOutcomeError('容器回执帧不完整'):undefined);},
+  });
+}
 
 export interface ContainerConfig {
   userId: string;
@@ -21,6 +45,7 @@ export interface ContainerConfig {
   memoryLimit?: string;   // 内存限制（默认 "512m"）
   storageLimit?: string;  // 存储限制（默认 "1g"）
   networkMode?: string;   // 网络模式（默认 "none"）
+  workspacePath?: string; // Internal mount chosen by the authenticated workspace manager.
 }
 
 export interface ExecOptions {
@@ -36,6 +61,9 @@ export interface ExecResult {
 
 export interface UserContainerManagerOptions {
   imageName?: string;
+  namePrefix?: string;
+  browserAllowedOrigins?: string[];
+  browserDnsMode?: 'system' | 'cloudflare';
   cpuLimit?: number;
   memoryLimit?: string;
   pidsLimit?: number;
@@ -48,10 +76,13 @@ export interface UserContainerManagerOptions {
 
 export class UserContainerManager {
   private docker: Docker;
+  private browserAllowedOrigins: string[];
+  private browserDnsMode: 'system' | 'cloudflare';
   private containers: Map<string, string> = new Map(); // userId -> containerId
   private lastActivity: Map<string, number> = new Map(); // userId -> timestamp
   private workspaceBasePath: string;
   private imageName: string;
+  private namePrefix: string;
   private defaultCpuLimit: number;
   private defaultMemoryLimit: string;
   private defaultPidsLimit: number;
@@ -59,10 +90,14 @@ export class UserContainerManager {
   private idleTimeout: number;
   private maxIdleTime: number;
   private cleanupTimer?: ReturnType<typeof setInterval>;
+  private mcpManager?: UserContainerManager;
 
-  constructor(workspaceBasePath: string, options: UserContainerManagerOptions = {}) {
-    this.docker = new Docker({ socketPath: '/var/run/docker.sock' });
+  constructor(workspaceBasePath: string, options: UserContainerManagerOptions = {}, private mcp = false) {
+    this.docker = new Docker();
     this.workspaceBasePath = workspaceBasePath;
+    this.browserDnsMode = options.browserDnsMode ?? 'system';
+    this.browserAllowedOrigins = options.browserAllowedOrigins ?? [];
+    this.namePrefix = options.namePrefix ?? 'x-computer-user';
     this.imageName = options.imageName ?? 'x-computer-sandbox:latest';
     this.defaultCpuLimit = options.cpuLimit ?? 1;
     this.defaultMemoryLimit = options.memoryLimit ?? '512m';
@@ -74,6 +109,18 @@ export class UserContainerManager {
 
     // 启动后台清理定时器（每分钟检查一次）
     this.startCleanupTimer();
+  }
+
+  async getOrCreateMcpContainer(userId: string, serverKey: string): Promise<string> {
+    if (!/^[\w-]{1,128}$/.test(userId)) throw new Error('Invalid extension owner');
+    this.mcpManager ??= new UserContainerManager(this.workspaceBasePath, {
+      imageName: this.imageName, namePrefix: `${this.namePrefix}-mcp`, cpuLimit: this.defaultCpuLimit,
+      memoryLimit: this.defaultMemoryLimit, pidsLimit: this.defaultPidsLimit,
+      networkMode: this.defaultNetworkMode === 'host' ? 'none' : this.defaultNetworkMode as 'none' | 'bridge',
+      idleTimeout: this.idleTimeout, maxIdleTime: this.maxIdleTime,
+    }, true);
+    const id = createHash('sha256').update(JSON.stringify([this.workspaceBasePath, userId, serverKey])).digest('hex').slice(0, 32);
+    return this.mcpManager.getOrCreateContainer({ userId: id, workspacePath: path.join(this.workspaceBasePath, 'users', userId, 'workspace') });
   }
 
   private startCleanupTimer(): void {
@@ -125,6 +172,11 @@ export class UserContainerManager {
   /**
    * 为用户创建或获取容器
    */
+  async findRunningContainer(userId: string): Promise<string | undefined> {
+    const rows = await this.docker.listContainers();
+    return rows.find(row => row.Names.includes(`/${this.namePrefix}-${userId}`))?.Id;
+  }
+
   async getOrCreateContainer(config: ContainerConfig): Promise<string> {
     const { userId } = config;
     
@@ -153,7 +205,7 @@ export class UserContainerManager {
     }
 
     // 2. 检查 Docker 中是否已有同名容器（服务器重启后缓存丢失的情况）
-    const containerName = `x-computer-user-${userId}`;
+    const containerName = `${this.namePrefix}-${userId}`;
     try {
       const containers = await this.docker.listContainers({ all: true });
       const existingContainer = containers.find(c => 
@@ -196,19 +248,22 @@ export class UserContainerManager {
     
     serverLogger.info('container', `创建用户容器: ${userId}`);
     
-    const workspacePath = path.join(this.workspaceBasePath, 'users', userId, 'workspace');
+    const workspacePath = config.workspacePath ?? path.join(this.workspaceBasePath, 'users', userId, 'workspace');
+    await mkdir(workspacePath, { recursive: true });
     
     try {
       const container = await this.docker.createContainer({
-        name: `x-computer-user-${userId}`,
+        name: `${this.namePrefix}-${userId}`,
         Image: this.imageName,
+        OpenStdin: true,
+        Tty: true,
         
         // 资源限制
         HostConfig: {
           Memory: this.parseMemoryLimit(memoryLimit),
           NanoCpus: cpuLimit * 1e9,
           
-          // 挂载用户工作区（只读宿主机，读写容器内）
+          // 仅绑定当前用户的工作区；宿主机其他目录不挂载。
           Binds: [
             `${workspacePath}:/workspace:rw`
           ],
@@ -229,7 +284,7 @@ export class UserContainerManager {
           
           // 临时文件系统
           Tmpfs: {
-            '/tmp': 'rw,noexec,nosuid,size=100m',
+            '/tmp': this.mcp ? 'rw,nosuid,nodev,size=100m' : 'rw,noexec,nosuid,size=100m',
             '/home/xuser': 'rw,noexec,nosuid,size=50m',
           },
           
@@ -250,6 +305,8 @@ export class UserContainerManager {
         
         // 环境变量（HOME 指向可写的 workspace；PATH 含 ~/.local/bin 便于 skillhub 等工具）
         Env: [
+          `X_BROWSER_DNS_MODE=${this.browserDnsMode}`,
+          `X_BROWSER_ALLOWED_ORIGINS=${JSON.stringify(this.browserAllowedOrigins)}`,
           'HOME=/workspace',
           'USER=xuser',
           'TERM=xterm-256color',
@@ -262,7 +319,7 @@ export class UserContainerManager {
         WorkingDir: '/workspace',
         
         // 用户（非 root）
-        User: '1000:1000',
+        User: process.getuid?.() ? `${process.getuid()}:${process.getgid?.() ?? 1000}` : '1000:1000',
       });
 
       await container.start();
@@ -288,77 +345,44 @@ export class UserContainerManager {
     command: string,
     options: ExecOptions = {}
   ): Promise<ExecResult> {
-    const containerId = await this.getOrCreateContainer({ userId });
-    // 记录容器活动（用于空闲超时判断）
-    this.lastActivity.set(userId, Date.now());
-    const container = this.docker.getContainer(containerId);
-
     const { cwd = '/workspace', timeout = 30000 } = options;
-    
-    // 安全审计日志（R060）
-    serverLogger.info('security-audit', `[SHELL_EXEC] userId=${userId} cmd=${command.substring(0, 200)} cwd=${cwd}`);
-    
+    if(!Number.isSafeInteger(timeout)||timeout<1||timeout>300000)throw new Error('命令超时参数须在 1 至 300000 毫秒之间');
+    let dispatched=false,finished=false;
+    const cleanup:Array<()=>void>=[];
+    let timer:ReturnType<typeof setTimeout>;
+    const deadline=new Promise<never>((_resolve,reject)=>{timer=setTimeout(()=>reject(dispatched?new UncertainToolOutcomeError('容器命令回执超时，结果未知'):new Error('执行环境准备超时，命令尚未启动')),timeout);});
     try {
-      // 创建 exec 实例
-      const exec = await container.exec({
-        Cmd: ['/bin/sh', '-c', `cd ${cwd} && ${command}`],
-        AttachStdout: true,
-        AttachStderr: true,
-        Tty: false,
+      const containerId=await Promise.race([this.getOrCreateContainer({userId}),deadline]);
+      this.lastActivity.set(userId,Date.now());
+      serverLogger.info('security-audit',`[SHELL_EXEC] userId=${userId}`);
+      const exec=await Promise.race([this.docker.getContainer(containerId).exec({Cmd:['/bin/sh','-c',command],WorkingDir:cwd,AttachStdout:true,AttachStderr:true,Tty:false}),deadline]);
+      dispatched=true;
+      const starting=exec.start({Detach:false});
+      void starting.then(stream=>{stream.on('error',()=>{});if(finished)stream.destroy();else cleanup.push(()=>stream.destroy());}).catch(()=>{});
+      const stream=await Promise.race([starting,deadline]);
+      if(stream.destroyed)throw new UncertainToolOutcomeError('容器响应在读取前已断开');
+      const validated=completeDockerFrames(),stdoutStream=new PassThrough(),stderrStream=new PassThrough();
+      cleanup.push(()=>{validated.destroy();stdoutStream.destroy();stderrStream.destroy();});
+      stdoutStream.setEncoding('utf8');stderrStream.setEncoding('utf8');
+      let stdout='',stderr='';
+      stdoutStream.on('data',text=>{stdout=(stdout+text).slice(0,50000);});
+      stderrStream.on('data',text=>{stderr=(stderr+text).slice(0,10000);});
+      const result=new Promise<ExecResult>((resolve,reject)=>{
+        let ended=false;
+        const uncertain=()=>reject(new UncertainToolOutcomeError('容器命令回执未完整取得，结果未知，禁止自动重试'));
+        stream.on('end',()=>{ended=true;});stream.on('close',()=>{if(!ended)uncertain();});stream.on('error',uncertain);validated.on('error',uncertain);
+        validated.on('end',async()=>{
+          try{const info=await Promise.race([exec.inspect(),deadline]);if(info.Running!==false||!Number.isInteger(info.ExitCode))throw new Error('无确定退出码');resolve({stdout,stderr,exitCode:info.ExitCode!});}catch{uncertain();}
+        });
+        this.docker.modem.demuxStream(validated,stdoutStream,stderrStream);
+        stream.pipe(validated);
       });
-
-      // 执行命令
-      const stream = await exec.start({ Detach: false });
-      
-      let stdout = '';
-      let stderr = '';
-      
-      return new Promise((resolve, reject) => {
-        const timeoutId = setTimeout(() => {
-          stream.destroy();
-          reject(new Error('命令执行超时'));
-        }, timeout);
-
-        stream.on('data', (chunk: Buffer) => {
-          // Docker stream format: 8-byte header + payload
-          // Header[0] = stream type (1=stdout, 2=stderr)
-          if (chunk.length > 8) {
-            const streamType = chunk[0];
-            const payload = chunk.slice(8).toString();
-            
-            if (streamType === 1) {
-              stdout += payload;
-            } else if (streamType === 2) {
-              stderr += payload;
-            }
-          }
-        });
-
-        stream.on('end', async () => {
-          clearTimeout(timeoutId);
-          
-          try {
-            const info = await exec.inspect();
-            resolve({
-              stdout: stdout.slice(0, 50000),
-              stderr: stderr.slice(0, 10000),
-              exitCode: info.ExitCode ?? 0,
-            });
-          } catch (error) {
-            reject(error);
-          }
-        });
-
-        stream.on('error', (error) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        });
-      });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      serverLogger.error('container', `命令执行失败: ${userId}`, msg);
-      throw new Error(`命令执行失败: ${msg}`);
-    }
+      return await Promise.race([result,deadline]);
+    } catch(error) {
+      if(dispatched)throw new UncertainToolOutcomeError('容器命令启动或回执状态未知，禁止自动重试');
+      serverLogger.error('container',`命令尚未启动: ${userId}`);
+      throw new Error(`命令尚未启动: ${error instanceof Error?error.message:String(error)}`);
+    } finally {finished=true;clearTimeout(timer!);for(const close of cleanup)close();}
   }
 
   /**
@@ -393,11 +417,15 @@ export class UserContainerManager {
   /**
    * 清理所有容器
    */
+  stopMonitoring(): void {
+    this.mcpManager?.stopMonitoring();
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.cleanupTimer = undefined;
+  }
+
   async cleanup(): Promise<void> {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = undefined;
-    }
+    this.stopMonitoring();
+    await this.mcpManager?.cleanup();
 
     serverLogger.info('container', `清理所有用户容器，共 ${this.containers.size} 个`);
 

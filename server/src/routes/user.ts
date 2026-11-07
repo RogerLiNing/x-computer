@@ -8,32 +8,52 @@
  * - PUT  /api/users/me/config/:key → 更新单个配置
  * - DELETE /api/users/me/config/:key → 删除单个配置
  *
- * llm_config 仅专业版（pro/enterprise）可配置，非专业版始终使用 server/.x-config.json 默认值。
+ * 管理员和专业版用户可配置自己的模型，其他用户使用服务端默认配置。
  */
 
 import { Router } from 'express';
 import type { AppDatabase } from '../db/database.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 import { loadDefaultConfig } from '../config/defaultConfig.js';
+import { publicLLMConfig, mergeUserLLMConfig } from '../llm/publicConfig.js';
+import { canConfigureUserLLM } from '../llm/userConfigAccess.js';
 
 const LLM_CONFIG_KEY = 'llm_config';
-const PRO_PLANS = new Set(['pro', 'enterprise']);
+const SERVER_KEYS = new Set(['auth', 'container', 'database', 'mcp_servers', 'email', 'oauth', 'runtime_profile', 'tool_loading_mode', '__proto__', 'constructor', 'prototype']);
+// Machine config keys must not alias reserved ASCII names under a database collation.
+const privateKey = (key: string) => {const normalized=key.toLowerCase();return /[^\x21-\x7e]/.test(key) || SERVER_KEYS.has(normalized) || normalized==='auth_password_reset_v1' || normalized.startsWith('auth_session:');};
 
-async function canConfigureLLM(
-  subscriptionService: SubscriptionService | undefined,
-  userId: string
-): Promise<boolean> {
-  if (!subscriptionService) return true; // 无订阅服务时允许（开发模式）
-  try {
-    const sub = await subscriptionService.getUserSubscription(userId);
-    return sub ? PRO_PLANS.has(sub.planId) : false;
-  } catch {
-    return false; // 表不存在等异常时视为不可配置
+async function saveUserLLMConfig(db: AppDatabase, userId: string, value: unknown) {
+  const sqlite = db.getDialect() === 'sqlite';
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const previous = await db.getConfig(userId, LLM_CONFIG_KEY);
+    const stored = mergeUserLLMConfig(value, previous);
+    const serialized = JSON.stringify(stored);
+    if (previous === serialized) return stored;
+    if (previous === undefined) {
+      await db.run(`${sqlite ? 'INSERT OR IGNORE' : 'INSERT IGNORE'} INTO user_config (user_id, \`key\`, value, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)`, [userId, LLM_CONFIG_KEY, serialized]);
+    } else {
+      await db.run(`UPDATE user_config SET value=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=? AND \`key\`=?
+        AND ${sqlite ? 'value=?' : 'BINARY value=BINARY ?'}`, [serialized, userId, LLM_CONFIG_KEY, previous]);
+    }
+    if (await db.getConfig(userId, LLM_CONFIG_KEY) === serialized) return stored;
   }
+  throw new Error('模型配置同时发生了修改，请重试');
 }
 
 export function createUserRouter(db: AppDatabase, subscriptionService?: SubscriptionService): Router {
   const router = Router();
+  router.param('key',(_req,res,next,key)=>{
+    if(privateKey(key)){res.status(403).json({error:'服务器配置或会话凭证不可通过用户设置访问'});return;}
+    next();
+  });
+  router.use('/me/config',(req,res,next)=>{
+    let key:string;try{key=decodeURIComponent(req.path.replace(/^\//,''));}catch{res.status(400).json({error:'无效配置名称'});return;}
+    if(privateKey(key) || (req.method!=='GET' && Object.keys(req.body??{}).some(privateKey))){
+      res.status(403).json({error:'服务器配置或会话凭证不可通过用户设置访问'});return;
+    }next();
+  });
 
   /** GET /api/users/me - 当前用户信息（含 email：有则已登录账号，无则为匿名） */
   router.get('/me', async (req, res) => {
@@ -97,23 +117,20 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
   router.get('/me/config', async (req, res) => {
     const userId = req.userId;
     await db.ensureUser(userId);
-    const canEditLLM = await canConfigureLLM(subscriptionService, userId);
+    const canEditLLM = await canConfigureUserLLM(userId, db, subscriptionService);
     const configs = await db.getAllConfig(userId);
-    const parsed: Record<string, unknown> = {};
+    const parsed: Record<string, unknown> = Object.create(null);
     for (const [key, value] of Object.entries(configs)) {
+      if(privateKey(key))continue;
       if (key === LLM_CONFIG_KEY && !canEditLLM) continue; // 非专业版不返回用户存储的 llm_config
       try {
-        parsed[key] = JSON.parse(value);
+        parsed[key] = key === LLM_CONFIG_KEY ? publicLLMConfig(JSON.parse(value)) : JSON.parse(value);
       } catch {
-        parsed[key] = value;
+        parsed[key] = key === LLM_CONFIG_KEY ? publicLLMConfig(undefined) : value;
       }
     }
     const defaults = loadDefaultConfig();
-    for (const [key, defVal] of Object.entries(defaults)) {
-      if (parsed[key] === undefined || parsed[key] === null) {
-        parsed[key] = defVal;
-      }
-    }
+    if (parsed[LLM_CONFIG_KEY] == null && defaults.llm_config != null) parsed[LLM_CONFIG_KEY] = publicLLMConfig(defaults.llm_config);
     res.json(parsed);
   });
 
@@ -135,16 +152,16 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
     const userId = req.userId;
     await db.ensureUser(userId);
     const key = req.params.key;
-    const canEditLLM = await canConfigureLLM(subscriptionService, userId);
+    const canEditLLM = await canConfigureUserLLM(userId, db, subscriptionService);
     if (key === LLM_CONFIG_KEY && !canEditLLM) {
       const defaults = loadDefaultConfig();
       const defVal = defaults[LLM_CONFIG_KEY];
-      return res.json({ key, value: defVal ?? {} });
+      return res.json({ key, value: publicLLMConfig(defVal) });
     }
     let value = await db.getConfig(userId, key);
     if (value === undefined) {
       const defaults = loadDefaultConfig();
-      const defVal = defaults[key];
+      const defVal = key === LLM_CONFIG_KEY ? publicLLMConfig(defaults.llm_config) : undefined;
       if (defVal !== undefined) {
         return res.json({ key, value: defVal });
       }
@@ -155,9 +172,9 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
       return;
     }
     try {
-      res.json({ key, value: JSON.parse(value) });
+      res.json({ key, value: key === LLM_CONFIG_KEY ? publicLLMConfig(JSON.parse(value)) : JSON.parse(value) });
     } catch {
-      res.json({ key, value });
+      res.json({ key, value: key === LLM_CONFIG_KEY ? publicLLMConfig(undefined) : value });
     }
   });
 
@@ -166,16 +183,21 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
     const userId = req.userId;
     await db.ensureUser(userId);
     const body = req.body;
-    if (!body || typeof body !== 'object') {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
       res.status(400).json({ error: 'Body must be a JSON object' });
       return;
     }
-    const canEditLLM = await canConfigureLLM(subscriptionService, userId);
+    const canEditLLM = await canConfigureUserLLM(userId, db, subscriptionService);
     if (LLM_CONFIG_KEY in body && !canEditLLM) {
-      res.status(403).json({ error: '仅专业版用户可配置大模型，请升级套餐' });
+      res.status(403).json({ error: '当前账号无权配置个人模型' });
       return;
     }
+    if (LLM_CONFIG_KEY in body) {
+      try { await saveUserLLMConfig(db, userId, body[LLM_CONFIG_KEY]); }
+      catch { return res.status(400).json({ error: '模型配置无效' }); }
+    }
     for (const [key, value] of Object.entries(body)) {
+      if (key === LLM_CONFIG_KEY) continue;
       const strValue = typeof value === 'string' ? value : JSON.stringify(value);
       await db.setConfig(userId, key, strValue);
     }
@@ -187,15 +209,23 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
     const userId = req.userId;
     await db.ensureUser(userId);
     const key = req.params.key;
-    const canEditLLM = await canConfigureLLM(subscriptionService, userId);
+    const canEditLLM = await canConfigureUserLLM(userId, db, subscriptionService);
     if (key === LLM_CONFIG_KEY && !canEditLLM) {
-      res.status(403).json({ error: '仅专业版用户可配置大模型，请升级套餐' });
+      res.status(403).json({ error: '当前账号无权配置个人模型' });
       return;
     }
     const { value } = req.body ?? {};
     if (value === undefined) {
       res.status(400).json({ error: 'Missing value in body' });
       return;
+    }
+    if (key === LLM_CONFIG_KEY) {
+      try {
+        const stored = await saveUserLLMConfig(db, userId, value);
+        return res.json({ success: true, key, value: publicLLMConfig(stored) });
+      } catch {
+        return res.status(400).json({ error: '模型配置保存失败，请检查配置或重试' });
+      }
     }
     const strValue = typeof value === 'string' ? value : JSON.stringify(value);
     await db.setConfig(userId, key, strValue);
@@ -207,9 +237,9 @@ export function createUserRouter(db: AppDatabase, subscriptionService?: Subscrip
     const userId = req.userId;
     await db.ensureUser(userId);
     const key = req.params.key;
-    const canEditLLM = await canConfigureLLM(subscriptionService, userId);
+    const canEditLLM = await canConfigureUserLLM(userId, db, subscriptionService);
     if (key === LLM_CONFIG_KEY && !canEditLLM) {
-      res.status(403).json({ error: '仅专业版用户可配置大模型，请升级套餐' });
+      res.status(403).json({ error: '当前账号无权配置个人模型' });
       return;
     }
     await db.deleteConfig(userId, key);

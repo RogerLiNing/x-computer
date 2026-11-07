@@ -1,9 +1,11 @@
 /**
  * 按套餐功能过滤工具列表
- * trial: 仅基础工具（file、shell、grep、llm.generate、sleep）
- * personal: 基础 + 扩展（http、office 等）
+ * trial: 基础工具及本地 Office 读取、创建、修改副本
+ * personal: 基础 + 扩展（http、文件索引等）
  * pro/enterprise: 全部（含 MCP、server、workflow、memory、signal、x、skill、多媒体等）
  */
+
+import { SEND_TOOLS } from '../tooling/sendApproval.js';
 
 export interface LLMToolDef {
   name: string;
@@ -13,7 +15,50 @@ export interface LLMToolDef {
 
 /** 试用版仅允许的基础工具 */
 const BASIC_TOOL_NAMES = new Set([
+  ...SEND_TOOLS,
+  'x.ask_user',
+  'x.create_agent',
+  'x.list_agents',
+  'x.update_agent',
+  'x.dispatch_agent',
+  'x.run_agent',
+  'x.run_team',
+  'x.run_group',
+  'x.get_agent_run',
+  'x.create_team',
+  'x.list_teams',
+  'x.update_team',
+  'x.create_group',
+  'x.list_groups',
+  'x.update_group',
+  'x.add_agents_to_group',
+  'x.remove_agents_from_group',
+  'x.dispatch_team',
+  'x.dispatch_group',
+  'x.create_app',
+  'x.list_apps',
+  'x.get_app_logs',
+  'browser.request_upload',
+  'browser.downloads',
+  'browser.present_download',
+  'browser.observe',
+  'browser.act',
+  'capability.search',
+  'capability.load',
+  'web_search',
+  'http_request',
+  'html_parse',
+  'json_parse',
   'file.read',
+  'file.extract_text',
+  'office.edit_copy',
+  'office.create_docx',
+  'office.read_docx',
+  'office.create_xlsx',
+  'office.read_xlsx',
+  'office.create_pptx',
+  'office.read_pptx',
+  'file.present',
   'file.write',
   'file.list',
   'file.replace',
@@ -21,6 +66,14 @@ const BASIC_TOOL_NAMES = new Set([
   'shell.run',
   'llm.generate',
   'sleep',
+  'read_recent_assistant_chat',
+  'memory_search',
+  'x.notify_user',
+  'x.record_done',
+  'x.schedule_run',
+  'x.schedule_reminder',
+  'x.list_scheduled_runs',
+  'x.remove_scheduled_run',
 ]);
 
 /** 个人版在基础之上额外允许（不含 MCP、高级工具） */
@@ -28,12 +81,6 @@ const ALL_FEATURES_EXTRA = new Set([
   'http.request',
   'file.tail',
   'file.parse',
-  'office.create_docx',
-  'office.read_docx',
-  'office.create_xlsx',
-  'office.read_xlsx',
-  'office.create_pptx',
-  'office.read_pptx',
 ]);
 
 /** 工具名是否属于 MCP（mcp.xxx.yyy 格式） */

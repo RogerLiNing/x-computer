@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import type { AppDatabase } from '../db/database.js';
-import { getMessages as getXProactiveMessages, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
+import { getMessagesWithHistory, markReadWithHistory } from '../x/XProactiveMessages.js';
 
 const X_DONE_LOG_KEY = 'x_done_log';
 
@@ -8,10 +8,10 @@ export function createXProactiveRouter(db: AppDatabase | undefined): Router {
   const router = Router();
 
   // ── 主脑 X 主动找用户：主动消息列表（供 X 主脑入口展示） ──
-  router.get('/x/proactive-messages', (req, res) => {
+  router.get('/x/proactive-messages', async (req, res) => {
     try {
       const userId = (req as { userId?: string }).userId;
-      const list = getXProactiveMessages(userId);
+      const list = await getMessagesWithHistory(db,userId);
       res.json({ messages: list });
     } catch (err: any) {
       res.status(500).json({ error: err?.message ?? '读取失败' });
@@ -19,7 +19,7 @@ export function createXProactiveRouter(db: AppDatabase | undefined): Router {
   });
 
   /** 标记 X 主动消息为已读：用户点击「已读」或 X 通过工具标记。Body: { id: string } 或 { ids: string[] } */
-  router.post('/x/proactive-messages/read', (req, res) => {
+  router.post('/x/proactive-messages/read', async (req, res) => {
     try {
       const userId = (req as { userId?: string }).userId;
       if (!userId || userId === 'anonymous') {
@@ -28,7 +28,7 @@ export function createXProactiveRouter(db: AppDatabase | undefined): Router {
       }
       const body = req.body as { id?: string; ids?: string[] };
       const ids = Array.isArray(body.ids) ? body.ids : body.id ? [body.id] : [];
-      for (const id of ids) if (typeof id === 'string' && id) markXProactiveRead(userId, id);
+      for (const id of ids) if (typeof id === 'string' && id) await markReadWithHistory(db,userId,id);
       res.json({ success: true, marked: ids.length });
     } catch (err: any) {
       res.status(500).json({ error: err?.message ?? '标记失败' });

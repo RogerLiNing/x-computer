@@ -3,10 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "description": "AI-driven autonomous computer system — office-first, agent-powered",
   "scripts": {
+    "dev:isolated": "node scripts/dev-isolated.mjs",
+    "test:isolated": "node --test scripts/dev-isolated.test.mjs",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:frontend\"",
     "dev:frontend": "npm run dev --workspace=frontend",
     "dev:server": "npm run dev --workspace=server",

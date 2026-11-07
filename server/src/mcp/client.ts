@@ -1,11 +1,12 @@
+import { mcpHttpRequest } from './httpTransport.js';
 /**
  * MCP 客户端：HTTP 或 Stdio 传输，统一 listTools / callTool 入口
  */
 
-import type { McpServerConfig, McpToolSchema, McpCallResult } from './types.js';
+import type { McpServerConfig, McpToolSchema, McpCallResult, McpExecutionContext } from './types.js';
 import { isMcpHttpTransport } from './types.js';
 import { listToolsStdio, callToolStdio } from './clientStdio.js';
-import { serverLogger } from '../observability/ServerLogger.js';
+import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
 
 const RPC_TIMEOUT_MS = 20000;
 
@@ -14,7 +15,6 @@ function parseSSEResponse<T>(
   body: string,
   requestId: number,
 ): { id?: number; result?: T; error?: { code: number; message: string } } | null {
-  let lastMatch: { id?: number; result?: T; error?: { code: number; message: string } } | null = null;
   const lines = body.split(/\r?\n/);
   for (const line of lines) {
     const dataLine = line.startsWith('data:') ? line.slice(5).trim() : null;
@@ -23,35 +23,35 @@ function parseSSEResponse<T>(
       const obj = JSON.parse(dataLine) as { id?: number; result?: T; error?: { code: number; message: string } };
       if (obj && (obj.result !== undefined || obj.error !== undefined)) {
         if (obj.id === requestId) return obj;
-        lastMatch = obj;
+
       }
     } catch {
       // skip non-JSON lines
     }
   }
-  return lastMatch;
+  return null;
 }
 
 const AUTH_HEADER_KEYS = ['Authorization', 'authorization', 'api-key', 'Api-Key', 'apikey'];
 
-/** 将字符串中的 ${VAR} 替换为 env[VAR] ?? process.env[VAR] ?? ''（Cursor 兼容：用 env 或环境变量填 API Key） */
-function substituteEnv(str: string, env?: Record<string, string> | null): string {
+/** User extensions can reference only their explicit variables; administrator presets may opt into host substitutions. */
+function substituteEnv(str: string, env?: Record<string, string> | null, allowHostEnv = false): string {
   return str.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
     const key = name.trim();
     if (env && typeof env[key] === 'string') return env[key]!;
-    if (typeof process.env[key] === 'string') return process.env[key]!;
-    return '';
+    if (allowHostEnv && typeof process.env[key] === 'string') return process.env[key]!;
+    throw new Error('扩展引用了未配置的环境变量');
   });
 }
 
 /** 对 URL 和 headers 做 env 替换，返回用于本次请求的 url 与 headers（不修改 server 原对象） */
-function resolveUrlAndHeaders(server: McpServerConfig): { url: string; headers: Record<string, string> } {
+function resolveUrlAndHeaders(server: McpServerConfig, context?: McpExecutionContext): { url: string; headers: Record<string, string> } {
   const env = server.env ?? null;
-  const url = server.url ? substituteEnv(server.url, env) : '';
+  const url = server.url ? substituteEnv(server.url, env, context?.trustedServer) : '';
   const headers: Record<string, string> = {};
   if (server.headers) {
     for (const [k, v] of Object.entries(server.headers)) {
-      headers[k] = typeof v === 'string' ? substituteEnv(v, env) : String(v ?? '');
+      headers[k] = typeof v === 'string' ? substituteEnv(v, env, context?.trustedServer) : String(v ?? '');
     }
   }
   return { url, headers };
@@ -97,128 +97,53 @@ function mergeHeaders(
   return base;
 }
 
-async function rpcHttp<T>(server: McpServerConfig, method: string, params?: Record<string, unknown>): Promise<T> {
+async function rpcHttp<T>(server: McpServerConfig, method: string, params?: Record<string, unknown>, context?: McpExecutionContext): Promise<T> {
+  context?.signal?.throwIfAborted();
   const id = Math.floor(Math.random() * 1e9);
-  const body = { jsonrpc: '2.0', id, method, params: params ?? {} };
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RPC_TIMEOUT_MS);
-  const { url: resolvedUrl, headers: resolvedServerHeaders } = resolveUrlAndHeaders(server);
-  const urlHeaders = resolvedUrl ? headersFromUrl(resolvedUrl) : {};
-  const headers = mergeHeaders(urlHeaders, resolvedServerHeaders);
-  // 智谱等要求 Authorization 为 "Bearer your_api_key"，若用户只填了 key 则自动补上前缀
-  if (headers.Authorization && !headers.Authorization.startsWith('Bearer ')) {
-    headers.Authorization = `Bearer ${headers.Authorization.trim()}`;
-  }
-  // 始终使用原始 URL（保留全部 query 参数）
-  let requestUrl = resolvedUrl || server.url!;
-  // 智谱等：tools/call 要求鉴权在 URL 上，若 URL 无鉴权参数但 headers 有，则追加到 URL
-  try {
-    const u = new URL(requestUrl);
-    const hasAuthInUrl =
-      u.searchParams.has('Authorization') ||
-      u.searchParams.has('authorization') ||
-      u.searchParams.has('apikey') ||
-      u.searchParams.has('api-key') ||
-      u.searchParams.has('api_key');
-    if (!hasAuthInUrl && headers.Authorization) {
-      const authValue = headers.Authorization.startsWith('Bearer ')
-        ? headers.Authorization.slice(7).trim()
-        : headers.Authorization;
-      u.searchParams.set('Authorization', authValue);
-      u.searchParams.set('apikey', authValue);
-      requestUrl = u.toString();
-      serverLogger.info('mcp', `[${server.id}] URL 无鉴权参数，已从 Header 追加 Authorization 与 apikey 到 URL`);
-    }
-  } catch {
-    // ignore
-  }
-
-  // 打印实际请求：URL、方法、请求头（明文，便于排查鉴权问题）、参数
-  const paramsJson = JSON.stringify(params ?? {}, null, 2);
-  serverLogger.info(
-    'mcp',
-    `MCP 请求 [${server.id}] ${method}`,
-    `URL: ${requestUrl}\nMethod: POST\nHeaders: ${JSON.stringify(headers, null, 2)}\nParams:\n${paramsJson}`,
-  );
-
-  try {
-    let res = await fetch(requestUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-    let text = await res.text();
-    clearTimeout(timeout);
-    if (!res.ok) {
-      serverLogger.warn('mcp', `MCP HTTP [${server.id}] ${method}`, `status=${res.status} body=${text.slice(0, 200)}`);
-    }
-    if (res.status === 401 && Object.keys(urlHeaders).length > 0) {
-      const retryController = new AbortController();
-      const retryTimeout = setTimeout(() => retryController.abort(), RPC_TIMEOUT_MS);
-      try {
-        res = await fetch(requestUrl, {
-          method: 'POST',
-          headers: mergeHeaders(urlHeaders, {}),
-          body: JSON.stringify(body),
-          signal: retryController.signal,
-        });
-        text = await res.text();
-      } finally {
-        clearTimeout(retryTimeout);
-      }
-    }
-    if (!res.ok) {
-      throw new Error(`MCP ${server.id} ${method} HTTP ${res.status}: ${text.slice(0, 200)}`);
-    }
-    const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-    const isSSE = contentType.includes('text/event-stream') || (text.includes('data:') && !text.trim().startsWith('{'));
-    let data: { id?: number; result?: T; error?: { code: number; message: string } };
-    if (isSSE) {
-      const parsed = parseSSEResponse<T>(text, id);
-      if (!parsed) throw new Error(`MCP ${server.id} ${method}: 无法从 SSE 响应中解析 JSON-RPC`);
-      data = parsed as { id?: number; result?: T; error?: { code: number; message: string } };
-    } else {
-      data = JSON.parse(text) as { id?: number; result?: T; error?: { code: number; message: string } };
-    }
-    if (data.error) {
-      serverLogger.warn('mcp', `MCP 响应 [${server.id}] ${method}`, `JSON-RPC error: ${data.error.message}`);
-      throw new Error(`MCP ${server.id} ${method}: ${data.error.message}`);
-    }
-    // tools/call 等可能返回 result.isError，记录便于排查
-    const result = data.result as T;
-    if (result && typeof result === 'object' && 'isError' in result && (result as { isError?: boolean }).isError === true) {
-      const content = (result as { content?: { text?: string }[] }).content;
-      const firstText = content?.[0]?.text ?? '';
-      serverLogger.warn(
-        'mcp',
-        `MCP 响应 [${server.id}] ${method} 业务错误`,
-        firstText.slice(0, 300),
-      );
-    }
-    return result;
-  } catch (err) {
-    clearTimeout(timeout);
-    throw err;
-  }
+  const {url,headers:configuredHeaders} = resolveUrlAndHeaders(server,context);
+  const headers = mergeHeaders(headersFromUrl(url),configuredHeaders);
+  if(headers.Authorization && !headers.Authorization.startsWith('Bearer ')) headers.Authorization=`Bearer ${headers.Authorization.trim()}`;
+  const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),context?.timeoutMs ?? RPC_TIMEOUT_MS);
+  const abort=()=>controller.abort();context?.signal?.addEventListener('abort',abort,{once:true});
+  let received=false;
+  try{
+    const response=await mcpHttpRequest(url,headers,JSON.stringify({jsonrpc:'2.0',id,method,params:params??{}}),{...context,owner:context?.owner??'platform',signal:controller.signal});
+    const text=response.text;
+    if(text.length>4*1024*1024)throw new Error('扩展响应过大');
+    if(response.status<200||response.status>=300)throw new Error(`扩展请求失败（HTTP ${response.status}）`);
+    const isSSE=response.contentType.includes('text/event-stream') || (text.includes('data:')&&!text.trim().startsWith('{'));
+    const data=isSSE?parseSSEResponse<T>(text,id):JSON.parse(text);
+    if(!data || data.id!==id || (!Object.hasOwn(data,'result')&&(!data.error||!Number.isInteger(data.error.code))))throw new Error('扩展没有返回匹配的执行回执');
+    received=true;
+    if(data.error)throw new Error('扩展返回执行错误');
+    return data.result as T;
+  }catch(error){
+    if(method==='tools/call'&&!received)throw new UncertainToolOutcomeError('扩展执行结果未知，请核实后重新交办，系统不会自动重试。');
+    throw error;
+  }finally{clearTimeout(timeout);context?.signal?.removeEventListener('abort',abort);}
 }
 
 /**
  * 列出 MCP 服务器暴露的工具（自动选择 HTTP 或 Stdio）
  */
-export async function listTools(server: McpServerConfig): Promise<McpToolSchema[]> {
+export async function listTools(server: McpServerConfig, context?: McpExecutionContext): Promise<McpToolSchema[]> {
   if (isMcpHttpTransport(server)) {
-    const result = (await rpcHttp<{ tools: McpToolSchema[]; nextCursor?: string }>(server, 'tools/list')) ?? { tools: [] };
+    const result = (await rpcHttp<{ tools: McpToolSchema[]; nextCursor?: string }>(server, 'tools/list',undefined,context)) ?? { tools: [] };
     const tools = result.tools ?? [];
+    if (!Array.isArray(tools) || tools.length > 1000) throw new Error('扩展工具列表无效或过大');
+    const cursors = new Set<string>();
     let cursor: string | undefined = result.nextCursor;
     while (cursor) {
-      const next = (await rpcHttp<{ tools: McpToolSchema[]; nextCursor?: string }>(server, 'tools/list', { cursor })) ?? { tools: [] };
+      if (cursors.has(cursor) || cursors.size >= 32) throw new Error('扩展工具分页无效');
+      cursors.add(cursor);
+      const next = (await rpcHttp<{ tools: McpToolSchema[]; nextCursor?: string }>(server, 'tools/list', { cursor },context)) ?? { tools: [] };
+      if (!Array.isArray(next.tools) || tools.length + next.tools.length > 1000) throw new Error('扩展工具列表无效或过大');
       tools.push(...(next.tools ?? []));
       cursor = next.nextCursor;
     }
     return tools;
   }
-  return listToolsStdio(server);
+  return listToolsStdio(resolveStdioEnvironment(server,context),context);
 }
 
 /**
@@ -228,15 +153,22 @@ export async function callTool(
   server: McpServerConfig,
   toolName: string,
   args: Record<string, unknown>,
+  context?: McpExecutionContext,
 ): Promise<{ text: string; isError: boolean }> {
+  context?.signal?.throwIfAborted();
   if (isMcpHttpTransport(server)) {
-    const result = await rpcHttp<McpCallResult>(server, 'tools/call', { name: toolName, arguments: args });
-    const content = result?.content ?? [];
+    const result = await rpcHttp<McpCallResult>(server, 'tools/call', { name: toolName, arguments: args },context);
+    if(!result||!Array.isArray(result.content))throw new UncertainToolOutcomeError('扩展没有返回有效执行回执，请核实后重新交办。');
+    const content = result.content;
     const text = content
       .filter((c) => c.type === 'text' && c.text != null)
       .map((c) => c.text!)
       .join('\n\n');
     return { text: text || '(无文本结果)', isError: result?.isError === true };
   }
-  return callToolStdio(server, toolName, args);
+  return callToolStdio(resolveStdioEnvironment(server,context), toolName, args,context);
+}
+
+function resolveStdioEnvironment(server: McpServerConfig, context?: McpExecutionContext): McpServerConfig {
+  return {...server,env:Object.fromEntries(Object.entries(server.env??{}).map(([key,value])=>[key,substituteEnv(value,server.env,context?.trustedServer)]))};
 }

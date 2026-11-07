@@ -1,9 +1,11 @@
 import { Router } from 'express';
 import type { AsyncDatabase } from '../db/database.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { getDefaultScheduler, nextCronRun } from '../scheduler/XScheduler.js';
 
 export function createScheduledJobsRouter(db: AsyncDatabase): Router {
   const router = Router();
+  router.use((req, res, next) => req.userId ? next() : res.status(401).json({ error: 'Unauthorized' }));
 
   // GET /api/scheduled-jobs — 列出当前用户所有定时任务
   router.get('/', async (req, res) => {
@@ -27,13 +29,16 @@ export function createScheduledJobsRouter(db: AsyncDatabase): Router {
         cron?: string;
         nextRun?: number;
       };
-      if (!intent) {
+      if (typeof intent !== 'string' || !intent.trim()) {
         res.status(400).json({ success: false, error: 'intent 必填' });
         return;
       }
       const id = crypto.randomUUID();
       const now = Date.now();
-      const runAt = nextRun ?? (cron ? now + 60000 : now);
+      const runAt = nextRun ?? (typeof cron === 'string' && cron.trim() ? nextCronRun(cron, now) : now);
+      if (runAt == null || !Number.isFinite(runAt) || (cron != null && (typeof cron !== 'string' || nextCronRun(cron, now) == null))) {
+        res.status(400).json({ success: false, error: '执行时间或 cron 无效' }); return;
+      }
       await db.insertScheduledJob({
         id,
         user_id: userId,
@@ -82,6 +87,12 @@ export function createScheduledJobsRouter(db: AsyncDatabase): Router {
         enabled?: boolean;
         nextRun?: number | null;
       };
+      if ((intent !== undefined && (typeof intent !== 'string' || !intent.trim())) ||
+          (cron != null && (typeof cron !== 'string' || nextCronRun(cron, Date.now()) == null)) ||
+          (nextRun != null && !Number.isFinite(nextRun)) || (enabled !== undefined && typeof enabled !== 'boolean')) {
+        return res.status(400).json({ success: false, error: '计划参数无效' });
+      }
+      if (enabled === false) await getDefaultScheduler()?.removeJob(req.params.id);
       await db.updateScheduledJob(req.params.id, {
         name,
         intent,
@@ -106,6 +117,7 @@ export function createScheduledJobsRouter(db: AsyncDatabase): Router {
       const jobs = await db.listScheduledJobsByUser(userId);
       const job = jobs.find((j) => j.id === req.params.id);
       if (!job) { res.status(404).json({ success: false, error: '定时任务不存在' }); return; }
+      await getDefaultScheduler()?.removeJob(req.params.id);
       await db.deleteScheduledJob(req.params.id);
       serverLogger.info('scheduled-jobs', '定时任务已删除', `id=${req.params.id}`);
       res.json({ success: true, data: { message: '定时任务已删除' } });
@@ -123,6 +135,7 @@ export function createScheduledJobsRouter(db: AsyncDatabase): Router {
       const job = jobs.find((j) => j.id === req.params.id);
       if (!job) { res.status(404).json({ success: false, error: '定时任务不存在' }); return; }
       const newEnabled = !job.enabled;
+      if (!newEnabled) await getDefaultScheduler()?.removeJob(req.params.id);
       await db.updateScheduledJob(req.params.id, { enabled: newEnabled });
       serverLogger.info('scheduled-jobs', `定时任务已${newEnabled ? '启用' : '禁用'}`, `id=${req.params.id}`);
       res.json({ success: true, data: { id: req.params.id, enabled: newEnabled } });

@@ -11,6 +11,9 @@ async function request<T>(
 ): Promise<T> {
   const url = `${BASE_URL}/api${path}`;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const token=process.env.WORKFLOW_SERVICE_TOKEN;
+  if(!token||token.length<32)throw new Error('WORKFLOW_SERVICE_TOKEN未配置');
+  headers.Authorization=`Bearer ${token}`;
   if (options?.userId) headers['X-User-Id'] = options.userId;
 
   const res = await fetch(url, {

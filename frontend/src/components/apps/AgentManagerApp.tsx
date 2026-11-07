@@ -7,6 +7,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Bot, Plus, Pencil, Trash2, ChevronDown, ChevronRight, Users, MessageCircle } from 'lucide-react';
 import { api } from '@/utils/api';
 import { DISPLAY_TIMEZONE } from '@/constants/datetime';
+import {useDesktopStore} from '@/store/desktopStore';
 
 interface AgentItem {
   id: string;
@@ -37,6 +38,9 @@ interface GroupItem {
 }
 
 interface GroupRunRecord {
+  runId?:string;
+  sessionId?:string;
+  status?:string;
   id: string;
   groupId: string;
   groupName: string;
@@ -468,6 +472,7 @@ export function AgentManagerApp({ windowId }: Props) {
       </div>
 
       <div className="flex-1 overflow-auto p-4 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 p-3"><p className="text-sm text-desktop-muted">告诉助手要做什么，就能交给专家、团队或群组后台办理。</p><button type="button" onClick={()=>useDesktopStore.getState().openApp('chat')} className="rounded-lg border border-white/20 px-3 py-2 text-sm">查看进度和成果</button></div>
         {error && (
           <div className="text-xs text-red-400 bg-red-500/10 rounded-lg px-3 py-2">{error}</div>
         )}
@@ -625,7 +630,7 @@ export function AgentManagerApp({ windowId }: Props) {
         {tab === 'agents' && (
           <>
         <p className="text-[10px] text-desktop-muted">
-          以下智能体由 X 主脑或本页创建，X 可通过 x.list_agents、x.run_agent 等工具派发任务。共 {agents.length} 个。
+          以下专家由助手或本页创建，交办后可单独查看进度、停止、继续和验收。共 {agents.length} 个。
         </p>
 
         {agents.length === 0 ? (
@@ -751,7 +756,7 @@ export function AgentManagerApp({ windowId }: Props) {
         {tab === 'teams' && (
           <>
             <p className="text-[10px] text-desktop-muted">
-              团队按顺序执行智能体（流水线），X 用 x.run_team 派发任务。共 {teams.length} 个。
+              团队按成员顺序接力，上一位的成果会交给下一位；进度和成果可从上方入口查看。共 {teams.length} 个。
             </p>
             {loadingTeamsGroups ? (
               <div className="text-center py-6 text-desktop-muted text-xs">加载中…</div>
@@ -790,7 +795,7 @@ export function AgentManagerApp({ windowId }: Props) {
         {tab === 'groups' && (
           <>
             <p className="text-[10px] text-desktop-muted">
-              群组内成员对同一任务分别执行，X 用 x.run_group 派发并收集结果；用户可在 X 主脑对话中看到协作过程并补充或打断。共 {groups.length} 个。
+              群组成员分别处理同一目标，按并发上限分批执行；进度、停止和成果统一在助手工作台。共 {groups.length} 个。
             </p>
             {loadingTeamsGroups ? (
               <div className="text-center py-6 text-desktop-muted text-xs">加载中…</div>
@@ -824,11 +829,11 @@ export function AgentManagerApp({ windowId }: Props) {
               </div>
             )}
             <div className="mt-6 border-t border-white/10 pt-4">
-              <p className="text-[10px] text-desktop-muted mb-2">执行记录（群组对话与工作过程，按时间倒序）</p>
+              <p className="text-[10px] text-desktop-muted mb-2">旧版群组对话记录（后台任务请从上方入口查看）</p>
               {loadingRunHistory ? (
                 <div className="text-center py-4 text-desktop-muted text-xs">加载中…</div>
               ) : groupRunHistory.length === 0 ? (
-                <div className="text-center py-4 text-desktop-muted text-xs">暂无执行记录。X 使用 x.run_group 派发任务后会自动记录。</div>
+                <div className="text-center py-4 text-desktop-muted text-xs">没有旧版对话记录。后台协作进度和成果保存在助手工作台。</div>
               ) : (
                 <div className="space-y-2">
                   {groupRunHistory.map((run) => (
@@ -845,11 +850,13 @@ export function AgentManagerApp({ windowId }: Props) {
                         )}
                         <span className="text-xs font-medium text-desktop-text truncate flex-1">{run.groupName}</span>
                         {run.cancelled && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 shrink-0">已停止</span>}
+                        {run.status&&!run.cancelled&&<span className="text-[10px] text-desktop-muted">{run.status==='completed'?'已完成':['running','stopping'].includes(run.status)?'正在做':'需要处理'}</span>}
                         <span className="text-[10px] text-desktop-muted shrink-0">{run.results.length} 条回复</span>
                         <span className="text-[10px] text-desktop-muted shrink-0">{formatTime(run.createdAt)}</span>
                       </button>
                       {expandedRunId === run.id && (
                         <div className="px-3 pb-3 pt-0 border-t border-white/5 space-y-3">
+                          {run.sessionId&&<button type="button" onClick={()=>useDesktopStore.getState().openApp('chat',{sessionId:run.sessionId})} className="mt-2 rounded border border-white/15 px-3 py-2 text-sm">打开任务，查看成果或继续</button>}
                           <div>
                             <span className="text-[10px] text-desktop-muted">目标</span>
                             <p className="text-xs text-desktop-text/90 mt-0.5 whitespace-pre-wrap bg-black/20 rounded px-2 py-1.5">{run.goal}</p>

@@ -6,6 +6,22 @@ let _dndEnabled = false;
 let _quietHoursStart: string | null = null;
 let _quietHoursEnd: string | null = null;
 const listeners = new Set<(enabled: boolean) => void>();
+let preferenceGeneration=0;
+let pendingUpdate:number|null=null;
+export const getDndGeneration=()=>preferenceGeneration;
+export const isDndUpdating=()=>pendingUpdate!==null;
+export function beginDndUpdate():number|null{
+  if(pendingUpdate!==null)return null;
+  pendingUpdate=++preferenceGeneration;listeners.forEach(listener=>listener(_dndEnabled));return pendingUpdate;
+}
+export function endDndUpdate(generation:number):void{
+  if(pendingUpdate!==generation)return;
+  pendingUpdate=null;preferenceGeneration++;listeners.forEach(listener=>listener(_dndEnabled));
+}
+export function applyDndPreferences(prefs:{enabled?:boolean;quietHoursStart?:string|null;quietHoursEnd?:string|null},generation:number):boolean{
+  if(generation!==preferenceGeneration||pendingUpdate!==null)return false;
+  setDndPreferences(prefs);setDndEnabled(prefs.enabled??false);return true;
+}
 
 function isQuietHours(): boolean {
   if (!_quietHoursStart || !_quietHoursEnd) return false;

@@ -1,10 +1,13 @@
+import { deepSeekApiType, resolveLlmApiType } from '@shared/index';
+import { ScheduledRuns } from './ScheduledRuns';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard, Code, History, CheckCircle2, XCircle, Loader2, Timer, DollarSign, Wrench as WrenchIcon2 } from 'lucide-react';
+import { Shield, Zap, Monitor, Bot, Info, Plus, Trash2, Key, Package, FileText, ChevronDown, ChevronRight, RefreshCw, Plug, Globe, Terminal, Copy, ChevronUp, Sparkles, Music2, User, Mail, MessageSquare, Pencil, Search, Server, Edit, TestTube, CreditCard, ExternalLink, Wrench, CheckCircle, ToggleRight, BarChart2, Webhook as WebhookIcon, Clock, Activity, Link, Users, ShieldAlert, Bell, Send, Brain, Keyboard, Code, History, Loader2, Eye, AlertTriangle } from 'lucide-react';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { useAdminStore } from '@/store/adminStore';
+import { useConfigStore, type RenderMode } from '@/store/configStore';
 import type { LLMModality, ToolDefinition } from '@shared/index';
 import {
   BUILTIN_PROVIDER_IDS,
@@ -23,9 +26,10 @@ import { DISPLAY_TIMEZONE } from '@/constants/datetime';
 
 interface Props {
   windowId: string;
+  metadata?: Record<string, unknown>;
 }
 
-type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets' | 'history' | 'heartbeat';
+type SettingsTab = 'general' | 'account' | 'profile' | 'apps' | 'about' | 'ai' | 'models' | 'mcp' | 'skills' | 'shortcuts' | 'tools' | 'media' | 'channels' | 'security' | 'servers' | 'logs' | 'flags' | 'usage' | 'webhooks' | 'schedules' | 'health' | 'hooks' | 'council' | 'auditlog' | 'templates' | 'announcements' | 'systemprompts' | 'snippets' | 'history' | 'heartbeat' | 'search';
 
 /** 订阅与额度摘要：显示当前套餐、使用量，并提供开通/管理入口 */
 function SubscriptionSummarySection(props: { onOpenSubscription: () => void }) {
@@ -866,13 +870,16 @@ function ShortcutsSettings() {
   );
 }
 
-function ScheduledJobsSettings() {
+function ScheduledJobsSettings({ focusRunId }: { focusRunId?: string }) {
   const { t } = useTranslation();
+  const [backgroundPaused,setBackgroundPaused]=useState(false);
+  useEffect(()=>{let live=true;api.getXSchedulerStatus().then(status=>{if(live)setBackgroundPaused(status.backgroundAutostart===false);}).catch(()=>{});return()=>{live=false;};},[]);
   const [jobs, setJobs] = useState<Array<{
     id: string; userId: string; name: string; intent: string;
     cron: string | null; enabled: boolean; nextRun: number; createdAt: number;
   }>>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', intent: '', cron: '' });
   const [creating, setCreating] = useState(false);
@@ -883,8 +890,8 @@ function ScheduledJobsSettings() {
     setLoading(true);
     try {
       const data = await api.scheduledJobsList();
-      setJobs(data);
-    } catch { /* ignore */ }
+      setJobs(data); setError('');
+    } catch { setError('计划列表暂时无法读取，请稍后重试。'); }
     finally { setLoading(false); }
   }, []);
 
@@ -892,7 +899,7 @@ function ScheduledJobsSettings() {
 
   const handleCreate = async () => {
     if (!createForm.intent) return;
-    setCreating(true);
+    setCreating(true); setError('');
     try {
       const result = await api.scheduledJobsCreate({
         name: createForm.name || undefined,
@@ -902,7 +909,7 @@ function ScheduledJobsSettings() {
       setJobs((prev) => [result, ...prev]);
       setShowCreate(false);
       setCreateForm({ name: '', intent: '', cron: '' });
-    } catch { /* ignore */ }
+    } catch { setError('计划尚未保存，请检查时间后重试。'); }
     finally { setCreating(false); }
   };
 
@@ -912,7 +919,7 @@ function ScheduledJobsSettings() {
     try {
       await api.scheduledJobsDelete(id);
       setJobs((prev) => prev.filter((j) => j.id !== id));
-    } catch { /* ignore */ }
+    } catch { setError('计划尚未取消，请稍后重试。'); }
     finally { setDeleting(null); }
   };
 
@@ -921,14 +928,14 @@ function ScheduledJobsSettings() {
     try {
       const result = await api.scheduledJobsToggle(id);
       setJobs((prev) => prev.map((j) => j.id === id ? { ...j, enabled: result.enabled } : j));
-    } catch { /* ignore */ }
+    } catch { setError('计划状态尚未更新，请稍后重试。'); }
     finally { setToggling(null); }
   };
 
   const formatNextRun = (nextRun: number) => {
     const d = new Date(nextRun);
     const now = Date.now();
-    if (nextRun < now) return t('settings.overdue', '已超时');
+    if (nextRun < now) return '等待开始';
     const diff = nextRun - now;
     if (diff < 60000) return t('settings.soon', '即将执行');
     if (diff < 3600000) return `${Math.floor(diff / 60000)}${t('settings.minutesLater', '分钟后')}`;
@@ -949,6 +956,7 @@ function ScheduledJobsSettings() {
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-sm font-medium text-desktop-text">{t('settings.scheduledJobs', '定时任务')}</h3>
+          {backgroundPaused&&<p role="status" className="mt-2 text-sm text-amber-200">后台自动启动已暂停。计划会保留，恢复后台运行后才会执行。</p>}
           <p className="text-[11px] text-desktop-muted mt-0.5">
             {t('settings.scheduledJobsDesc', '管理 X 主脑定时执行的任务')}
           </p>
@@ -1021,7 +1029,9 @@ function ScheduledJobsSettings() {
         </div>
       )}
 
+      {error && <p role="alert" className="text-sm text-amber-200">{error}</p>}
       {/* 任务列表 */}
+      <button type="button" onClick={() => { void fetchJobs(); }} className="rounded-lg px-3 py-2 text-sm">刷新计划</button>
       {loading ? (
         <div className="text-xs text-desktop-muted py-8 text-center">{t('settings.loading', '加载中…')}</div>
       ) : jobs.length === 0 ? (
@@ -1034,6 +1044,7 @@ function ScheduledJobsSettings() {
             <div key={job.id} className="rounded-xl border border-white/5 bg-white/[0.02] overflow-hidden">
               <div className="px-3 py-2.5 flex items-center gap-2">
                 <button
+                  aria-label={`${job.enabled ? '暂停计划' : '启用计划'}：${job.name || job.intent}`}
                   onClick={() => handleToggle(job.id, job.enabled)}
                   disabled={toggling === job.id}
                   className={`shrink-0 transition-colors ${job.enabled ? 'text-green-400' : 'text-desktop-muted/30'}`}
@@ -1057,6 +1068,7 @@ function ScheduledJobsSettings() {
                   </div>
                 </div>
                 <button
+                  aria-label={`删除计划：${job.name || job.intent}`}
                   onClick={() => handleDelete(job.id)}
                   disabled={deleting === job.id}
                   className="p-1 rounded hover:bg-red-500/10 text-desktop-muted/40 hover:text-red-400 transition-colors shrink-0"
@@ -1068,201 +1080,12 @@ function ScheduledJobsSettings() {
           ))}
         </div>
       )}
+      <ScheduledRuns focusRunId={focusRunId} />
     </div>
   );
 }
 
-function TaskHistorySettings() {
-  const { t } = useTranslation();
-  const [loading, setLoading] = useState(true);
-  const [history, setHistory] = useState<{
-    tasks: Array<{
-      id: string;
-      title: string;
-      status: string;
-      updated_at: number;
-      started_at: number | null;
-      completed_at: number | null;
-      duration_ms: number | null;
-      actual_cost: number;
-    }>;
-    stats: {
-      total: number;
-      completed: number;
-      failed: number;
-      success_rate: number;
-      avg_duration_ms: number | null;
-      total_cost: number;
-    };
-    tool_stats: Array<{
-      toolName: string;
-      totalCalls: number;
-      avgDurationMs: number;
-    }>;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    api.getTaskHistory(50)
-      .then((res) => { if (!cancelled) setHistory(res.data); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  const formatDuration = (ms: number | null): string => {
-    if (ms === null || ms === undefined) return '—';
-    if (ms < 1000) return `${ms}ms`;
-    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
-    if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ${Math.floor((ms % 60_000) / 1000)}s`;
-    return `${Math.floor(ms / 3_600_000)}h ${Math.floor((ms % 3_600_000) / 60_000)}m`;
-  };
-
-  const formatCost = (cost: number): string => {
-    if (cost === 0) return '—';
-    return `$${cost.toFixed(4)}`;
-  };
-
-  const STATUS_COLORS: Record<string, string> = {
-    completed: 'text-green-400',
-    failed: 'text-red-400',
-    running: 'text-blue-400',
-    pending: 'text-yellow-400',
-  };
-  const STATUS_ICONS: Record<string, React.ElementType> = {
-    completed: CheckCircle2,
-    failed: XCircle,
-    running: Loader2,
-    pending: Clock,
-  };
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-sm font-semibold text-desktop-text mb-1">{t('settings.taskHistory')}</h2>
-        <p className="text-xs text-desktop-muted">任务执行记录、耗时统计和工具调用分析</p>
-      </div>
-
-      {loading && (
-        <div className="flex items-center justify-center py-12 text-desktop-muted text-sm">
-          <Loader2 size={16} className="animate-spin mr-2" /> 加载中...
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded-lg border border-red-500/30 bg-red-950/50 p-4">
-          <p className="text-xs text-red-400">{error}</p>
-        </div>
-      )}
-
-      {history && !loading && (
-        <>
-          {/* Stats summary */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-              <div className="flex items-center gap-1.5 mb-1">
-                <History size={12} className="text-desktop-muted" />
-                <span className="text-[11px] text-desktop-muted">总任务数</span>
-              </div>
-              <p className="text-lg font-semibold text-desktop-text">{history.stats.total}</p>
-            </div>
-            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-              <div className="flex items-center gap-1.5 mb-1">
-                <CheckCircle2 size={12} className="text-green-400" />
-                <span className="text-[11px] text-desktop-muted">成功率</span>
-              </div>
-              <p className="text-lg font-semibold text-green-400">{history.stats.success_rate}%</p>
-            </div>
-            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-              <div className="flex items-center gap-1.5 mb-1">
-                <Timer size={12} className="text-desktop-muted" />
-                <span className="text-[11px] text-desktop-muted">平均耗时</span>
-              </div>
-              <p className="text-lg font-semibold text-desktop-text">{formatDuration(history.stats.avg_duration_ms)}</p>
-            </div>
-            <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-              <div className="flex items-center gap-1.5 mb-1">
-                <DollarSign size={12} className="text-desktop-muted" />
-                <span className="text-[11px] text-desktop-muted">总成本</span>
-              </div>
-              <p className="text-lg font-semibold text-desktop-text">{formatCost(history.stats.total_cost)}</p>
-            </div>
-          </div>
-
-          {/* Task list */}
-          {history.tasks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-2">
-              <History size={28} className="text-desktop-muted/40" />
-              <p className="text-sm text-desktop-muted/60">暂无任务记录</p>
-            </div>
-          ) : (
-            <div className="rounded-lg border border-white/10 overflow-hidden">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-white/10 bg-white/5">
-                    <th className="text-left px-3 py-2 text-desktop-muted font-medium">任务</th>
-                    <th className="text-left px-3 py-2 text-desktop-muted font-medium">状态</th>
-                    <th className="text-right px-3 py-2 text-desktop-muted font-medium">耗时</th>
-                    <th className="text-right px-3 py-2 text-desktop-muted font-medium">成本</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.tasks.map((task) => {
-                    const Icon = STATUS_ICONS[task.status] ?? Clock;
-                    const color = STATUS_COLORS[task.status] ?? 'text-desktop-muted';
-                    return (
-                      <tr key={task.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
-                        <td className="px-3 py-2.5">
-                          <p className="text-desktop-text truncate max-w-[200px]" title={task.title}>{task.title}</p>
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <span className={`flex items-center gap-1 ${color}`}>
-                            <Icon size={12} />
-                            {task.status}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2.5 text-right text-desktop-muted">
-                          {formatDuration(task.duration_ms)}
-                        </td>
-                        <td className="px-3 py-2.5 text-right text-desktop-muted">
-                          {formatCost(task.actual_cost)}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Tool usage breakdown */}
-          {history.tool_stats.length > 0 && (
-            <div>
-              <h3 className="text-xs font-medium text-desktop-text mb-2">工具调用统计</h3>
-              <div className="space-y-1.5">
-                {history.tool_stats.map((tool) => (
-                  <div key={tool.toolName} className="flex items-center gap-3">
-                    <WrenchIcon2 size={11} className="text-desktop-muted shrink-0" />
-                    <span className="text-xs text-desktop-text min-w-[140px] truncate" title={tool.toolName}>{tool.toolName}</span>
-                    <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-desktop-accent/60 rounded-full"
-                        style={{ width: `${Math.min(100, (tool.totalCalls / (history.tool_stats[0]?.totalCalls ?? 1)) * 100)}%` }}
-                      />
-                    </div>
-                    <span className="text-[11px] text-desktop-muted w-12 text-right">{tool.totalCalls}次</span>
-                    <span className="text-[11px] text-desktop-muted w-14 text-right">{formatDuration(tool.avgDurationMs)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
 
 function WebhooksSettings() {
   const { t } = useTranslation();
@@ -2293,7 +2116,7 @@ function AccountSettingsSection(props: {
     setMe(null);
     setSuccess(null);
     setError(null);
-    await clearAllLocalData(); // 清空 localStorage、Cookie、Cache
+    try {await clearAllLocalData();} catch(error) {setError(error instanceof Error?error.message:'退出失败，请重试');return;}
     window.location.reload(); // 刷新以回到登录页
   };
 
@@ -2466,9 +2289,11 @@ function AccountSettingsSection(props: {
   );
 }
 
-export function SettingsApp({ windowId }: Props) {
+export function SettingsApp({ windowId, metadata }: Props) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<SettingsTab>('general');
+  const focusRunId = typeof metadata?.scheduledRunId === 'string' ? metadata.scheduledRunId : undefined;
+  const [tab, setTab] = useState<SettingsTab>(focusRunId ? 'schedules' : 'general');
+  useEffect(() => { if (focusRunId) setTab('schedules'); }, [metadata, focusRunId]);
   const [accountEmail, setAccountEmail] = useState('');
   const [accountPassword, setAccountPassword] = useState('');
   const [accountLoading, setAccountLoading] = useState(false);
@@ -2492,9 +2317,11 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'shortcuts', labelKey: 'settings.shortcuts', icon: Keyboard },
     { id: 'tools', labelKey: 'settings.tools', icon: Wrench },
     { id: 'channels', labelKey: 'settings.channels', icon: MessageSquare },
+    { id: 'search', labelKey: 'settings.searchTab', icon: Globe },
+    { id: 'schedules', labelKey: 'settings.scheduledJobs', icon: Clock },
     { id: 'heartbeat', labelKey: 'settings.heartbeatChecklist', icon: Activity },
     { id: 'about', labelKey: 'settings.about', icon: Info },
-    { id: 'history', labelKey: 'settings.taskHistory', icon: History },
+
   ];
 
   // 高级tab，仅管理员可见
@@ -2509,7 +2336,6 @@ export function SettingsApp({ windowId }: Props) {
     { id: 'flags', labelKey: 'settings.featureFlags', icon: ToggleRight },
     { id: 'usage', labelKey: 'settings.usageAnalytics', icon: BarChart2 },
     { id: 'webhooks', labelKey: 'settings.webhooks', icon: WebhookIcon },
-    { id: 'schedules', labelKey: 'settings.scheduledJobs', icon: Clock },
     { id: 'health', labelKey: 'settings.systemHealth', icon: Activity },
     { id: 'hooks', labelKey: 'settings.lifecycleHooks', icon: Link },
     { id: 'council', labelKey: 'settings.llmCouncil', icon: Users },
@@ -2521,12 +2347,13 @@ export function SettingsApp({ windowId }: Props) {
   ];
 
   const isAdmin = useAdminStore((s) => s.isAdmin);
+  const currentRenderMode = useConfigStore((s) => s.renderMode);
   const tabs = useMemo(() => {
     return isAdmin ? [...basicTabs, ...adminTabs] : basicTabs;
   }, [isAdmin]);
 
   return (
-    <div className="h-full flex text-sm min-h-0">
+    <div className="h-full flex flex-col sm:flex-row text-sm min-h-0 min-w-0">
       {/* Sidebar - 移动端隐藏，PC端显示 */}
       <div className="w-40 sm:w-48 shrink-0 border-r border-white/5 bg-white/[0.01] p-2 overflow-y-auto hidden sm:block">
         {tabs.map((tabItem) => {
@@ -2549,7 +2376,7 @@ export function SettingsApp({ windowId }: Props) {
       </div>
 
       {/* 移动端：顶部 Tab 切换 */}
-      <div className="sm:hidden flex border-b border-white/5 bg-white/[0.01] overflow-x-auto shrink-0">
+      <div className="w-full sm:hidden flex border-b border-white/5 bg-white/[0.01] overflow-x-auto shrink-0">
         {tabs.map((tabItem) => {
           const Icon = tabItem.icon;
           return (
@@ -2570,7 +2397,7 @@ export function SettingsApp({ windowId }: Props) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-auto p-3 sm:p-5">
+      <div className="flex-1 min-h-0 min-w-0 overflow-auto p-3 sm:p-5">
         {tab === 'account' && (
           <AccountSettingsSection
             email={accountEmail}
@@ -2607,22 +2434,14 @@ export function SettingsApp({ windowId }: Props) {
             <SettingRow label={t('settings.notifications')} description={t('settings.notifications')}>
               <ToggleSwitch defaultOn={true} />
             </SettingRow>
+            <MessageDisplaySettings currentRenderMode={currentRenderMode} />
             <NotificationPreferencesSettings />
             <HeartbeatSettings />
           </div>
         )}
 
         {tab === 'ai' && (
-          <div className="space-y-6">
-            <h3 className="text-sm font-medium text-desktop-text">{t('settings.ai')}</h3>
-            <SettingRow label={t('settings.defaultModel')} description={t('settings.defaultModelHint')}>
-              <span className="text-xs text-desktop-muted">{t('settings.defaultModelSeeModels')}</span>
-            </SettingRow>
-            <SettingRow label={t('settings.contextMemory')} description={t('settings.contextMemory')}>
-              <ToggleSwitch defaultOn={true} />
-            </SettingRow>
-            <MemoryRebuildIndexRow />
-          </div>
+          <AiTabContent currentRenderMode={currentRenderMode} />
         )}
 
         {tab === 'models' && (
@@ -2647,6 +2466,10 @@ export function SettingsApp({ windowId }: Props) {
 
         {tab === 'channels' && (
           <ChannelsSettings />
+        )}
+
+        {tab === 'search' && (
+          <WebSearchTabContent />
         )}
 
         {tab === 'security' && (
@@ -2707,13 +2530,15 @@ export function SettingsApp({ windowId }: Props) {
           <FeatureFlagsSettings />
         )}
 
+        {tab === 'logs' && (
+          <SystemLogTab />
+        )}
+
         {tab === 'usage' && (
           <UsageAnalyticsSettings />
         )}
 
-        {tab === 'history' && (
-          <TaskHistorySettings />
-        )}
+
 
         {tab === 'heartbeat' && (
           <HeartbeatChecklistSettings />
@@ -2724,7 +2549,7 @@ export function SettingsApp({ windowId }: Props) {
         )}
 
         {tab === 'schedules' && (
-          <ScheduledJobsSettings />
+          <ScheduledJobsSettings focusRunId={focusRunId} />
         )}
 
         {tab === 'health' && (
@@ -5179,11 +5004,12 @@ function LLMModelsSettings() {
     setDefaultForModality,
     setProviderApiKey,
     clearProviderApiKey,
-    getProviderApiKey,
     setImportedModelsForProvider,
   } = useLLMConfigStore();
   const [editingApiKeyFor, setEditingApiKeyFor] = useState<string | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState('');
+  const [savingKeyFor, setSavingKeyFor] = useState<string | null>(null);
+  const [keyMessage, setKeyMessage] = useState<{ providerId: string; error: boolean; text: string } | null>(null);
   const [importingFor, setImportingFor] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<'ok' | 'fail' | null>(null);
@@ -5222,10 +5048,23 @@ function LLMModelsSettings() {
     (id) => !llmConfig.providers.some((p) => p.id === id),
   );
 
-  const handleSaveApiKey = (providerId: string) => {
-    setProviderApiKey(providerId, apiKeyInput);
-    setApiKeyInput('');
-    setEditingApiKeyFor(null);
+  const handleApiKey = async (providerId: string, clear = false) => {
+    const key = apiKeyInput.trim();
+    if (savingKeyFor || (!clear && !key)) return;
+    setSavingKeyFor(providerId);
+    setKeyMessage(null);
+    try {
+      if (clear) await clearProviderApiKey(providerId);
+      else await setProviderApiKey(providerId, key);
+      setApiKeyInput('');
+      setEditingApiKeyFor(null);
+      setKeyMessage({ providerId, error: false, text: clear ? '已清除个人密钥' : '密钥已保存' });
+      setImportError(null);
+    } catch (error) {
+      setKeyMessage({ providerId, error: true, text: error instanceof Error ? error.message : '密钥保存失败，请重试' });
+    } finally {
+      setSavingKeyFor(null);
+    }
   };
 
   return (
@@ -5263,9 +5102,26 @@ function LLMModelsSettings() {
               <input
                 className="flex-1 min-w-[160px] bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-desktop-text outline-none"
                 value={p.baseUrl ?? ''}
-                onChange={(e) => updateProvider(p.id, { baseUrl: e.target.value || undefined })}
+                onChange={(e) => {
+                  const baseUrl = e.target.value || undefined;
+                  const apiType = deepSeekApiType(baseUrl);
+                  updateProvider(p.id, { baseUrl, ...(apiType ? { apiType } : {}) });
+                }}
                 placeholder="Base URL（可选）"
               />
+              <select aria-label={`${p.name} 接口协议`}
+                value={resolveLlmApiType(p.id, p.baseUrl, p.apiType)}
+                onChange={event => {
+                  const apiType = event.target.value as 'openai' | 'anthropic';
+                  const baseUrl = deepSeekApiType(p.baseUrl)
+                    ? apiType === 'anthropic' ? 'https://api.deepseek.com/anthropic' : 'https://api.deepseek.com/v1'
+                    : p.baseUrl;
+                  updateProvider(p.id, { apiType, baseUrl });
+                }}
+                className="rounded border border-white/10 bg-desktop-window px-2 py-1.5 text-xs text-desktop-text">
+                <option value="openai">OpenAI 兼容</option>
+                <option value="anthropic">Anthropic 兼容</option>
+              </select>
               {editingApiKeyFor === p.id ? (
                 <>
                   <input
@@ -5273,16 +5129,30 @@ function LLMModelsSettings() {
                     className="w-40 bg-white/5 border border-white/10 rounded px-2 py-1.5 text-xs text-desktop-text outline-none"
                     value={apiKeyInput}
                     onChange={(e) => setApiKeyInput(e.target.value)}
-                    onBlur={() => {
-                      if (apiKeyInput) handleSaveApiKey(p.id);
-                      else setEditingApiKeyFor(null);
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                        event.preventDefault();
+                        void handleApiKey(p.id);
+                      }
                     }}
-                    placeholder="API Key（填写后自动保存）"
+                    disabled={savingKeyFor !== null}
+                    placeholder="API Key"
+                    autoComplete="off"
                     autoFocus
                   />
                   <button
+                    type="button"
+                    className="px-2 py-1 rounded text-xs bg-desktop-accent text-white disabled:opacity-50"
+                    disabled={savingKeyFor !== null || !apiKeyInput.trim()}
+                    onClick={() => void handleApiKey(p.id)}
+                  >
+                    {savingKeyFor === p.id ? '保存中…' : '保存密钥'}
+                  </button>
+                  <button
+                    type="button"
                     className="px-2 py-1 rounded text-xs bg-white/10 text-desktop-muted hover:bg-white/20"
-                    onClick={() => { setEditingApiKeyFor(null); setApiKeyInput(''); }}
+                    disabled={savingKeyFor !== null}
+                    onClick={() => { setEditingApiKeyFor(null); setApiKeyInput(''); setKeyMessage(null); }}
                   >
                     取消
                   </button>
@@ -5294,14 +5164,16 @@ function LLMModelsSettings() {
                   </span>
                   <button
                     className="px-2 py-1 rounded text-xs bg-white/10 text-desktop-muted hover:bg-white/20"
-                    onClick={() => setEditingApiKeyFor(p.id)}
+                    disabled={savingKeyFor !== null}
+                    onClick={() => { setEditingApiKeyFor(p.id); setApiKeyInput(''); setKeyMessage(null); }}
                   >
                     {p.apiKeyConfigured ? '更换' : '填写'}
                   </button>
                   {p.apiKeyConfigured && (
                     <button
                       className="px-2 py-1 rounded text-xs text-red-400/80 hover:bg-red-500/20"
-                      onClick={() => clearProviderApiKey(p.id)}
+                      disabled={savingKeyFor !== null}
+                      onClick={() => void handleApiKey(p.id, true)}
                     >
                       清除
                     </button>
@@ -5311,13 +5183,13 @@ function LLMModelsSettings() {
               <button
                 className="px-2 py-1 rounded text-xs bg-white/10 text-desktop-muted hover:bg-white/20 disabled:opacity-50"
                 title="从该提供商的 /models 或 /v1/models 拉取模型列表"
-                disabled={!p.baseUrl || importingFor !== null}
+                disabled={!p.apiKeyConfigured || editingApiKeyFor === p.id || savingKeyFor !== null || importingFor !== null}
                 onClick={async () => {
                   setImportError(null);
                   setImportingFor(p.id);
                   try {
-                    const apiKey = getProviderApiKey(p.id) || undefined;
-                    const { models } = await api.importLLMModels(p.baseUrl ?? '', apiKey);
+                    await syncToCloudNow();
+                    const { models } = await api.importLLMModels('', undefined, p.id);
                     setImportedModelsForProvider(p.id, models);
                   } catch (e) {
                     setImportError(e instanceof Error ? e.message : String(e));
@@ -5328,6 +5200,11 @@ function LLMModelsSettings() {
               >
                 {importingFor === p.id ? '导入中…' : '从 API 导入模型'}
               </button>
+              {keyMessage?.providerId === p.id && (
+                <p role={keyMessage.error ? 'alert' : 'status'} className={`basis-full break-words text-xs ${keyMessage.error ? 'text-red-400' : 'text-green-400'}`}>
+                  {keyMessage.text}
+                </p>
+              )}
               {llmConfig.providers.length > 1 && (
                 <button
                   className="p-1 rounded text-desktop-muted hover:bg-red-500/20 hover:text-red-400"
@@ -7186,6 +7063,7 @@ function McpSettings() {
   const [servers, setServers] = useState<McpServerConfig[]>([]);
   const [configPath, setConfigPath] = useState('');
   const [fromEnv, setFromEnv] = useState(false);
+  const [inheritedMcp, setInheritedMcp] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveLoading, setSaveLoading] = useState(false);
@@ -7264,6 +7142,7 @@ function McpSettings() {
         setServers(config.servers);
         setConfigPath(config.configPath);
         setFromEnv(config.fromEnv);
+        setInheritedMcp(config.inherited === true);
         setStatus(st);
       })
       .catch((e) => setError(e?.message ?? '加载失败'))
@@ -7480,9 +7359,9 @@ function McpSettings() {
         </div>
       </div>
 
-      {fromEnv && (
+      {(fromEnv || inheritedMcp) && (
         <div className="text-xs text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
-          当前配置来自环境变量，保存将写入文件
+          平台扩展由管理员提供，无需复制密钥。这里保存的是你自己的扩展配置。
         </div>
       )}
 
@@ -7847,6 +7726,69 @@ function McpSettings() {
             {error && <div className="text-xs text-red-400/90">{error}</div>}
         </div>
       )}
+    </div>
+  );
+}
+
+function MessageDisplaySettings({currentRenderMode}:{currentRenderMode:RenderMode}) {
+  const {t}=useTranslation();
+  const renderModeOptions: Array<{ value: RenderMode; label: string; desc: string }> = [
+    { value: 'markdown', label: t('settings.renderModeMarkdown', 'Markdown'), desc: t('settings.renderModeMarkdownDesc', '安全渲染，支持代码高亮、表格等') },
+    { value: 'html', label: t('settings.renderModeHtml', 'HTML'), desc: t('settings.renderModeHtmlDesc', '显示助手制作的页面和图文内容') },
+    { value: 'react', label: t('settings.renderModeReact', 'React'), desc: t('settings.renderModeReactDesc', '显示可点击的图表和小工具') },
+  ];
+  return <>
+      {/* 渲染模式设置 */}
+      <div className="border-t border-white/5 pt-4">
+        <h4 className="text-xs font-medium text-desktop-text mb-3 flex items-center gap-2">
+          <Eye size={14} />
+          {t('settings.renderMode', '消息渲染模式')}
+        </h4>
+        <div className="space-y-2">
+          {renderModeOptions.map((opt) => {
+            const isActive = currentRenderMode === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => useConfigStore.getState().setRenderMode(opt.value)}
+                className={`w-full flex items-start gap-3 p-3 rounded-lg border transition-colors text-left ${
+                  isActive
+                    ? 'border-desktop-accent/50 bg-desktop-accent/10'
+                    : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className={`w-4 h-4 rounded-full border-2 mt-0.5 shrink-0 flex items-center justify-center ${
+                  isActive ? 'border-desktop-accent' : 'border-white/30'
+                }`}>
+                  {isActive && <div className="w-2 h-2 rounded-full bg-desktop-accent" />}
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-desktop-text">{opt.label}</div>
+                  <div className="text-[11px] text-desktop-muted mt-0.5">{opt.desc}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+  </>;
+}
+
+function AiTabContent({ currentRenderMode }: { currentRenderMode: RenderMode }) {
+  const { t } = useTranslation();
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-sm font-medium text-desktop-text">{t('settings.ai')}</h3>
+      <SettingRow label={t('settings.defaultModel')} description={t('settings.defaultModelHint')}>
+        <span className="text-xs text-desktop-muted">{t('settings.defaultModelSeeModels')}</span>
+      </SettingRow>
+      <SettingRow label={t('settings.contextMemory')} description={t('settings.contextMemory')}>
+        <ToggleSwitch defaultOn={true} />
+      </SettingRow>
+      <MemoryRebuildIndexRow />
+      <MessageDisplaySettings currentRenderMode={currentRenderMode} />
     </div>
   );
 }
@@ -8462,6 +8404,187 @@ function ServerManagementSettings() {
                 {editingServer ? '保存' : '添加'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Search Provider Settings ───────────────────────────────────────────────────
+
+type SearchProvider = 'minimax' | 'serper' | 'perplexity' | 'brave' | 'duckduckgo';
+
+const SEARCH_PROVIDERS: Array<{ id: SearchProvider; labelKey: string; needsKey: boolean }> = [
+  { id: 'minimax', labelKey: 'settings.searchProviderMiniMax', needsKey: true },
+  { id: 'serper', labelKey: 'settings.searchProviderSerper', needsKey: true },
+  { id: 'perplexity', labelKey: 'settings.searchProviderPerplexity', needsKey: true },
+  { id: 'brave', labelKey: 'settings.searchProviderBrave', needsKey: true },
+  { id: 'duckduckgo', labelKey: 'settings.searchProviderDuckDuckGo', needsKey: false },
+];
+
+const SEARCH_CONFIG_KEY = 'search_config';
+
+function WebSearchTabContent() {
+  const { t } = useTranslation();
+  const [provider, setProvider] = useState<SearchProvider>('minimax');
+  const [apiKey, setApiKey] = useState('');
+  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'ok' | 'fail'>('idle');
+  const [testError, setTestError] = useState('');
+  const [saveMsg, setSaveMsg] = useState<'ok' | 'fail' | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getUserConfigKey(SEARCH_CONFIG_KEY).then((cfg: unknown) => {
+      // API returns { key, value } — unwrap value
+      const wrapped = cfg as { key?: string; value?: { provider?: SearchProvider; apiKey?: string } } | null;
+      const c = wrapped?.value ?? null;
+      if (c) {
+        if (c.provider) setProvider(c.provider);
+        if (c.apiKey) setApiKey(c.apiKey);
+      }
+      setLoading(false);
+    }).catch(() => setLoading(false));
+  }, []);
+
+  const saveConfig = (p: SearchProvider, key: string) => {
+    api.setUserConfigKey(SEARCH_CONFIG_KEY, { provider: p, apiKey: key })
+      .then(() => { setSaveMsg('ok'); setTimeout(() => setSaveMsg(null), 2500); })
+      .catch(() => { setSaveMsg('fail'); setTimeout(() => setSaveMsg(null), 2500); });
+  };
+
+  const handleProviderChange = (p: SearchProvider) => {
+    setProvider(p);
+    saveConfig(p, apiKey);
+  };
+
+  const handleApiKeyChange = (key: string) => {
+    setApiKey(key);
+    saveConfig(provider, key);
+  };
+
+  const handleTest = async () => {
+    if (!apiKey && provider !== 'duckduckgo') {
+      setTestError('请先填写 API Key');
+      setTestStatus('fail');
+      return;
+    }
+    setTestStatus('testing');
+    setTestError('');
+    try {
+      const result = await api.testSearchProvider(provider, apiKey);
+      if (result.ok) {
+        setTestStatus('ok');
+      } else {
+        setTestStatus('fail');
+        setTestError(result.error || '连接失败');
+      }
+    } catch (e: unknown) {
+      setTestStatus('fail');
+      setTestError(e instanceof Error ? e.message : '连接失败');
+    }
+  };
+
+  if (loading) {
+    return <div className="space-y-6"><h3 className="text-sm font-medium text-desktop-text">{t('settings.searchTab')}</h3><div className="text-xs text-desktop-muted py-4">加载中…</div></div>;
+  }
+
+  const selectedProvider = SEARCH_PROVIDERS.find(p => p.id === provider)!;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <h3 className="text-sm font-medium text-desktop-text">{t('settings.searchTab')}</h3>
+        {saveMsg === 'ok' && <span className="text-xs text-green-400">已保存</span>}
+        {saveMsg === 'fail' && <span className="text-xs text-amber-400">保存失败</span>}
+      </div>
+      <p className="text-xs text-desktop-muted">{t('settings.searchProviderDesc')}</p>
+
+      <div>
+        <div className="text-xs font-medium text-desktop-text mb-2">{t('settings.searchProvider')}</div>
+        <div className="grid grid-cols-1 gap-2">
+          {SEARCH_PROVIDERS.map(p => {
+            const active = provider === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => handleProviderChange(p.id)}
+                className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-colors text-left ${
+                  active ? 'border-desktop-accent/50 bg-desktop-accent/10' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
+                }`}
+              >
+                <div className={`w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+                  active ? 'border-desktop-accent' : 'border-white/30'
+                }`}>
+                  {active && <div className="w-2 h-2 rounded-full bg-desktop-accent" />}
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-desktop-text">{t(p.labelKey)}</div>
+                  {!p.needsKey && <div className="text-[10px] text-desktop-muted">无需 API Key</div>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {selectedProvider.needsKey && (
+        <div>
+          <div className="text-xs font-medium text-desktop-text mb-2">{t('settings.searchApiKey')}</div>
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={apiKey}
+              onChange={e => handleApiKeyChange(e.target.value)}
+              placeholder="填写 API Key…"
+              className="flex-1 bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-gray-200 placeholder:text-gray-400 outline-none focus:border-amber-500/50"
+            />
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={testStatus === 'testing'}
+              className="px-3 py-2 rounded-lg bg-desktop-accent/60 hover:bg-desktop-accent/80 text-desktop-text text-xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {testStatus === 'testing' ? (
+                <><Loader2 size={12} className="animate-spin" />{t('settings.searchTesting')}</>
+              ) : t('settings.searchTest')}
+            </button>
+          </div>
+          {testStatus === 'ok' && <div className="text-xs text-green-400 mt-1.5">{t('settings.searchTestSuccess')}</div>}
+          {testStatus === 'fail' && <div className="text-xs text-red-400 mt-1.5">{testError || t('settings.searchTestFailed')}</div>}
+        </div>
+      )}
+
+      {provider === 'minimax' && (
+        <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+          <div className="text-[11px] text-desktop-muted">
+            <div className="font-medium text-desktop-text mb-1">MiniMax 搜索</div>
+            使用 MiniMax API Key 调用搜索功能。API Key 从 MiniMax 控制台获取：platform.minimaxi.chat
+          </div>
+        </div>
+      )}
+      {provider === 'serper' && (
+        <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+          <div className="text-[11px] text-desktop-muted">
+            <div className="font-medium text-desktop-text mb-1">Serper.dev</div>
+            免费额度：每月 2500 次搜索。获取 Key：serper.dev
+          </div>
+        </div>
+      )}
+      {provider === 'perplexity' && (
+        <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+          <div className="text-[11px] text-desktop-muted">
+            <div className="font-medium text-desktop-text mb-1">Perplexity Sonar</div>
+            使用 Sonar 模型进行联网搜索。获取 Key：perplexity.ai
+          </div>
+        </div>
+      )}
+      {provider === 'duckduckgo' && (
+        <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+          <div className="text-[11px] text-desktop-muted">
+            <div className="font-medium text-desktop-text mb-1">DuckDuckGo</div>
+            无需 API Key，直接使用。但在国内可能无法访问。
           </div>
         </div>
       )}

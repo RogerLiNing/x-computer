@@ -1,6 +1,6 @@
 /**
- * 认证路由：注册、登录、验证码。支持登录/注册后将匿名用户数据关联到新账号。
- * 安全措施：验证码防自动化、多次失败锁定防暴力破解。
+ * 认证路由：注册、登录、验证码。支持服务端验证登录身份。
+ * 安全措施：服务端会话、验证码与失败锁定。登录不会合并其他用户的数据。
  */
 
 import { Router } from 'express';
@@ -10,9 +10,8 @@ import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
 import { hashPassword, verifyPassword } from '../auth/password.js';
 import { createCaptcha, verifyCaptcha } from '../auth/captcha.js';
 import { recordFailure, clearFailures, isLocked, getLockedRemainingSeconds } from '../auth/rateLimit.js';
-import { mergeMessagesInto } from '../x/XProactiveMessages.js';
-import { getDefaultScheduler } from '../scheduler/XScheduler.js';
 import { loadDefaultConfig } from '../config/defaultConfig.js';
+import {passwordResetAvailable} from '../auth/passwordReset.js';
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LEN = 6;
@@ -27,7 +26,7 @@ export function createAuthRouter(
   router.get('/settings', (_req, res) => {
     const cfg = loadDefaultConfig();
     const allowRegister = cfg.auth?.allowRegister !== false;
-    res.json({ allowRegister });
+    res.json({ allowRegister,passwordResetAvailable:passwordResetAvailable() });
   });
 
   /** GET /api/auth/captcha - 获取验证码（登录/注册前调用） */
@@ -68,13 +67,7 @@ export function createAuthRouter(
       const passwordHash = await hashPassword(passwordStr);
       await db.createAuthAccount(emailStr, passwordHash, userId);
 
-      const previousUserId = req.userId && req.userId !== 'anonymous' ? req.userId : null;
-      if (previousUserId && previousUserId !== userId) {
-        await db.mergeUserDataInto(previousUserId, userId);
-        await userSandboxManager.mergeWorkspaceInto(previousUserId, userId).catch(() => {});
-        mergeMessagesInto(previousUserId, userId);
-        getDefaultScheduler()?.mergeJobsInto(previousUserId, userId);
-      }
+      await req.app.locals.sessions.login(req,res,userId);
 
       res.status(201).json({ userId });
     } catch (err: unknown) {
@@ -128,13 +121,7 @@ export function createAuthRouter(
         return;
       }
 
-      const previousUserId = req.userId && req.userId !== 'anonymous' ? req.userId : null;
-      if (previousUserId && previousUserId !== userId) {
-        await db.mergeUserDataInto(previousUserId, userId);
-        await userSandboxManager.mergeWorkspaceInto(previousUserId, userId).catch(() => {});
-        mergeMessagesInto(previousUserId, userId);
-        getDefaultScheduler()?.mergeJobsInto(previousUserId, userId);
-      }
+      await req.app.locals.sessions.login(req,res,userId,{email:emailStr,passwordHash:storedHash});
 
       res.json({ userId });
     } catch (err: unknown) {
@@ -143,5 +130,6 @@ export function createAuthRouter(
     }
   });
 
+  router.post('/logout', async(req,res)=>{try{await req.app.locals.sessions.logout(req,res);res.json({ok:true});}catch{res.status(503).json({error:'退出未完成，请重试'});}});
   return router;
 }

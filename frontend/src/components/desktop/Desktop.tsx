@@ -1,19 +1,16 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Settings } from 'lucide-react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
 import { useConfigStore } from '@/store/configStore';
 import { useLLMConfigStore } from '@/store/llmConfigStore';
-import { setInstalledFromCloud, getInstalledApps, setMiniAppsFromApi } from '@/appRegistry';
+import { setMiniAppsFromApi } from '@/appRegistry';
 import { useAdminStore } from '@/store/adminStore';
-import { getSystemLogStore, type SystemLogEntry } from '@/store/systemLogStore';
 import { applyUserConfigToStores } from '@/utils/applyUserConfig';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useMobileViewport } from '@/hooks/useMobileViewport';
 import { api } from '@/utils/api';
-import type { LLMSystemConfig } from '@shared/index';
-import { saveSecrets, loadSecrets } from '@/constants/llmPresets';
 import { Taskbar } from './Taskbar';
 import { WindowManager } from './WindowManager';
 import { DesktopIcons } from './DesktopIcons';
@@ -23,14 +20,24 @@ import { ContextMenu } from './ContextMenu';
 import { SearchLauncher } from './SearchLauncher';
 import { LockScreen } from './LockScreen';
 import { StatusBar } from './StatusBar';
-import { ChatApp } from '@/components/apps/ChatApp';
 import { OnboardingOverlay } from '@/components/OnboardingOverlay';
+
+const MobileChatApp = lazy(() =>
+  import('@/components/apps/ChatApp').then((module) => ({ default: module.ChatApp })),
+);
 
 export function Desktop() {
   const { openApp } = useDesktopStore();
   const { showContextMenu, hideContextMenu } = useConfigStore();
   const { connected } = useConnectionStore();
   const isMobile = useMobileViewport();
+
+  useEffect(() => {
+    if (!isMobile && useDesktopStore.getState().windows.length === 0) {
+      const windowId = openApp('chat');
+      useDesktopStore.getState().maximizeWindow(windowId);
+    }
+  }, [isMobile, openApp]);
 
   // Connect WebSocket
   useWebSocket();
@@ -70,57 +77,6 @@ export function Desktop() {
       .then((c) => {
         // 使用 applyUserConfigToStores 统一应用云端配置并填充 cloudConfigSnapshot，供 Settings 内 MCP/Skills 等 tab 刷新后能读到
         applyUserConfigToStores(c ?? {});
-        const raw = c?.llm_config;
-        const parsed: LLMSystemConfig | null =
-          typeof raw === 'object' && raw !== null && 'providers' in raw
-              ? (raw as LLMSystemConfig)
-              : typeof raw === 'string' && raw
-                ? (() => {
-                    try {
-                      return JSON.parse(raw) as LLMSystemConfig;
-                    } catch {
-                      return null;
-                    }
-                  })()
-                : null;
-          if (parsed?.providers) {
-            const secrets = loadSecrets();
-            for (const p of parsed.providers) {
-              const prov = p as { id: string; apiKey?: string };
-              if (prov.apiKey) secrets[prov.id] = prov.apiKey;
-            }
-            saveSecrets(secrets);
-            const configForStore: LLMSystemConfig = {
-              ...parsed,
-              providers: parsed.providers.map((p) => {
-                const prov = p as unknown as { id: string; apiKey?: string; [k: string]: unknown };
-                const { apiKey: _ak, ...rest } = prov;
-                return { ...rest, apiKeyConfigured: !!prov.apiKey } as LLMSystemConfig['providers'][0];
-              }),
-            };
-            useLLMConfigStore.getState().setLLMConfig(configForStore, { skipCloudSync: true });
-          }
-        useLLMConfigStore.getState().setConfigSyncStatus('ok');
-
-        // 系统日志、桌面图标布局、已安装应用：以云端为准覆盖本地
-        const logStore = getSystemLogStore();
-        if (Array.isArray(c?.system_logs) && c.system_logs.length > 0) {
-          logStore.replaceFromCloud(c.system_logs as SystemLogEntry[]);
-        } else if (logStore.entries.length > 0) {
-          // 云端无日志但本地有：一次性上传，实现“所有数据在云端”
-          api.setUserConfigKey('system_logs', logStore.entries).catch(() => {});
-        }
-        const cfg = useConfigStore.getState();
-        if (c?.desktop_layout && typeof c.desktop_layout === 'object' && !Array.isArray(c.desktop_layout)) {
-          cfg.setDesktopIconPositionsFromCloud(c.desktop_layout as Record<string, { col: number; row: number }>);
-        } else if (Object.keys(cfg.desktopIconPositions).length > 0) {
-          api.setUserConfigKey('desktop_layout', cfg.desktopIconPositions).catch(() => {});
-        }
-        if (c?.installed_apps != null && Array.isArray(c.installed_apps)) {
-          setInstalledFromCloud(c.installed_apps);
-        } else if (getInstalledApps().length > 0) {
-          api.setUserConfigKey('installed_apps', getInstalledApps()).catch(() => {});
-        }
         // X 制作的小程序（从后端按用户拉取）
         api.getMiniApps().then((r) => setMiniAppsFromApi(r?.apps ?? [])).catch(() => setMiniAppsFromApi([]));
       })
@@ -142,8 +98,39 @@ export function Desktop() {
     e.preventDefault();
     const ds = useDesktopStore.getState();
     const cfg = useConfigStore.getState();
+
+    // Calculate position for new folder based on click location
+    const desktopArea = e.currentTarget as HTMLElement;
+    const rect = desktopArea.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const col = Math.floor(x / 106); // CELL_W(96) + GAP(10)
+    const row = Math.floor(y / 94);  // CELL_H(84) + GAP(10)
+
+    // Count existing folders and apps to determine next available position
+    const appFolders = cfg.appFolders;
+    const occupiedPositions = new Set<string>();
+    appFolders.forEach((f) => occupiedPositions.add(`${f.col},${f.row}`));
+
+    // Find next available position if current is occupied
+    let folderCol = col;
+    let folderRow = row;
+    while (occupiedPositions.has(`${folderCol},${folderRow}`)) {
+      folderCol++;
+      if (folderCol >= 6) {
+        folderCol = 0;
+        folderRow++;
+      }
+    }
+
     showContextMenu(e.clientX, e.clientY, [
-      { label: '新建文件夹', action: () => ds.openApp('file-manager'), shortcut: '⌘N' },
+      {
+        label: '新建文件夹',
+        action: () => {
+          cfg.addFolder('新文件夹', 'FolderOpen', folderCol, folderRow);
+        },
+        shortcut: '⌘N',
+      },
       { label: '打开终端', action: () => ds.openApp('terminal'), shortcut: '⌘T' },
       { label: '打开 AI 助手', action: () => ds.openApp('chat') },
       { label: '打开 X 主脑', action: () => ds.openApp('x') },
@@ -188,9 +175,11 @@ export function Desktop() {
         </header>
         {/* 主内容：对话区 */}
         <main className="flex-1 min-h-0 relative z-10">
-          <ChatApp windowId="mobile-chat" embeddedInMobile />
+          <Suspense fallback={<div className="h-full bg-desktop-window" />}>
+            <MobileChatApp windowId="mobile-chat" embeddedInMobile />
+          </Suspense>
         </main>
-        <WindowManager />
+        <div className="absolute inset-0 z-[60] pointer-events-none"><WindowManager /></div>
         <NotificationCenter />
         <ContextMenu />
         <LockScreen />

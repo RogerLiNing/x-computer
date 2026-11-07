@@ -7,7 +7,6 @@ import { useLLMConfigStore } from '@/store/llmConfigStore';
 import { useConfigStore } from '@/store/configStore';
 import { getSystemLogStore, type SystemLogEntry } from '@/store/systemLogStore';
 import { setInstalledFromCloud, getInstalledApps, setMiniAppsFromApi } from '@/appRegistry';
-import { saveSecrets, loadSecrets } from '@/constants/llmPresets';
 import { api } from '@/utils/api';
 
 export type UserConfigMap = Record<string, unknown>;
@@ -27,6 +26,7 @@ type ProviderFromCloud = LLMProviderConfig & { apiKey?: string };
 
 /** 将云端配置对象应用到 LLM、桌面、已安装应用、系统日志等 store */
 export function applyUserConfigToStores(c: UserConfigMap): void {
+  let publicModels: LLMSystemConfig | undefined;
   const raw = c?.llm_config;
   if (raw != null) {
     const parsed: LLMSystemConfig | null =
@@ -42,23 +42,16 @@ export function applyUserConfigToStores(c: UserConfigMap): void {
             })()
           : null;
     if (parsed?.providers) {
-      const secrets = loadSecrets();
-      for (const p of parsed.providers) {
-        const provider = p as unknown as ProviderFromCloud;
-        if (provider.apiKey) {
-          secrets[provider.id] = provider.apiKey;
-        }
-      }
-      saveSecrets(secrets);
       const configForStore: LLMSystemConfig = {
         ...parsed,
         providers: parsed.providers.map((p) => {
           const provider = p as unknown as ProviderFromCloud;
           const { apiKey: _, ...rest } = provider;
-          return { ...rest, apiKeyConfigured: !!provider.apiKey } as LLMProviderConfig;
+          return { ...rest, apiKeyConfigured: !!provider.apiKey || provider.apiKeyConfigured === true } as LLMProviderConfig;
         }),
       };
       useLLMConfigStore.getState().setLLMConfig(configForStore, { skipCloudSync: true });
+      publicModels = configForStore;
     }
   }
   useLLMConfigStore.getState().setConfigSyncStatus('ok');
@@ -81,7 +74,7 @@ export function applyUserConfigToStores(c: UserConfigMap): void {
     api.setUserConfigKey('installed_apps', getInstalledApps()).catch(() => {});
   }
 
-  setCloudConfigSnapshot(c);
+  setCloudConfigSnapshot(publicModels ? { ...c, llm_config: publicModels } : c);
 }
 
 /**

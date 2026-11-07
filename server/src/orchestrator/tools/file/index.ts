@@ -9,6 +9,8 @@ import { fileTailDefinition, createFileTailHandler } from './tail.js';
 import { fileReplaceDefinition, createFileReplaceHandler } from './replace.js';
 import { fileParseDefinition, createFileParseHandler } from './parse.js';
 import { fileListDefinition, createFileListHandler } from './list.js';
+import { filePresentDefinition, createFilePresentHandler } from './present.js';
+import {fileExtractDefinition,createFileExtractHandler}from'./extract.js';
 
 export const fileDefinitions: ToolDefinition[] = [
   fileReadDefinition,
@@ -17,6 +19,8 @@ export const fileDefinitions: ToolDefinition[] = [
   fileReplaceDefinition,
   fileParseDefinition,
   fileListDefinition,
+  filePresentDefinition,
+  fileExtractDefinition,
 ];
 
 export function createFileHandlers(deps: ToolExecutorDeps): Map<string, ToolHandler> {
@@ -27,5 +31,7 @@ export function createFileHandlers(deps: ToolExecutorDeps): Map<string, ToolHand
   map.set(fileReplaceDefinition.name, createFileReplaceHandler(deps));
   map.set(fileParseDefinition.name, createFileParseHandler(deps));
   map.set(fileListDefinition.name, createFileListHandler(deps));
+  map.set(filePresentDefinition.name, createFilePresentHandler(deps));
+  map.set(fileExtractDefinition.name,createFileExtractHandler(deps));
   return map;
 }

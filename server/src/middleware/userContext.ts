@@ -1,15 +1,7 @@
-/**
- * 用户上下文中间件：从请求中解析 userId，注入到 req 对象。
- *
- * 规则：
- * 1. 优先从 Header `X-User-Id` 取
- * 2. 回退到 query `userId`
- * 3. 若均无则返回 401（可配为自动分配临时 ID）
- *
- * 多用户隔离的基础：后续 FS/Shell/Memory/Task 等路由通过 req.userId 选择对应沙箱。
- */
+/** Server-verified sessions select the user. Header/query IDs are only consistency hints. */
 
 import type { Request, Response, NextFunction } from 'express';
+import { serviceTokenMatches } from '../auth/sessionAuth.js';
 
 // ── 扩展 Express Request ──────────────────────────────────
 
@@ -24,65 +16,31 @@ declare global {
 }
 
 /** 无需 X-User-Id 即可访问的路径（登录/注册/验证码等） */
-const AUTH_PUBLIC_PATHS = ['/api/auth/login', '/api/auth/register', '/api/auth/captcha', '/api/auth/settings', '/api/workflow/execute-task', '/api/llm/config', '/api/health'];
-
-/** 路径式小程序资源：/api/apps/sandbox/:userId/apps/...，userId 在 URL 中，iframe 加载无法带 Header */
-const SANDBOX_PATH_PREFIX = '/api/apps/sandbox/';
-
-/** GET 小程序后端 KV 且带 X-App-Read-Token 时放行（由路由内解析 Token 得到 userId） */
-const isAppBackendKvGetWithToken = (method: string, path: string, headers: Request['headers']) =>
-  method === 'GET' &&
-  /^\/api\/x-apps\/backend\/kv\/[^/]+$/.test(path) &&
-  typeof headers['x-app-read-token'] === 'string' &&
-  (headers['x-app-read-token'] as string).trim() !== '';
+const AUTH_PUBLIC_PATHS = ['/api/auth/logout', '/api/auth/login', '/api/auth/register', '/api/auth/captcha', '/api/auth/settings', '/api/llm/config', '/api/health'];
 
 export function userContextMiddleware(allowAnonymous = false) {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const fullPath = (req.originalUrl || req.baseUrl + req.path || '').split('?')[0];
-    const isAuthPublic = AUTH_PUBLIC_PATHS.some((p) => fullPath === p || fullPath.startsWith(p + '?'));
-
-    const xUserId = req.headers['x-user-id'];
-    const hasUserId = typeof xUserId === 'string' ? xUserId.trim() !== '' : false;
-    if (!hasUserId && isAppBackendKvGetWithToken(req.method, fullPath, req.headers)) {
-      req.userId = 'anonymous';
-      return next();
-    }
-
-    let userId =
-      (typeof req.headers['x-user-id'] === 'string' && req.headers['x-user-id'].trim()) ||
-      (typeof req.query?.userId === 'string' && req.query.userId.trim()) ||
-      '';
-
-    // 路径式小程序：iframe 加载无法带 X-User-Id，从 URL 提取 userId
-    if (!userId && fullPath.startsWith(SANDBOX_PATH_PREFIX)) {
-      const rest = fullPath.slice(SANDBOX_PATH_PREFIX.length);
-      const firstSlash = rest.indexOf('/');
-      const pathUserId = firstSlash >= 0 ? rest.slice(0, firstSlash) : rest;
-      if (pathUserId && /^[\w-]{1,128}$/.test(decodeURIComponent(pathUserId))) {
-        userId = decodeURIComponent(pathUserId);
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const fullPath=(req.originalUrl || req.path).split('?')[0];
+    try {
+      if((req.method==='GET'||req.method==='POST')&&/^\/api\/apps\/preview\/[\w-]{1,128}\/[\w-]{43}\//.test(fullPath)){req.userId='anonymous';next();return;}
+      if(req.method==='GET'&&/^\/api\/x-apps\/backend\/kv\/[^/]+$/.test(fullPath)&&typeof req.headers['x-app-read-token']==='string'){req.userId='anonymous';next();return;}
+      if(req.headers.origin==='null'){res.status(403).json({error:'隔离预览不能访问账户接口'});return;}
+      if(fullPath==='/api/workflow/execute-task') {
+        if(!serviceTokenMatches(req.headers.authorization)) {res.status(401).json({error:'工作流回调未认证'});return;}
+        const id=req.body?.userId;
+        if(typeof id!=='string'||!/^[\w-]{1,128}$/.test(id)) {res.status(400).json({error:'无效工作流用户'});return;}
+        req.userId=id;next();return;
       }
-    }
-
-    if (!userId) {
-      if (allowAnonymous) {
-        req.userId = 'anonymous';
-        return next();
+      const session=await req.app.locals.sessions.authenticate(req.headers.cookie);
+      if(session) {
+        const claimed=req.headers['x-user-id'] || req.query.userId;
+        if(claimed && claimed!==session.userId) {res.status(403).json({error:'身份与登录会话不一致'});return;}
+        req.userId=session.userId;next();return;
       }
-      if (isAuthPublic) {
-        req.userId = 'anonymous';
-        return next();
-      }
-      res.status(401).json({ error: '请先登录 (Missing X-User-Id header)', code: 'UNAUTHORIZED' });
-      return;
-    }
-
-    // 简单校验：userId 格式合法（UUID、字母数字、连字符、下划线，长度 1-128）
-    if (!/^[\w-]{1,128}$/.test(userId)) {
-      res.status(400).json({ error: 'Invalid userId format' });
-      return;
-    }
-
-    req.userId = userId;
-    next();
+      if(AUTH_PUBLIC_PATHS.includes(fullPath)||(req.method==='GET'&&fullPath==='/api/auth/oauth/status')||(req.method==='POST'&&['/api/auth/request-password-reset','/api/auth/reset-password'].includes(fullPath))) {req.userId='anonymous';next();return;}
+      if(req.method==='GET' && /^\/api\/x-apps\/backend\/kv\//.test(fullPath) && typeof req.headers['x-app-read-token']==='string') {req.userId='anonymous';next();return;}
+      if(allowAnonymous && !req.headers['x-user-id'] && !req.query.userId) {req.userId='anonymous';next();return;}
+      res.status(401).json({error:'请先登录',code:'UNAUTHORIZED'});
+    } catch {res.status(503).json({error:'登录验证暂不可用'});}
   };
 }

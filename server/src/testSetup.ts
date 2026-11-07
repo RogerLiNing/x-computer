@@ -8,6 +8,7 @@
  */
 import { resetRateLimitState } from './middleware/chatRateLimit.js';
 import { clearDefaultConfigCache } from './config/defaultConfig.js';
+import { beforeAll, beforeEach, vi } from 'vitest';
 
 beforeEach(() => {
   resetRateLimitState();

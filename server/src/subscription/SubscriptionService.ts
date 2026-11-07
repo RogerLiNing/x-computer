@@ -7,6 +7,11 @@ import type { AsyncDatabase } from '../db/database.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import { calculateUserStorage } from './calculateUserStorage.js';
 import path from 'path';
+import {createHash,randomUUID} from 'node:crypto';
+import {setTimeout as delay} from 'node:timers/promises';
+import {RunOwnershipStore} from '../chat/RunOwnershipStore.js';
+import {ModelQuotaError,ModelBudgetUnavailableError,isModelBudgetError} from './modelBudget.js';
+import {ModelCallQueue} from './ModelCallQueue.js';
 
 export interface Plan {
   id: string;
@@ -65,6 +70,14 @@ export interface CurrentUsage {
 }
 
 export class SubscriptionService {
+  private modelCalls?:ModelCallQueue;
+  private calls(){return this.modelCalls??=new ModelCallQueue(this.db,async user=>(await this.getQuotaLimits(user)).concurrentTasksLimit);}
+  async acquireModelSlot(userId:string,runId?:string,signal?:AbortSignal){
+    try{return await this.calls().acquire(userId,runId,signal);}
+    catch(error){if(!signal?.aborted)this.modelCalls=undefined;if(signal?.aborted||isModelBudgetError(error))throw error;throw new ModelBudgetUnavailableError();}
+  }
+  async waitingForModel(userId:string,runId:string){return this.calls().waiting(userId,runId);}
+  private budgetReady?:Promise<void>;
   private workspaceRoot?: string;
 
   constructor(private db: AsyncDatabase, workspaceRoot?: string) {
@@ -248,6 +261,27 @@ export class SubscriptionService {
   /**
    * 记录使用量
    */
+  async consumeAiCall(userId:string,metadata:Record<string,unknown>={},signal?:AbortSignal,queue?:{id:string;token:string}):Promise<void>{
+    if(!userId||userId==='anonymous')throw new ModelQuotaError('请先登录，才能使用共享模型额度。');
+    const gate=new RunOwnershipStore(this.db),scope=`model-budget:${createHash('sha256').update(userId).digest('hex').slice(0,32)}`;
+    try{
+      signal?.throwIfAborted();await(this.budgetReady??=gate.init());
+      const deadline=Date.now()+5000;
+      while(!await gate.acquire(userId,scope,scope,'record')){
+        signal?.throwIfAborted();if(Date.now()>=deadline)throw new ModelBudgetUnavailableError();await delay(10,undefined,{signal});
+      }
+      const limits=await this.getQuotaLimits(userId),usage=await this.getCurrentUsage(userId),used=Number(usage.aiCalls),limit=Number(limits.aiCallsLimit);
+      if(!Number.isFinite(used)||used<0||!(Number.isFinite(limit)&&limit>=0||limit===Infinity))throw new ModelBudgetUnavailableError();
+      if(used>=limit)throw new ModelQuotaError();
+      const subscription=await this.getUserSubscription(userId),now=Date.now(),periodStart=subscription?.currentPeriodStart??now-30*24*60*60*1000,periodEnd=subscription?.currentPeriodEnd??now;
+      signal?.throwIfAborted();
+      await gate.reserveAiUsage(scope,{id:`model-${randomUUID()}`,userId,periodStart,periodEnd,metadata:JSON.stringify(metadata),createdAt:now},queue);
+    }catch(error){
+      if(isModelBudgetError(error)||(error instanceof Error&&error.name==='AbortError'))throw error;
+      this.budgetReady=undefined;throw new ModelBudgetUnavailableError();
+    }finally{await gate.release(scope,'record').catch(()=>{});}
+  }
+
   async recordUsage(
     userId: string,
     resourceType: 'ai_calls' | 'storage' | 'tasks' | 'api_requests',
