@@ -10,6 +10,11 @@ import {
 } from './xDirectToolPolicy.js';
 
 describe('resolveInitialLoadedTools', () => {
+  it('preloads shared space tools when the user talks about spaces or invite codes',()=>{
+    expect(resolveIntentPreloadedTools('帮我建一个家庭空间')).toContain('x.space_create');
+    expect(resolveIntentPreloadedTools('我的邀请码是 ABCD2345')).toContain('x.space_join');
+    expect(resolveIntentPreloadedTools('写一首诗')).not.toContain('x.space_list');
+  });
   it('preloads the pure reminder tool for reminder requests',()=>{
     expect(resolveInitialLoadedTools('normal_chat',undefined,'一分钟后提醒我整理书包')).toContain('x.schedule_reminder');expect(resolveIntentPreloadedTools('讲个故事')).not.toContain('x.schedule_reminder');
   });

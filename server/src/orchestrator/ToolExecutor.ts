@@ -49,6 +49,7 @@ import { decodeHtmlEntities } from './tools/utils.js';
 import { fileDefinitions, createFileHandlers } from './tools/file/index.js';
 import { officeDefinitions, createOfficeHandlers } from './tools/office.js';
 import { reminderDefinition,createReminderHandler } from './tools/reminder.js';
+import { spaceToolDefinitions, createSpaceHandlers } from './tools/space.js';
 import { grepDefinition, createGrepHandler } from './tools/grep.js';
 import { webSearchDefinition, createWebSearchHandler } from './tools/webSearch.js';
 import { httpRequestDefinition, createHttpRequestHandler } from './tools/httpRequest.js';
@@ -1519,6 +1520,10 @@ export class ToolExecutor {
       if (handler) this.register(def, handler);
     }
     this.register(reminderDefinition,createReminderHandler(this.db));
+    if (this.db) {
+      const spaceHandlers = createSpaceHandlers(this.db);
+      for (const def of spaceToolDefinitions) this.register(def, spaceHandlers[def.name]);
+    }
     this.register(askUserDefinition, askUser);
     const officeHandlers = createOfficeHandlers(deps);
     for (const def of officeDefinitions) {

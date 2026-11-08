@@ -6,6 +6,7 @@
  */
 
 import { SEND_TOOLS } from '../tooling/sendApproval.js';
+import { SPACE_TOOL_NAMES } from '../orchestrator/tools/space.js';
 
 export interface LLMToolDef {
   name: string;
@@ -16,6 +17,7 @@ export interface LLMToolDef {
 /** 试用版仅允许的基础工具 */
 const BASIC_TOOL_NAMES = new Set([
   ...SEND_TOOLS,
+  ...SPACE_TOOL_NAMES,
   'x.ask_user',
   'x.create_agent',
   'x.list_agents',

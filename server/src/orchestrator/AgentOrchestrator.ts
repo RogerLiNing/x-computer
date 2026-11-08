@@ -24,6 +24,8 @@ import { callLLMWithTools, callLLMWithToolsStream } from '../chat/chatService.js
 import type { ChatMessage, LLMToolCall } from '../chat/chatService.js';
 import { fire as fireHook } from '../hooks/HookRegistry.js';
 import { getCurrentAwareness } from '../prompts/systemCore.js';
+import { getSpaceStore } from '../spaces/SpaceStore.js';
+import { buildSpaceContext } from '../spaces/spaceContext.js';
 import { broadcastToAppChannel } from '../wsBroadcast.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 import { filterToolsByPlan } from '../subscription/planToolFilter.js';
@@ -517,6 +519,12 @@ export class AgentOrchestrator extends EventEmitter {
    * 支持 allowedToolNames 限定该轮只使用指定工具（供 X 创建的智能体使用）。
    * 支持 toolLoadingMode='on_demand'：仅预置 capability.search/web_search/capability.load，按需加载其他工具，减少 token。
    */
+  /** 主助手对话带上用户所在的共享空间；专家智能体在独立工作区，不带。 */
+  private async spaceContextFor(userId?: string, agentId?: string): Promise<string> {
+    if (!this.db || !userId || userId === 'anonymous' || agentId) return '';
+    return buildSpaceContext(getSpaceStore(this.db), userId);
+  }
+
   async runChatAgentLoop(params: {
     inputImages?: ModelImage[];
     messages: ChatMessage[];
@@ -602,8 +610,9 @@ export class AgentOrchestrator extends EventEmitter {
       const set = new Set(effectiveAllowed);
       tools = tools.filter((t) => set.has(t.name));
     }
+    const spaceContext = await this.spaceContextFor(userId, agentId);
     const messages: ChatMessage[] = [
-      { role: 'system', content: systemPrompt },
+      { role: 'system', content: spaceContext ? `${systemPrompt}\n\n${spaceContext}` : systemPrompt },
       ...initialMessages.filter((m) => m.role !== 'system'),
     ];
     const checkpoint = async () => { await onCheckpoint?.(structuredClone(messages)); };
