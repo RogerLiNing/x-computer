@@ -11,6 +11,7 @@ import {LivingAIControlStore} from '../living-ai/LivingAIControlStore.js';
 import {broadcastToUser} from '../wsBroadcast.js';
 import { SendExecutionDeniedError } from '../tooling/sendApproval.js';
 import { backgroundAutostartEnabled } from '../config/backgroundRuntime.js';
+import { channelRunPolicy } from './channelRunPolicy.js';
 
 export interface ChannelReplyAddress {
   channel: 'qq' | 'telegram' | 'discord' | 'slack' | 'whatsapp';
@@ -399,8 +400,9 @@ export class ScheduledOccurrenceService {
         const config = await this.options.getLLMConfig(row.user_id, job.providerId && job.modelId ? { providerId: job.providerId, modelId: job.modelId } : undefined);
         if (!config?.providerId || !config.modelId) { await this.needsAttention(row, '尚未配置可用模型，请配置后重新交办。'); return; }
         if (!job.channelReply) await this.options.ensureUserMcp?.(row.user_id);
-        let systemPrompt = job.channelReply
-          ? '你是外部渠道中的对话助手。仅依据当前会话中的消息回答。你无权读取工作区、账户资料或其他对话，也不能代替用户执行操作或声称已经执行。直接给出适合发回这个会话的回复。'
+        const channelPolicy = job.channelReply ? channelRunPolicy(job.channelReply) : undefined;
+        let systemPrompt = channelPolicy
+          ? channelPolicy.systemPrompt
           : job.systemPrompt ?? await this.options.getSystemPrompt(row.user_id);
         if (job.channelReply && !job.channelHistory) {
           job.channelHistory = await this.channelHistory(row, runs);
@@ -410,7 +412,7 @@ export class ScheduledOccurrenceService {
         const requestedTextArtifactPath = job.channelReply ? undefined : resolveRequestedTextArtifactPath(job.intent);
         if (scope) systemPrompt += '\n\n这是已到期的交办。现在按原授权完成任务，不要重新创建本计划。';
         if (requestedTextArtifactPath) systemPrompt += `\n\n${buildTextArtifactDeliveryInstruction(requestedTextArtifactPath)}`;
-        const allowedToolNames = scope?.allowedToolNames ?? job.allowedToolNames;
+        const allowedToolNames = scope?.allowedToolNames ?? channelPolicy?.allowedToolNames ?? job.allowedToolNames;
         run = await runs.accept({ userId: row.user_id, sessionId: current.execution_session_id, requestId: row.id,
           messages: [...(job.channelHistory ?? []), { role: 'user', content: job.intent }], userMessage: { content: job.intent },
           channelReplyOnly: job.channelReply ? true : undefined,
