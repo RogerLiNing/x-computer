@@ -7,6 +7,7 @@ import type { AppDatabase } from '../db/database.js';
 import { fireSignal } from '../signals/signalService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import type { QQMessagePayload } from './qqService.js';
+import { describeQQMessage, type QQAttachment, type SavedQQAttachment } from './qqAttachments.js';
 
 const QQ_PROCESSED_IDS_KEY = 'qq_processed_ids';
 const QQ_SELF_OPENID_KEY = 'qq_self_openid';
@@ -22,6 +23,29 @@ export interface QQLoopDeps {
   runAgent: (userId: string, agentId: string, goal: string, meta?: { triggerId?: string; actionFingerprint?: string }) => Promise<void>;
   /** 渠道消息作为Chat会话处理 */
   handleChannelMessageAsChat?: (userId: string, channel: string, message: string, fromName?: string, metadata?: Record<string, unknown>) => Promise<void>;
+  /** 下载附件并存进用户的个人文件。只用于私聊（机器人主人本人发来的文件）。 */
+  saveAttachments?: (userId: string, attachments: readonly QQAttachment[]) => Promise<SavedQQAttachment[]>;
+}
+
+/** 私聊附件存进主人的文件；群聊、频道里可能是别人发的，只说明收到了什么，不下载。 */
+async function withAttachmentNotes(deps: QQLoopDeps, userId: string, msg: QQMessagePayload): Promise<QQMessagePayload> {
+  const attachments = msg.attachments ?? [];
+  if (!attachments.length) return msg;
+  let saved: SavedQQAttachment[] = [];
+  if (msg.messageType === 'private' && deps.saveAttachments) {
+    try {
+      saved = await deps.saveAttachments(userId, attachments);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      serverLogger.warn('qq/loop', '保存 QQ 附件失败', `userId=${userId} ${error}`);
+      saved = attachments.map(attachment => ({ attachment, error: '文件区暂时不可用' }));
+    }
+    for (const item of saved) {
+      if (item.path) serverLogger.info('qq/loop', '已保存 QQ 附件', `userId=${userId} path=${item.path}`);
+      else serverLogger.warn('qq/loop', 'QQ 附件未保存', `userId=${userId} ${item.error ?? ''}`);
+    }
+  }
+  return { ...msg, text: describeQQMessage(msg.text, attachments, saved) };
 }
 
 async function loadProcessedIds(
@@ -94,8 +118,9 @@ async function saveRecentMessage(
 export async function handleQQMessage(
   deps: QQLoopDeps,
   userId: string,
-  msg: QQMessagePayload,
+  incoming: QQMessagePayload,
 ): Promise<void> {
+  let msg = incoming;
   const { db, getConfig, setConfig, runIntent, runAgent, handleChannelMessageAsChat } = deps;
   const msgId = `qq-${msg.messageId}`;
 
@@ -108,6 +133,8 @@ export async function handleQQMessage(
     const recentMsgs = await loadRecentMessages(getConfig, userId, msg.origin?.scopeId);
     if (await saveRecentMessage(setConfig, userId, recentMsgs, { fromId: msg.fromId, text: msg.text, ts: Date.now() }, msg.origin?.scopeId)) return;
   }
+
+  msg = await withAttachmentNotes(deps, userId, msg);
 
   await db.insertChannelMessage(userId, {
     id,

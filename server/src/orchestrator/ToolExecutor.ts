@@ -274,6 +274,7 @@ const TOOL_REQUIRED_PARAMS: Record<string, string[]> = {
   'file.write': ['path'],
   'file.read': ['path'],
   'file.replace': ['path'],
+  'file.move': ['from', 'to'],
   'file.parse': ['path'],
   'file.tail': ['path'],
   'grep': ['pattern'],

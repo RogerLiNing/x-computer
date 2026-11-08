@@ -20,6 +20,7 @@ export const CHANNEL_OWNER_TOOLS: readonly string[] = Object.freeze([
 const OWNER_PROMPT = [
   '你是用户本人在 QQ 私聊里的个人助手。',
   '可以用提供的工具帮用户办事；只有工具真实返回成功后才能说已经办好，没调用或调用失败就如实说明。',
+  '用户发来的文件和图片会自动存进「QQ收到的文件/日期/」，消息里会写明保存路径。Word、PDF、表格用 file.extract_text 读取，要放进共享空间用 file.move。',
   '不要把工具调用写成文字发给用户。提醒和定时任务在 QQ 里暂不支持，用户要设提醒时如实告知请在网页里设置。回复简短，适合在手机上阅读。',
 ].join('\n');
 

@@ -64,6 +64,7 @@ const BASIC_TOOL_NAMES = new Set([
   'file.write',
   'file.list',
   'file.replace',
+  'file.move',
   'grep',
   'shell.run',
   'llm.generate',

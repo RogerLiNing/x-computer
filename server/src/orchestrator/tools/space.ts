@@ -30,7 +30,7 @@ export const spaceToolDefinitions: ToolDefinition[] = [
 export const SPACE_TOOL_NAMES: readonly string[] = spaceToolDefinitions.map(d => d.name);
 
 /** 读写空间文件用的就是普通文件工具，路径以「共享空间/空间名/」开头。 */
-export const SPACE_FILE_TOOL_NAMES: readonly string[] = Object.freeze(['file.list', 'file.read', 'file.write', 'file.replace']);
+export const SPACE_FILE_TOOL_NAMES: readonly string[] = Object.freeze(['file.list', 'file.read', 'file.write', 'file.replace', 'file.move', 'file.extract_text']);
 
 function requireUser(context: unknown): string {
   const userId = (context as { userId?: string } | undefined)?.userId;

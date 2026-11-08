@@ -91,6 +91,7 @@ import { setSlackMessageHandler, reconnectSlackForConfiguredUsers, sendSlackMess
 import { handleSlackMessage } from '../slack/slackLoop.js';
 import { setQQMessageHandler, reconnectQQForConfiguredUsers, sendQQMessage } from '../qq/qqService.js';
 import { handleQQMessage } from '../qq/qqLoop.js';
+import { saveQQAttachments, type QQAttachment } from '../qq/qqAttachments.js';
 import { createChannelReplyTransport } from '../messaging/channelReply.js';
 import type { ChannelOrigin } from '../messaging/channelIdentity.js';
 import type { PluginRegistry } from '../plugins/PluginRegistry.js';
@@ -1082,6 +1083,10 @@ export function createApiRouter(
       runIntent: runIntentWithSource,
       runAgent: signalFireDeps.runAgent,
       handleChannelMessageAsChat,
+      ...(userSandboxManager ? {
+        saveAttachments: async (userId: string, attachments: readonly QQAttachment[]) =>
+          saveQQAttachments((await userSandboxManager.getForUser(userId)).sandboxFS, attachments),
+      } : {}),
     };
     setQQMessageHandler((userId, msg) => { void handleQQMessage(qqLoopDeps, userId, msg).catch(() => console.warn('[channel] QQ message not queued')); });
       if(backgroundAutostart)void reconnectQQForConfiguredUsers(db.getConfig.bind(db), () => db.getUserIdsWithConfigKey('qq_config'));

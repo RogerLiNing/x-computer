@@ -10,6 +10,7 @@ import { serverLogger } from '../observability/ServerLogger.js';
 import { captureChannelOrigin, type ChannelOrigin } from '../messaging/channelIdentity.js';
 import { randomUUID } from 'node:crypto';
 import { createSendIdentity, SendExecutionDeniedError } from '../tooling/sendApproval.js';
+import { extractQQAttachments, type QQAttachment } from './qqAttachments.js';
 
 export interface QQConfig {
   enabled?: boolean;
@@ -64,6 +65,8 @@ export type QQMessagePayload = {
   groupId?: string;
   guildId?: string;
   channelId?: string;
+  /** 文件、图片等附件；text 里对应的是 `<file,…>` 这样的标记。 */
+  attachments?: QQAttachment[];
 };
 
 /** 单次连接（含 SDK 内部获取网关的重试）最长等待时间。QQ 网关慢时单次请求就要 10 秒以上。 */
@@ -223,19 +226,19 @@ class UserQQConnection {
       this.setupReconnect();
 
       this.bot.on('message.private.friend', async (event: PrivateMessageEvent) => {
-        await this.handleIncoming('private', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, undefined, undefined, bot);
+        await this.handleIncoming('private', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, undefined, undefined, bot, extractQQAttachments(event.message));
       });
 
       this.bot.on('message.private.direct', async (event: PrivateMessageEvent) => {
-        await this.handleIncoming('guild', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id, bot);
+        await this.handleIncoming('guild', event.user_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id, bot, extractQQAttachments(event.message));
       });
 
       this.bot.on('message.group', async (event: GroupMessageEvent) => {
-        await this.handleIncoming('group', event.group_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, event.group_id, undefined, undefined, bot);
+        await this.handleIncoming('group', event.group_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, event.group_id, undefined, undefined, bot, extractQQAttachments(event.message));
       });
 
       this.bot.on('message.guild', async (event: GuildMessageEvent) => {
-        await this.handleIncoming('guild', event.channel_id ?? event.guild_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id, bot);
+        await this.handleIncoming('guild', event.channel_id ?? event.guild_id, event.sender.user_name, event.raw_message, event.message_id, event.user_id, undefined, event.guild_id, event.channel_id, bot, extractQQAttachments(event.message));
       });
 
       await Promise.race([bot.start(), timeout]);
@@ -284,6 +287,7 @@ class UserQQConnection {
     guildId?: string,
     channelId?: string,
     sourceBot?: Bot,
+    attachments: QQAttachment[] = [],
   ) {
     if (sourceBot && this.bot !== sourceBot) return;
     const accountId = this.getSendIdentity()?.accountId, sessionId = this.sendSessionId;
@@ -306,6 +310,7 @@ class UserQQConnection {
       groupId,
       guildId,
       channelId,
+      ...(attachments.length ? { attachments } : {}),
     });
   }
 
