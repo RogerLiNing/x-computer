@@ -520,9 +520,9 @@ export class AgentOrchestrator extends EventEmitter {
    * 支持 toolLoadingMode='on_demand'：仅预置 capability.search/web_search/capability.load，按需加载其他工具，减少 token。
    */
   /** 主助手对话带上用户所在的共享空间；专家智能体在独立工作区，不带。 */
-  private async spaceContextFor(userId: string | undefined, agentId: string | undefined, canManage: boolean): Promise<string> {
+  private async spaceContextFor(userId: string | undefined, agentId: string | undefined, canManage: boolean, canUseFiles = canManage): Promise<string> {
     if (!this.db || !userId || userId === 'anonymous' || agentId) return '';
-    return buildSpaceContext(getSpaceStore(this.db), userId, { canManage });
+    return buildSpaceContext(getSpaceStore(this.db), userId, { canManage, canUseFiles });
   }
 
   async runChatAgentLoop(params: {
@@ -611,7 +611,8 @@ export class AgentOrchestrator extends EventEmitter {
       tools = tools.filter((t) => set.has(t.name));
     }
     const canManageSpaces = tools.some(t => t.name.startsWith('x.space_') || t.name === 'capability.load');
-    const spaceContext = await this.spaceContextFor(userId, agentId, canManageSpaces);
+    const canUseSpaceFiles = tools.some(t => t.name === 'file.write' || t.name === 'file.read' || t.name === 'capability.load');
+    const spaceContext = await this.spaceContextFor(userId, agentId, canManageSpaces, canUseSpaceFiles);
     const messages: ChatMessage[] = [
       { role: 'system', content: spaceContext ? `${systemPrompt}\n\n${spaceContext}` : systemPrompt },
       ...initialMessages.filter((m) => m.role !== 'system'),

@@ -1,6 +1,8 @@
 import type { ToolDefinition } from '@x-computer/shared';
 import { getSpaceStore, type SpaceDb, type SpaceSummary } from '../../spaces/SpaceStore.js';
 import type { ToolHandler } from './types.js';
+import { SPACE_MOUNT_DIR, removeSpaceFiles, spaceFolderNames } from '../../spaces/SpaceAwareFS.js';
+import { serverLogger } from '../../observability/ServerLogger.js';
 
 const base: Pick<ToolDefinition, 'domain' | 'requiredPermissions'> = { domain: ['chat', 'agent'], requiredPermissions: [] };
 const spaceParam: ToolDefinition['parameters'][number] = { name: 'space', type: 'string', description: '空间名称或空间 id', required: true };
@@ -27,6 +29,9 @@ export const spaceToolDefinitions: ToolDefinition[] = [
 
 export const SPACE_TOOL_NAMES: readonly string[] = spaceToolDefinitions.map(d => d.name);
 
+/** 读写空间文件用的就是普通文件工具，路径以「共享空间/空间名/」开头。 */
+export const SPACE_FILE_TOOL_NAMES: readonly string[] = Object.freeze(['file.list', 'file.read', 'file.write', 'file.replace']);
+
 function requireUser(context: unknown): string {
   const userId = (context as { userId?: string } | undefined)?.userId;
   if (!userId || userId === 'anonymous') throw new Error('请先登录后再使用共享空间');
@@ -39,10 +44,11 @@ function requireText(input: Record<string, unknown>, key: string, message: strin
   return value;
 }
 
-function present(space: SpaceSummary) {
+function present(space: SpaceSummary, folder?: string) {
   return {
     id: space.id,
     name: space.name,
+    ...(folder ? { folder: `${SPACE_MOUNT_DIR}/${folder}` } : {}),
     yourRole: space.role === 'owner' ? '创建者' : '成员',
     members: space.members.map(m => ({ id: m.userId, name: m.displayName, role: m.role === 'owner' ? '创建者' : '成员' })),
   };
@@ -57,19 +63,29 @@ function findMember(space: SpaceSummary, key: string): string {
   throw new Error(`「${space.name}」里没有叫「${key}」的成员`);
 }
 
-export function createSpaceHandlers(db: SpaceDb): Record<string, ToolHandler> {
+export function createSpaceHandlers(db: SpaceDb, options: { basePath?: string } = {}): Record<string, ToolHandler> {
   const store = getSpaceStore(db);
+  /** 空间被删除后清掉它的文件；清理失败只记日志，不影响退出结果。 */
+  const cleanUp = async (spaceId: string) => {
+    if (!options.basePath) return;
+    try {
+      await removeSpaceFiles(options.basePath, spaceId);
+    } catch (error) {
+      serverLogger.warn('spaces', '清理已删除空间的文件失败', `spaceId=${spaceId} ${String(error)}`);
+    }
+  };
   const spaceOf = (userId: string, input: Record<string, unknown>) =>
     store.resolveSpace(userId, requireText(input, 'space', '请说明是哪个空间'));
 
   return {
     'x.space_list': async (_input, context) => {
       const spaces = await store.listSpacesForUser(requireUser(context));
-      return { ok: true, spaces: spaces.map(present) };
+      const folders = new Map([...spaceFolderNames(spaces)].map(([folder, space]) => [space.id, folder]));
+      return { ok: true, spaces: spaces.map(space => present(space, folders.get(space.id))) };
     },
     'x.space_create': async (input, context) => {
       const space = await store.createSpace(requireUser(context), requireText(input, 'name', '请提供空间名'));
-      return { ok: true, space: present(space), message: `已创建空间「${space.name}」。要邀请别人，可以生成邀请码。` };
+      return { ok: true, space: present(space), message: `已创建空间「${space.name}」。共享文件放在「${SPACE_MOUNT_DIR}/${space.name}」文件夹里。要邀请别人，可以生成邀请码。` };
     },
     'x.space_invite': async (input, context) => {
       const userId = requireUser(context);
@@ -86,6 +102,7 @@ export function createSpaceHandlers(db: SpaceDb): Record<string, ToolHandler> {
       const userId = requireUser(context);
       const space = await spaceOf(userId, input);
       const result = await store.leaveSpace(userId, space.id);
+      if (result.deleted) await cleanUp(space.id);
       const message = result.deleted ? `已退出「${space.name}」。你是最后一位成员，空间已删除。` : `已退出「${space.name}」。`;
       return { ok: true, ...result, message };
     },

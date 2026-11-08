@@ -50,6 +50,7 @@ import { fileDefinitions, createFileHandlers } from './tools/file/index.js';
 import { officeDefinitions, createOfficeHandlers } from './tools/office.js';
 import { reminderDefinition,createReminderHandler } from './tools/reminder.js';
 import { spaceToolDefinitions, createSpaceHandlers } from './tools/space.js';
+import { withSpaceFolders } from '../spaces/SpaceAwareFS.js';
 import { grepDefinition, createGrepHandler } from './tools/grep.js';
 import { webSearchDefinition, createWebSearchHandler } from './tools/webSearch.js';
 import { httpRequestDefinition, createHttpRequestHandler } from './tools/httpRequest.js';
@@ -587,7 +588,7 @@ export class ToolExecutor {
         return agentSandbox.sandboxFS;
       }
       const sandbox = await this.userSandboxManager.getForUser(uid);
-      return sandbox.sandboxFS;
+      return withSpaceFolders(sandbox.sandboxFS, uid, this.db, this.userSandboxManager.getBasePath());
     }
     return this.sandboxFS;
   }
@@ -1521,7 +1522,7 @@ export class ToolExecutor {
     }
     this.register(reminderDefinition,createReminderHandler(this.db));
     if (this.db) {
-      const spaceHandlers = createSpaceHandlers(this.db);
+      const spaceHandlers = createSpaceHandlers(this.db, { basePath: this.userSandboxManager?.getBasePath() });
       for (const def of spaceToolDefinitions) this.register(def, spaceHandlers[def.name]);
     }
     this.register(askUserDefinition, askUser);

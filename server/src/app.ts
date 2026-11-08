@@ -433,7 +433,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api', createApiRouter(orchestrator, audit, sandboxFS, userSandboxManager, db, miniAppLogStore, subscriptionService, plugins));
   app.use('/api/users', createUserRouter(db, subscriptionService));
   app.use('/api/computer', createComputerRouter(computer));
-  app.use('/api/fs', createFSRouter(sandboxFS, userSandboxManager));
+  app.use('/api/fs', createFSRouter(sandboxFS, userSandboxManager, db));
   app.use('/api/shell', createShellRouter(sandboxShell, userSandboxManager));
   app.use('/api/code', createCodeExecRouter(sandboxShell, userSandboxManager, db));
   app.use('/api/servers', createServerRouter());

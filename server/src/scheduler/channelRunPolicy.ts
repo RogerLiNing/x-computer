@@ -1,4 +1,4 @@
-import { SPACE_TOOL_NAMES } from '../orchestrator/tools/space.js';
+import { SPACE_FILE_TOOL_NAMES, SPACE_TOOL_NAMES } from '../orchestrator/tools/space.js';
 import type { ChannelReplyAddress } from './ScheduledOccurrenceService.js';
 
 /**
@@ -6,11 +6,13 @@ import type { ChannelReplyAddress } from './ScheduledOccurrenceService.js';
  *
  * 每个用户配置的是自己的 QQ 机器人，私聊里说话的就是机器人主人本人（QQ 平台测试模式下只有测试者能私聊）。
  * 如果把机器人对外开放，必须在 QQ 设置里把私聊策略改成白名单，否则陌生人也能让助手动用这些工具。
+ * 文件工具能读写本人的文件和所在空间的文件，同样只开放给私聊。
  * 群聊、频道里可能有其他人，仍然只聊天、不动用工具。
  * 提醒和定时任务到点后目前只送到网页对话，送不回 QQ，所以先不在这里开放，避免答应了却提醒不到。
  */
 export const CHANNEL_OWNER_TOOLS: readonly string[] = Object.freeze([
   ...SPACE_TOOL_NAMES,
+  ...SPACE_FILE_TOOL_NAMES,
   'memory_search',
   'read_recent_assistant_chat',
 ]);

@@ -6,6 +6,8 @@ import { readDocx, readXlsx, readPptx, createDocx, createXlsx, type SheetData } 
 import { readPdf } from '../office/pdf.js';
 import { createHash } from 'node:crypto';
 import { saveOfficeEdit } from '../office/edit.js';
+import { withSpaceFolders } from '../spaces/SpaceAwareFS.js';
+import type { SpaceDb } from '../spaces/SpaceStore.js';
 
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -18,21 +20,22 @@ async function getUserFS(
   req: Express.Request,
   defaultFS: SandboxFS,
   manager?: UserSandboxManager,
+  db?: SpaceDb,
 ): Promise<SandboxFS> {
   if (manager && req.userId && req.userId !== 'anonymous') {
     const sandbox = await manager.getForUser(req.userId);
-    return sandbox.sandboxFS;
+    return withSpaceFolders(sandbox.sandboxFS, req.userId, db, manager.getBasePath());
   }
   return defaultFS;
 }
 
-export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSandboxManager): Router {
+export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSandboxManager, db?: SpaceDb): Router {
   const router = Router();
 
   /** 获取当前用户沙箱在宿主机上的绝对路径（供用户查看、在终端中打开） */
   router.get('/workspace-path', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const path = fs.getRoot();
       res.json({ path });
     } catch (err: any) {
@@ -43,7 +46,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** List directory contents */
   router.get('/', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const dirPath = (req.query.path as string) || '/';
       const entries = await fs.list(dirPath);
       res.json({ path: dirPath, entries });
@@ -55,7 +58,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** 读取二进制文件并按原样返回（用于图片查看等），Content-Type 按扩展名设置 */
   router.get('/read-binary', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const filePath = req.query.path as string;
       if (!filePath) {
         res.status(400).json({ error: 'Missing path parameter' });
@@ -95,7 +98,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** 下载文件：读取二进制文件并设置 Content-Disposition 触发浏览器下载 */
   router.get('/download', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const filePath = req.query.path as string;
       if (!filePath) {
         res.status(400).json({ error: 'Missing path parameter' });
@@ -144,7 +147,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
     const disconnected = () => { if (!res.writableEnded) controller.abort(); };
     res.once('close', disconnected);
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const filePath = (req.query.path as string)?.replace(/^\//, '') || '';
       if (!filePath || filePath.includes('..')) {
         res.status(400).json({ error: 'Missing or invalid path' });
@@ -197,7 +200,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
       if (!body || typeof body.path !== 'string' || !body.path || body.path.includes('..') || !body.content || typeof body.content !== 'object' || Array.isArray(body.content)) {
         res.status(400).json({ error: '文件路径或修改内容无效' }); return;
       }
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       res.json(await saveOfficeEdit(fs, body.path, body.expectedSha256, body.content));
     } catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : '修改未保存，请检查后重试' }); }
   });
@@ -205,7 +208,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** 保存办公文档：docx 传 { text, title? }，xlsx 传 { sheets: [{ name, rows }] } */
   router.post('/write-office', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const { path: filePath, type: officeType, content } = req.body as {
         path: string;
         type: 'docx' | 'xlsx';
@@ -241,7 +244,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** Read file content */
   router.get('/read', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const filePath = req.query.path as string;
       if (!filePath) {
         res.status(400).json({ error: 'Missing path parameter' });
@@ -258,7 +261,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** Write file content */
   router.post('/write', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const { path: filePath, content } = req.body;
       if (!filePath || content === undefined) {
         res.status(400).json({ error: 'Missing path or content' });
@@ -274,7 +277,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** 写入二进制文件到沙箱（如图片）：body 为 { path, contentBase64 } */
   router.post('/write-binary', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const { path: filePath, contentBase64 } = req.body;
       if (!filePath || typeof contentBase64 !== 'string') {
         res.status(400).json({ error: 'Missing path or contentBase64' });
@@ -291,7 +294,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** 上传文件到沙箱：multipart/form-data，字段名 file，可选 path（目标路径，默认使用文件名） */
   router.post('/upload', upload.single('file'), async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const file = req.file;
       if (!file) {
         res.status(400).json({ error: 'No file uploaded' });
@@ -313,7 +316,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** Create directory */
   router.post('/mkdir', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const { path: dirPath } = req.body;
       if (!dirPath) {
         res.status(400).json({ error: 'Missing path' });
@@ -329,7 +332,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** Delete file or directory */
   router.post('/delete', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const { path: targetPath } = req.body;
       if (!targetPath) {
         res.status(400).json({ error: 'Missing path' });
@@ -345,7 +348,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** Rename / move file */
   router.post('/rename', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const { oldPath, newPath } = req.body;
       if (!oldPath || !newPath) {
         res.status(400).json({ error: 'Missing oldPath or newPath' });
@@ -361,7 +364,7 @@ export function createFSRouter(sandboxFS: SandboxFS, userSandboxManager?: UserSa
   /** Get file/directory info */
   router.get('/stat', async (req, res) => {
     try {
-      const fs = await getUserFS(req, sandboxFS, userSandboxManager);
+      const fs = await getUserFS(req, sandboxFS, userSandboxManager, db);
       const filePath = req.query.path as string;
       if (!filePath) {
         res.status(400).json({ error: 'Missing path parameter' });

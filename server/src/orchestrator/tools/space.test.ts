@@ -48,6 +48,19 @@ describe('空间工具', () => {
     expect(left.message).toContain('已删除');
   });
 
+  it('最后一位成员退出后，空间文件一起删除', async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'x-space-clean-'));
+    const withFiles = createSpaceHandlers(db, { basePath: base });
+    const created = await withFiles['x.space_create']({ name: '临时' }, { userId: 'cleaner' }) as { space: { id: string } };
+    const listed = await withFiles['x.space_list']({}, { userId: 'cleaner' }) as { spaces: Array<{ folder: string }> };
+    expect(listed.spaces[0].folder).toBe('共享空间/临时');
+    const dir = path.join(base, 'spaces', created.space.id, 'workspace', 'files');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'x');
+    await withFiles['x.space_leave']({ space: '临时' }, { userId: 'cleaner' });
+    expect(fs.existsSync(path.join(base, 'spaces', created.space.id))).toBe(false);
+  });
+
   it('参数缺失时给出明确提示', async () => {
     await expect(call('x.space_create', {}, 'roger')).rejects.toThrow('空间名');
     await expect(call('x.space_join', { code: '' }, 'roger')).rejects.toThrow('邀请码');
