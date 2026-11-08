@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { serverLogger } from '../observability/ServerLogger.js';
 
 /** 空间存储只依赖最小的数据库接口，SQLite 和 MySQL 共用。 */
 export interface SpaceDb {
@@ -95,7 +96,9 @@ export class SpaceStore {
   }
 
   private async createTables(): Promise<void> {
-    const engine = this.db.getDialect() === 'mysql' ? ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' : '';
+    // 不写 CHARSET：MySQL 8 下单写 utf8mb4 会落到 utf8mb4_0900_ai_ci，与 users 表的排序规则不同，JOIN 会报错。
+    const mysql = this.db.getDialect() === 'mysql';
+    const engine = mysql ? ' ENGINE=InnoDB' : '';
     await this.db.run(`CREATE TABLE IF NOT EXISTS spaces (
       id VARCHAR(64) PRIMARY KEY, name VARCHAR(160) NOT NULL,
       created_by VARCHAR(128) NOT NULL, created_at BIGINT NOT NULL)${engine}`);
@@ -105,6 +108,23 @@ export class SpaceStore {
     await this.db.run(`CREATE TABLE IF NOT EXISTS space_invites (
       code_hash VARCHAR(64) PRIMARY KEY, space_id VARCHAR(64) NOT NULL, created_by VARCHAR(128) NOT NULL,
       expires_at BIGINT NOT NULL, used_by VARCHAR(128), used_at BIGINT)${engine}`);
+    if (mysql) await this.alignCollationWithUsers();
+  }
+
+  /** 早期版本建表时排序规则与 users 不一致，这里改成和 users.id 相同。 */
+  private async alignCollationWithUsers(): Promise<void> {
+    const rows = await this.db.query<{ TABLE_NAME: string; COLLATION_NAME: string }>(
+      `SELECT TABLE_NAME, COLLATION_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME IN ('id', 'space_id')
+         AND TABLE_NAME IN ('users', 'spaces', 'space_members', 'space_invites')`);
+    const target = rows.find(r => r.TABLE_NAME === 'users')?.COLLATION_NAME;
+    if (!target || !/^[a-z0-9_]+$/i.test(target)) return;
+    const charset = target.split('_')[0];
+    for (const row of rows) {
+      if (row.TABLE_NAME === 'users' || row.COLLATION_NAME === target) continue;
+      serverLogger.info('spaces', `调整 ${row.TABLE_NAME} 排序规则`, `${row.COLLATION_NAME} -> ${target}`);
+      await this.db.run(`ALTER TABLE ${row.TABLE_NAME} CONVERT TO CHARACTER SET ${charset} COLLATE ${target}`);
+    }
   }
 
   async createSpace(userId: string, name: string): Promise<SpaceSummary> {

@@ -125,3 +125,24 @@ describe('SpaceStore', () => {
     expect(space.members[0].displayName).toBe('Roger');
   });
 });
+
+describe('MySQL 排序规则', () => {
+  it('建表不指定字符集，并把与 users 不一致的表改成相同排序规则', async () => {
+    const sqls: string[] = [];
+    const fake = {
+      getDialect: () => 'mysql' as const,
+      run: async (sql: string) => { sqls.push(sql); },
+      query: async <T,>() => [
+        { TABLE_NAME: 'users', COLLATION_NAME: 'utf8mb4_unicode_ci' },
+        { TABLE_NAME: 'spaces', COLLATION_NAME: 'utf8mb4_0900_ai_ci' },
+        { TABLE_NAME: 'space_members', COLLATION_NAME: 'utf8mb4_unicode_ci' },
+      ] as T[],
+      queryOne: async () => undefined,
+    };
+    await new SpaceStore(fake).init();
+    expect(sqls.filter(s => s.startsWith('CREATE')).every(s => !s.includes('CHARSET'))).toBe(true);
+    expect(sqls.filter(s => s.startsWith('ALTER'))).toEqual([
+      'ALTER TABLE spaces CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci',
+    ]);
+  });
+});
