@@ -2,6 +2,9 @@ import {backgroundAutostartEnabled} from '../config/backgroundRuntime.js';
 import { askUser, askUserDefinition, UserInputRequiredError } from '../tooling/userQuestion.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
+import { createDefaultToolPipeline, type ToolPipeline, type Initiator } from './pipeline/index.js';
+import { PackageRegistry } from '../packages/PackageRegistry.js';
+import { MANIFEST_FILE, manifestForMiniApp, validatePackageManifest } from '../packages/manifest.js';
 import { SendApprovalRequiredError, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 import { ShellApprovalRequiredError } from '../tooling/shellApproval.js';
 import { AppVersionStore } from '../apps/AppVersionStore.js';
@@ -355,6 +358,10 @@ export interface ExecutionContext {
   reloadMcpForUser?: (userId: string) => Promise<void>;
   /** 任务元数据（如 sourceMessage 包含渠道消息的发送者信息） */
   taskMetadata?: Record<string, unknown>;
+  /** 本次执行的发起方；缺省时由流水线按 agentId / 渠道消息推断 */
+  initiator?: Initiator;
+  /** 本次执行持有的权限；声明后，requiredPermissions 超出范围的工具会被拒绝 */
+  grantedPermissions?: string[];
 }
 
 type ToolHandler = (input: Record<string, unknown>, context?: ExecutionContext) => Promise<unknown>;
@@ -487,8 +494,35 @@ async function saveMiniApps(setConfig: (userId: string, key: string, value: stri
 export class ToolExecutor {
   private expertDispatchRunner?:ExpertDispatchRunner;
   setExpertDispatchRunner(runner:ExpertDispatchRunner){this.expertDispatchRunner=runner;}
+  /** 替换执行流水线（如接入带审计持久化的默认流水线） */
+  setPipeline(pipeline: ToolPipeline): void { this.pipeline = pipeline; }
+  private packageRegistry?: PackageRegistry;
+  /** 包注册表（需要数据库）；模型生成的应用在此登记为 ui 包 */
+  private packages(): PackageRegistry | undefined {
+    if (!this.db) return undefined;
+    this.packageRegistry ??= new PackageRegistry(this.db);
+    return this.packageRegistry;
+  }
+  /** 读取模型已写好的包清单（id 须一致），否则按应用信息生成默认清单并写入包目录。 */
+  private async resolveAppManifest(fs: SandboxFS, app: { id: string; name: string; path: string }) {
+    const file = `${app.path}/${MANIFEST_FILE}`;
+    if (await fs.exists(file)) {
+      try {
+        const parsed = validatePackageManifest(JSON.parse(await fs.read(file)));
+        if (parsed.ok && parsed.manifest.id === app.id) return { ...parsed.manifest, name: app.name };
+        serverLogger.warn('packages', `应用 ${app.id} 自带清单无效，改用默认清单`, parsed.ok ? 'id 不匹配' : parsed.errors.join('; '));
+      } catch (error: unknown) {
+        serverLogger.warn('packages', `应用 ${app.id} 清单不是合法 JSON`, error instanceof Error ? error.message : String(error));
+      }
+    }
+    const manifest = manifestForMiniApp(app);
+    await fs.writeOverwrite(file, JSON.stringify(manifest, null, 2));
+    return manifest;
+  }
   private tools = new Map<string, ToolHandler>();
   private definitions = new Map<string, ToolDefinition>();
+  /** 所有工具调用都经由此流水线：策略 → 审计 → 包装执行 → 后处理 → 审计 */
+  private pipeline: ToolPipeline = createDefaultToolPipeline();
   /** scope -> (name -> { definition, handler }) */
   private scopedTools = new Map<string, Map<string, { definition: ToolDefinition; handler: ToolHandler }>>();
 
@@ -631,7 +665,8 @@ export class ToolExecutor {
 
     try {
       context?.signal?.throwIfAborted();
-      const out = await handler(step.toolInput, context);
+      const invocation = { id: context?.toolCallId ?? step.id, toolName: step.toolName, input: step.toolInput, definition: this.getToolDefinition(step.toolName, context?.userId), context: context ?? {} };
+      const out = await this.pipeline.run(invocation, () => handler(step.toolInput, context));
       call.output = out;
       call.completedAt = Date.now();
       const obj = out != null && typeof out === 'object' ? (out as Record<string, unknown>) : null;
@@ -2694,7 +2729,7 @@ git clone https://${hostname}/${skillName}.git
         name: 'x.create_app',
         displayName: '创建小程序',
         description:
-          '制作小程序/小游戏，支持两种方式。(1) 工程化（必须按顺序）：① 先只写 apps/<id>/plan.md，含功能概述、技术细节、文件结构、开发步骤；若为游戏或需声音，plan 须含「资源清单」（需生成的音效、BGM 及用途）；② file.read 自检 plan，不完善则完善后再自检；③ 若 plan 中有音效/BGM，必须先主动用 llm.generate_sound_effect、llm.generate_music 生成到 apps/<id>/assets/sfx/、assets/bgm/，再在代码中用相对路径 assets/sfx/xxx.wav、assets/bgm/xxx.wav 引用；④ 再创建 index.html、style.css、app.js、可选 icon.png（llm.generate_image），图片放 apps/<id>/assets/images/；最后调用本工具传 app_id、name 仅注册。(2) 快速：传 html_content 生成单页。**资源统一放 apps/<id>/assets/（images/、sfx/、bgm/）**，代码用 assets/xxx 引用。界面填满窗口（width:100%）；做游戏时音效/BGM 是必选步骤。',
+          '制作小程序/小游戏，支持两种方式。(1) 工程化（必须按顺序）：① 先只写 apps/<id>/plan.md，含功能概述、技术细节、文件结构、开发步骤；若为游戏或需声音，plan 须含「资源清单」（需生成的音效、BGM 及用途）；② file.read 自检 plan，不完善则完善后再自检；③ 若 plan 中有音效/BGM，必须先主动用 llm.generate_sound_effect、llm.generate_music 生成到 apps/<id>/assets/sfx/、assets/bgm/，再在代码中用相对路径 assets/sfx/xxx.wav、assets/bgm/xxx.wav 引用；④ 再创建 index.html、style.css、app.js、可选 icon.png（llm.generate_image），图片放 apps/<id>/assets/images/；最后调用本工具传 app_id、name 仅注册。(2) 快速：传 html_content 生成单页。**资源统一放 apps/<id>/assets/（images/、sfx/、bgm/）**，代码用 assets/xxx 引用。可选：在 apps/<id>/x-package.json 写包清单（format 1、id 与 app_id 一致、version、kinds、permissions），未写时系统自动生成。界面填满窗口（width:100%）；做游戏时音效/BGM 是必选步骤。',
         domain: ['chat', 'agent'],
         riskLevel: 'low',
         parameters: [
@@ -2769,6 +2804,15 @@ git clone https://${hostname}/${skillName}.git
         }
         if(versions)await versions.register(userId,{id:appId,name,path:appPath});
         else await saveMiniApps(setConfig, userId, list);
+        const registry = this.packages();
+        if (registry) {
+          try {
+            const manifest = await this.resolveAppManifest(fs, { id: appId, name, path: appPath });
+            await registry.install(userId, manifest, { source: 'generated', path: appPath });
+          } catch (error: unknown) {
+            return { ok: false, error: `应用已写入但包登记失败：${error instanceof Error ? error.message : String(error)}` };
+          }
+        }
         return { ok: true, appId, versionId, message: bodyOrHtml ? `已创建应用「${name}」` : `已注册应用「${name}」` };
       },
     );
@@ -2786,6 +2830,12 @@ git clone https://${hostname}/${skillName}.git
       async (input, ctx) => {
         const userId = ctx?.userId;
         if (!userId || userId === 'anonymous') return { apps: [], message: '需要已登录用户' };
+        const registry = this.packages();
+        if (registry) {
+          const fs = await this.resolveFS(ctx?.agentId ? { ...ctx, agentId: undefined } : ctx);
+          if (fs) await registry.migrateMiniApps(userId, fs);
+          return { apps: await registry.listApps(userId) };
+        }
         const getConfig = ctx?.getConfig;
         if (!getConfig) return { apps: [], message: '无法读取配置' };
         const list = await loadMiniApps(getConfig, userId);

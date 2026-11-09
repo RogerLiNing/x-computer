@@ -766,6 +766,8 @@ describe('API', () => {
     it('GET /api/apps 隐藏缺失目录的应用，但保留登记以便恢复', async () => {
       if (!db) return;
       await db.ensureUser(TEST_USER);
+      // 上一个用例的 calc 已迁入包注册表；注册表才是应用列表的真源，先移除它。
+      await request(app).delete('/api/packages/calc').set('Cookie', await app.locals.sessions.createCookie(TEST_USER));
       await db.setConfig(TEST_USER, 'x_mini_apps', JSON.stringify([{ id: 'gone', name: '已删除', path: 'apps/gone' }]));
       const res = await request(app).get('/api/apps').set('Cookie', await app.locals.sessions.createCookie(TEST_USER));
       expect(res.status).toBe(200);

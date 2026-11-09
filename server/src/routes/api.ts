@@ -38,6 +38,7 @@ import { createChatSessionRouter, createSharedSessionRouter } from './chatSessio
 import { createAgentsRouter } from './agents.js';
 import { createMcpRouter } from './mcp.js';
 import { createAppsRouter } from './apps.js';
+import { createPackagesRouter } from './packages.js';
 import { createCapabilitiesRouter } from './capabilities.js';
 import { createEditorAgentRouter } from './editorAgent.js';
 import { createChatRouter } from './chat.js';
@@ -336,6 +337,7 @@ export function createApiRouter(
     router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   }
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
+  router.use(createPackagesRouter(db, userSandboxManager, plugins));
   router.use(createCapabilitiesRouter(orchestrator));
   router.use(createHealthRouter(orchestrator, audit));
   router.use(createAdminRouter(orchestrator, audit, sandboxFS, userSandboxManager, db));

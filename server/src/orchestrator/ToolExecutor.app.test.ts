@@ -22,3 +22,25 @@ describe('application handoff persistence',()=>{
   await vi.waitFor(()=>expect(setConfig).toHaveBeenCalled());expect(settled).toBe(false);saved();expect((await result).output).toMatchObject({ok:true,appId:'new-counter'});
  });
 });
+describe('application packages',()=>{
+ it('registers a created application as a ui package with a manifest file and lists it through x.list_apps',async()=>{
+  const root=await mkdtemp(path.join(os.tmpdir(),'app-package-tool-'));const sqlite=new SqliteAppDatabase(root);const db=new SqliteDatabaseAdapter(sqlite);
+  try{
+   const fs=new SandboxFS(path.join(root,'workspace'));await fs.init();
+   const executor=new ToolExecutor(fs,undefined,undefined,undefined,undefined,undefined,db);
+   const ctx={userId:'owner',getConfig:db.getConfig.bind(db),setConfig:db.setConfig.bind(db)};
+   await fs.writeOverwrite('apps/todo/index.html','<h1>todo</h1>');
+   await fs.writeOverwrite('apps/todo/x-package.json',JSON.stringify({format:1,id:'todo',name:'草稿名',version:'1.0.0',kinds:['ui'],ui:{entry:'index.html'},permissions:[]}));
+   const created=await executor.execute({id:'s',taskId:'t',action:'x.create_app',toolName:'x.create_app',toolInput:{app_id:'todo',name:'待办'},status:'pending',riskLevel:'low'},'container',ctx);
+   expect(created.output).toMatchObject({ok:true,appId:'todo'});
+   const quick=await executor.execute({id:'s2',taskId:'t',action:'x.create_app',toolName:'x.create_app',toolInput:{app_id:'counter',name:'计数器',html_content:'<button>+</button>'},status:'pending',riskLevel:'low'},'container',ctx);
+   expect(quick.output).toMatchObject({ok:true});
+   expect(JSON.parse(await fs.read('apps/counter/x-package.json'))).toMatchObject({format:1,id:'counter',kinds:['ui']});
+   const {PackageRegistry}=await import('../packages/PackageRegistry.js');const registry=new PackageRegistry(db);
+   const records=await registry.list('owner');
+   expect(records.map(r=>[r.manifest.id,r.manifest.name,r.manifest.version,r.source])).toEqual([['todo','待办','1.0.0','generated'],['counter','计数器','0.1.0','generated']]);
+   const listed=await executor.execute({id:'s3',taskId:'t',action:'x.list_apps',toolName:'x.list_apps',toolInput:{},status:'pending',riskLevel:'low'},'container',ctx);
+   expect((listed.output as {apps:Array<{id:string}>}).apps.map(a=>a.id)).toEqual(['todo','counter']);
+  }finally{sqlite.close();}
+ });
+});

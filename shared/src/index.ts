@@ -267,6 +267,67 @@ export interface PluginManifest {
   };
 }
 
+// ── X Package Model ─────────────────────────────────────────
+
+/** 包内可装载的三类内容：有界面的应用、给模型新增的工具、技能/提示词。 */
+export type XPackageKind = 'ui' | 'tools' | 'skill';
+
+/** 包的来源：模型生成、用户手动安装、共享空间分发、公共目录、系统内置。 */
+export type XPackageSource = 'generated' | 'installed' | 'space' | 'catalog' | 'builtin';
+
+export interface XPackageUi {
+  /** 相对包目录的入口文件，默认 index.html */
+  entry: string;
+  defaultSize?: { width: number; height: number };
+}
+
+/** 声明式工具实现。刻意不允许在宿主进程加载任意代码。 */
+export type XPackageToolImpl =
+  | { type: 'kv' }
+  | { type: 'http'; url: string; method?: 'GET' | 'POST' | 'PUT' | 'DELETE' }
+  | { type: 'mcp'; server: string; tool: string }
+  | { type: 'script'; entry: string; runtime: 'python' };
+
+export interface XPackageTool {
+  name: string;
+  description: string;
+  parameters: ToolParameter[];
+  impl: XPackageToolImpl;
+  riskLevel?: RiskLevel;
+}
+
+export interface XPackageManifest {
+  format: 1;
+  /** 反向域名风格；模型生成的包默认 x.<user>.<slug> */
+  id: string;
+  name: string;
+  /** 语义化版本 */
+  version: string;
+  description?: string;
+  icon?: string;
+  author?: string;
+  kinds: XPackageKind[];
+  ui?: XPackageUi;
+  tools?: XPackageTool[];
+  skill?: { entry: string };
+  /** 最小授权原则；与 PluginManifest.permissions 使用同一套权限名 */
+  permissions: string[];
+  engines?: { 'x-computer'?: string };
+  startupPolicy?: PluginStartupPolicy;
+}
+
+/** 注册表中的一条已安装包记录 */
+export interface XPackageRecord {
+  userId: string;
+  manifest: XPackageManifest;
+  enabled: boolean;
+  source: XPackageSource;
+  /** 包目录相对用户沙箱根的路径；内置包为空 */
+  path?: string;
+  installedAt: number;
+  updatedAt: number;
+}
+
 /**
  * 桌面文件夹
  */

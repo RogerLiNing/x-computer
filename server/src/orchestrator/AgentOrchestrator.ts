@@ -14,6 +14,7 @@ import type {
 } from '../../../shared/src/index.js';
 import { ToolExecutor } from './ToolExecutor.js';
 import { AuditLogger } from '../observability/AuditLogger.js';
+import { createDefaultToolPipeline } from './pipeline/index.js';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
 import type { AsyncDatabase } from '../db/database.js';
@@ -112,6 +113,7 @@ export class AgentOrchestrator extends EventEmitter {
       miniAppLogStore,
       db,
     );
+    this.executor.setPipeline(createDefaultToolPipeline({ audit }));
   }
 
   /** 启动后调用，从 DB 加载任务到内存。需在 createApp 中 await orchestrator.init() */

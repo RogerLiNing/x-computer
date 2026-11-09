@@ -9,6 +9,24 @@ import { renderReact } from '../apps/renderReact.js';
 import { appRuntime } from '../apps/appRuntime.js';
 import { previewCapsule } from '../../../shared/src/previewCapsule.js';
 import { AppVersionStore } from '../apps/AppVersionStore.js';
+import { PackageRegistry } from '../packages/PackageRegistry.js';
+
+async function readLegacyApps(db: AppDatabase, userId: string): Promise<Array<{ id: string; name: string; path: string }>> {
+  const raw = await db.getConfig(userId, 'x_mini_apps');
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw) as unknown[];
+    return Array.isArray(arr)
+      ? arr.filter((x): x is { id: string; name: string; path: string } => {
+          if (!x || typeof x !== 'object') return false;
+          const a = x as Record<string, unknown>;
+          return typeof a.id === 'string' && typeof a.name === 'string' && typeof a.path === 'string';
+        })
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 export function createAppsRouter(
   orchestrator: AgentOrchestrator,
@@ -19,6 +37,7 @@ export function createAppsRouter(
   const router = Router();
   const previews=db&&userSandboxManager?new PreviewService(db,userSandboxManager):undefined;
   const versions=db&&userSandboxManager?new AppVersionStore(db):undefined;
+  const packages=db?new PackageRegistry(db):undefined;
   router.get('/apps/:appId/versions',async(req,res)=>{
     if(!versions)return res.status(503).json({error:'版本服务不可用'});
     try{res.json({versions:await versions.list(req.userId,req.params.appId)});}
@@ -101,25 +120,17 @@ export function createAppsRouter(
       const userId = (req as { userId?: string }).userId;
       if (!userId || userId === 'anonymous') return res.json({ apps: [] });
       if (!db) return res.json({ apps: [] });
-      const raw = await db.getConfig(userId, 'x_mini_apps');
-      if (!raw) return res.json({ apps: [] });
-      let apps: { id: string; name: string; path: string }[];
-      try {
-        const arr = JSON.parse(raw) as unknown[];
-        apps = Array.isArray(arr)
-          ? arr.filter((x): x is { id: string; name: string; path: string } => {
-              if (!x || typeof x !== 'object') return false;
-              const a = x as Record<string, unknown>;
-              return typeof a.id === 'string' && typeof a.name === 'string' && typeof a.path === 'string';
-            })
-          : [];
-      } catch {
-        return res.json({ apps: [] });
-      }
-      if (apps.length === 0) return res.json({ apps: [] });
-      if (!userSandboxManager) return res.json({ apps });
+      const legacy = await readLegacyApps(db, userId);
+      if (!userSandboxManager) return res.json({ apps: legacy });
       try {
         const { sandboxFS } = await userSandboxManager.getForUser(userId);
+        // The package registry is the source of truth; legacy entries are migrated into it on first read.
+        let apps = legacy;
+        if (packages) {
+          await packages.migrateMiniApps(userId, sandboxFS);
+          apps = await packages.listApps(userId);
+        }
+        if (apps.length === 0) return res.json({ apps: [] });
         const existing: typeof apps = [];
         for (const app of apps) {
           const indexPath = app.path.replace(/\/?$/, '') + '/index.html';
