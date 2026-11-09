@@ -17,6 +17,7 @@ export const shellRunDefinition: ToolDefinition = {
     { name: 'command', type: 'string', description: '要执行的命令（可包含你刚写入的脚本路径）', required: true },
     { name: 'workdir', type: 'string', description: '沙箱内工作目录，相对沙箱根', required: false },
     { name: 'timeout', type: 'number', description: '超时毫秒数，默认 60000', required: false },
+    { name: 'run_in_background', type: 'boolean', description: '为 true 时在后台运行并立即返回 job_id；用 job.output 查看输出、job.kill 结束。适合超过一分钟的命令', required: false },
   ],
   requiredPermissions: ['shell'],
 };
@@ -101,6 +102,15 @@ export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
     const relative=pathMod.relative(root,cwd);
     if (relative==='..'||relative.startsWith('..'+pathMod.sep)||pathMod.isAbsolute(relative)) throw new Error('shell.run: workdir 必须在沙箱内');
 
+      if (input.run_in_background === true && deps.jobs && scope.userId && scope.userId !== 'anonymous') {
+        const job = deps.jobs.start(scope.userId, command.slice(0, 120), async (jobSignal, append) => {
+          const result = await runner.execute(command, cwd, Math.max(timeoutMs, 10 * 60 * 1000), jobSignal);
+          append([result.stdout, result.stderr ? `\n[stderr]\n${result.stderr}` : ''].join(''));
+          if (result.exitCode !== 0) throw new Error(`命令退出码 ${result.exitCode}`);
+          return undefined;
+        });
+        return { ok: true, background: true, jobId: job.id, message: `命令已在后台运行（${job.id}）。用 job.output 查看输出；完成后会通知用户。` };
+      }
       try {
         const result = await runner.execute(command, cwd, timeoutMs, signal);
         return {

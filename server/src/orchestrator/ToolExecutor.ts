@@ -8,6 +8,10 @@ import { PackageToolRegistrar } from '../packages/PackageToolRegistrar.js';
 import { PackageCatalog, configuredCatalogUrls } from '../packages/catalog.js';
 import { getSpaceStore } from '../spaces/SpaceStore.js';
 import { createPackageToolHandlers, packageToolDefinitions } from './tools/packages.js';
+import { JobRegistry } from '../jobs/JobRegistry.js';
+import { createJobToolHandlers, jobToolDefinitions } from './tools/jobs.js';
+import { NotificationService } from '../services/NotificationService.js';
+import { broadcastToUser } from '../wsBroadcast.js';
 import { MANIFEST_FILE, manifestForMiniApp, validatePackageManifest } from '../packages/manifest.js';
 import { SendApprovalRequiredError, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 import { ShellApprovalRequiredError } from '../tooling/shellApproval.js';
@@ -501,6 +505,16 @@ export class ToolExecutor {
   setExpertDispatchRunner(runner:ExpertDispatchRunner){this.expertDispatchRunner=runner;}
   /** 替换执行流水线（如接入带审计持久化的默认流水线） */
   setPipeline(pipeline: ToolPipeline): void { this.pipeline = pipeline; }
+  /** 后台任务（长命令等）；完成时通知用户 */
+  readonly jobs = new JobRegistry({
+    onFinished: async (job) => {
+      const ok = job.status === 'completed';
+      await NotificationService.notify({ userId: job.userId, type: ok ? 'success' : job.status === 'killed' ? 'info' : 'error',
+        title: ok ? `后台任务完成：${job.label}` : job.status === 'killed' ? `后台任务已结束：${job.label}` : `后台任务失败：${job.label}`,
+        body: (job.error ? `${job.error}\n` : '') + job.output.slice(-1500), link: `app:job:${job.id}` });
+      try { broadcastToUser(job.userId, { type: 'job_finished', data: { id: job.id, status: job.status, label: job.label } }); } catch { /* 无在线连接时忽略 */ }
+    },
+  });
   private packageRegistry?: PackageRegistry;
   private packageToolRegistrar?: PackageToolRegistrar;
   /** 包注册表（需要数据库）；模型生成的应用在此登记为 ui 包 */
@@ -592,6 +606,8 @@ export class ToolExecutor {
   ) {
     this.registerBuiltinTools();
     this.registerPackageTools();
+    const jobHandlers = createJobToolHandlers(this.jobs);
+    for (const definition of jobToolDefinitions) this.register(definition, jobHandlers[definition.name]!);
   }
 
   /** 由 createApiRouter 注入，用于 signal.emit 时触发用户配置的触发器 */

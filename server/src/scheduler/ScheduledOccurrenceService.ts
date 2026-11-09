@@ -1,3 +1,4 @@
+import { CHANNEL_PROGRESS_TEXT, scheduleProgressNotice } from './progressNotice.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { AppDatabase } from '../db/database.js';
@@ -90,6 +91,7 @@ export class ScheduledOccurrenceService {
   private timer?: ReturnType<typeof setInterval>;
   private active = new Map<string, Promise<void>>();
   private busyJobs = new Set<string>();
+  private readonly progressNoticed = new Set<string>();
   constructor(private options: Options) {
     this.sqlite = options.db.getDialect() === 'sqlite';
     this.locks = new RunOwnershipStore(options.db);
@@ -442,12 +444,23 @@ export class ScheduledOccurrenceService {
     } finally { try { await this.locks.release(lock, 'record'); } finally { this.busyJobs.delete(lock); } }
   }
   private track(row: Occurrence, runId: string, execution: Promise<unknown>) {
+    this.noticeSlowChannelReply(row, execution);
     const work = execution.then(() => this.settle(row.user_id, row.id, runId))
       .catch(error => console.error('[scheduler] run failed', row.id, error))
       .finally(() => { if (this.active.get(row.id) === work) this.active.delete(row.id); });
     this.active.set(row.id, work);
   }
   async wait(): Promise<void> { await Promise.all(this.active.values()); }
+  /** A channel conversation stays silent while the model works; after a while the person hears that work is under way. */
+  private noticeSlowChannelReply(row: Occurrence, execution: Promise<unknown>) {
+    if (!this.options.sendChannelReply || this.progressNoticed.has(row.id)) return;
+    let job: BackgroundJob;
+    try { job = JSON.parse(row.job_json) as BackgroundJob; } catch { return; }
+    if (!job.channelReply) return;
+    this.progressNoticed.add(row.id);
+    const address = job.channelReplyVersion === 2 ? job.channelReply : { ...job.channelReply, legacyUnbound: true };
+    void scheduleProgressNotice(execution, { send: () => this.options.sendChannelReply!(row.user_id, address, CHANNEL_PROGRESS_TEXT) });
+  }
   private async saveOutcomeNotice(row: Occurrence, outcome: 'completed' | 'needs_attention' | 'channel_reply_unknown', detail?: string): Promise<string | undefined> {
     const job = JSON.parse(row.job_json) as BackgroundJob;
     if (row.job_id.startsWith('handoff:') || job.sessionId) return;
