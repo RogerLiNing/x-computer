@@ -61,7 +61,7 @@ import { userContextMiddleware } from './middleware/userContext.js';
 import { SubscriptionService } from './subscription/SubscriptionService.js';
 import { StripePaymentService } from './subscription/stripeService.js';
 import { serverLogger } from './observability/ServerLogger.js';
-import { loadDefaultConfig } from './config/defaultConfig.js';
+import { loadDefaultConfig, startDefaultConfigWatcher } from './config/defaultConfig.js';
 import {
   createPluginRegistry,
   type PluginRegistry,
@@ -422,7 +422,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   }
 
   // 运行档位是启动诊断信息，不包含用户数据，登录前也可读取。
-  app.use('/api/runtime', createRuntimeRouter(plugins));
+  app.use('/api/runtime', createRuntimeRouter(plugins, db));
+  // 配置文件（含 profile/local 层）变化时重新加载，无需重启
+  if (process.env.NODE_ENV !== 'test') startDefaultConfigWatcher();
 
   // ── 用户上下文中间件（所有 /api 路由前注入 userId） ──
   app.use('/api', userContextMiddleware(allowAnonymous));

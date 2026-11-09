@@ -2633,7 +2633,7 @@ export function ChatApp({ windowId, metadata, embeddedInMobile = false }: Props)
                 <details open={showAdvancedTools} className="space-y-1">
                   <summary className="cursor-pointer py-2 text-sm text-gray-400">看看我是怎么做的</summary>
                   {msg.toolCalls.map((tc) => (
-                    <ToolCallBlock key={tc.id} tc={tc} />
+                    <ToolCallBlock key={tc.id} tc={tc} onAction={(text) => setInput(text)} />
                   ))}
                 </details>
               )}

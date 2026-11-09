@@ -62,7 +62,7 @@ import {
   loadMcpAndRegisterForUser,
   ensureUserMcpLoaded,
 } from '../mcp/loadAndRegister.js';
-import { getDiscoveredSkills } from '../skills/discovery.js';
+import { getDiscoveredSkills, getModelVisibleSkills } from '../skills/discovery.js';
 import { fire as fireHook, registerHook } from '../hooks/HookRegistry.js';
 import { fireSignal } from '../signals/signalService.js';
 import { workflowFireEvent } from '../workflow/workflowClient.js';
@@ -403,7 +403,7 @@ export function createApiRouter(
       getMemoryServiceForUser(uid).then((mem) => (mem ? mem.promptMemory().catch(() => '') : '')),
     ]);
     const tools = listAllCapabilities(orchestrator.getTools());
-    const skills = getDiscoveredSkills(uid);
+    const skills = getModelVisibleSkills(uid);
     const caps = onDemandTools
       ? ''
       : USE_CONDENSED_SYSTEM_PROMPT

@@ -6,13 +6,17 @@ import { useState, useEffect } from 'react';
 import { Wrench, ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { useConnectionStore } from '@/store/connectionStore';
 import type { ToolCallRecord } from './types';
+import { ActionCard, extractActionCard } from './ActionCard';
 
 interface ToolCallBlockProps {
   tc: ToolCallRecord;
+  /** Receives the message of a clicked card action; the caller puts it into the composer. */
+  onAction?: (message: string) => void;
 }
 
-export function ToolCallBlock({ tc }: ToolCallBlockProps) {
+export function ToolCallBlock({ tc, onAction }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const card = tc.status === 'completed' ? extractActionCard(tc.output) : undefined;
   const tools = useConnectionStore((s) => s.tools);
   const fetchTools = useConnectionStore((s) => s.fetchTools);
 
@@ -85,6 +89,11 @@ export function ToolCallBlock({ tc }: ToolCallBlockProps) {
               </pre>
             </div>
           )}
+                </div>
+      )}
+      {card && (
+        <div className="px-2.5 pb-2.5">
+          <ActionCard card={card} onAction={onAction} />
         </div>
       )}
     </div>

@@ -4,7 +4,7 @@ import { callLLM, callLLMStream, callLLMWithTools, callLLMGenerateImage, type LL
 import { chatRateLimit } from '../middleware/chatRateLimit.js';
 import { getAssembledSystemPrompt, CORE_SYSTEM_PROMPT, formatCapabilitiesSummary, formatCapabilitiesSummaryCondensed, formatSkillsSummary, MEMORY_CONSIDER_SYSTEM_PROMPT, LEARNED_PROMPT_EXTRACT_SYSTEM_PROMPT, TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE, buildTimelineContext } from '../prompts/systemCore.js';
 import { listAllCapabilities } from '../capabilities/CapabilityRegistry.js';
-import { getDiscoveredSkills } from '../skills/discovery.js';
+import { getDiscoveredSkills, getModelVisibleSkills } from '../skills/discovery.js';
 import { loadAgentsFromDb } from './agents.js';
 import { ensureUserMcpLoaded } from '../mcp/loadAndRegister.js';
 import { loadDefaultConfig, getToolLoadingMode } from '../config/defaultConfig.js';
@@ -458,7 +458,7 @@ export function createChatRouter(
       const hasContext = !!(sceneId || capabilities || computerContext || taskSummary || memory || learnedPrompt || evolvedCorePrompt || basePrompt || assistantPrompt);
       if (hasContext) {
         const tools = listAllCapabilities(orchestrator.getTools());
-        const skills = getDiscoveredSkills(userId);
+        const skills = getModelVisibleSkills(userId);
         const caps =
           capabilities ??
           (USE_CONDENSED_SYSTEM_PROMPT
@@ -630,7 +630,7 @@ export function createChatRouter(
       const hasContext = !!(sceneId || capabilities || computerContext || taskSummary || memory || learnedPrompt || evolvedCorePrompt || basePrompt || assistantPrompt);
       if (hasContext) {
         const tools = listAllCapabilities(orchestrator.getTools());
-        const skills = getDiscoveredSkills(userId);
+        const skills = getModelVisibleSkills(userId);
         const caps =
           capabilities ??
           (USE_CONDENSED_SYSTEM_PROMPT
@@ -821,8 +821,8 @@ export function createChatRouter(
         const caps = onDemand
           ? ''
           : USE_CONDENSED_SYSTEM_PROMPT
-            ? formatCapabilitiesSummaryCondensed(listAllCapabilities(orchestrator.getTools())) + formatSkillsSummary(getDiscoveredSkills(userId), true)
-            : formatCapabilitiesSummary(listAllCapabilities(orchestrator.getTools())) + formatSkillsSummary(getDiscoveredSkills(userId));
+            ? formatCapabilitiesSummaryCondensed(listAllCapabilities(orchestrator.getTools())) + formatSkillsSummary(getModelVisibleSkills(userId), true)
+            : formatCapabilitiesSummary(listAllCapabilities(orchestrator.getTools())) + formatSkillsSummary(getModelVisibleSkills(userId));
         const baseSystemPrompt = getAssembledSystemPrompt({
           scene: sceneId as 'normal_chat' | 'none',
           promptMode: sceneId === 'none' ? 'minimal' : 'full',
@@ -999,7 +999,7 @@ export function createChatRouter(
         ]);
         const toolLoadingMode = getToolLoadingMode();
         const onDemand = toolLoadingMode === 'on_demand';
-        const discoveredSkills = getDiscoveredSkills(userId);
+        const discoveredSkills = getModelVisibleSkills(userId);
         const tools = listAllCapabilities(orchestrator.getTools());
         const caps = onDemand
           ? ''

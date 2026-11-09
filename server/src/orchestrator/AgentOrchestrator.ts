@@ -23,6 +23,7 @@ import type { EvolvedPromptService, GetRecentAssistantChat } from './ToolExecuto
 import { v4 as uuid } from 'uuid';
 import { callLLM, callLLMWithTools, callLLMWithToolsStream } from '../chat/chatService.js';
 import { compactIfNeeded } from '../chat/compaction/runCompaction.js';
+import { expandSkillCommand } from '../skills/skillCommand.js';
 import type { ChatMessage, LLMToolCall } from '../chat/chatService.js';
 import { fire as fireHook } from '../hooks/HookRegistry.js';
 import { getCurrentAwareness } from '../prompts/systemCore.js';
@@ -625,7 +626,7 @@ export class AgentOrchestrator extends EventEmitter {
     const spaceContext = await this.spaceContextFor(userId, agentId, canManageSpaces, canUseSpaceFiles);
     const messages: ChatMessage[] = [
       { role: 'system', content: spaceContext ? `${systemPrompt}\n\n${spaceContext}` : systemPrompt },
-      ...initialMessages.filter((m) => m.role !== 'system'),
+      ...expandSkillCommand(initialMessages.filter((m) => m.role !== 'system'), userId),
     ];
     const checkpoint = async () => { await onCheckpoint?.(structuredClone(messages)); };
     await checkpoint();

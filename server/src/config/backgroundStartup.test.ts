@@ -15,7 +15,7 @@ import * as slack from '../slack/slackService.js';
 import * as qq from '../qq/qqService.js';
 import * as whatsapp from '../whatsapp/whatsappService.js';
 
-vi.mock('./defaultConfig.js',()=>({loadDefaultConfig:()=>({database:{type:'sqlite'},container:{enabled:false}})}));
+vi.mock('./defaultConfig.js',()=>({loadDefaultConfig:()=>({database:{type:'sqlite'},container:{enabled:false}}),startDefaultConfigWatcher:()=>()=>{},describeEffectiveConfig:()=>({layers:[],config:{}})}));
 let result:AppResult|undefined;
 afterEach(async()=>{await result?.db.close();result=undefined;setDefaultScheduler(null);vi.restoreAllMocks();vi.unstubAllEnvs();});
 function starts(){

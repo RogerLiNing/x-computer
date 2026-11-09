@@ -72,7 +72,7 @@ export function MessageBubble({
         {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
           <div className="space-y-1">
             {msg.toolCalls.map((tc) => (
-              <ToolCallBlock key={tc.id} tc={tc} />
+              <ToolCallBlock key={tc.id} tc={tc} onAction={(text) => { onSetInput(text); onFocusInput(); }} />
             ))}
           </div>
         )}

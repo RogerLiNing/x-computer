@@ -11,6 +11,8 @@ import { createPackageToolHandlers, packageToolDefinitions } from './tools/packa
 import { JobRegistry } from '../jobs/JobRegistry.js';
 import { createJobToolHandlers, jobToolDefinitions } from './tools/jobs.js';
 import { createMemoryTopicToolHandlers, memoryTopicToolDefinitions } from './tools/memoryTopics.js';
+import { createPresentCardHandler, presentCardDefinition } from './tools/cards.js';
+import { createRunCodeHandler, runCodeDefinition } from './tools/runCodeTool.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { broadcastToUser } from '../wsBroadcast.js';
 import { MANIFEST_FILE, manifestForMiniApp, validatePackageManifest } from '../packages/manifest.js';
@@ -28,7 +30,7 @@ import type { MiniAppLogStore } from '../miniAppLogStore.js';
 import { callLLM, callLLMWithTools, callLLMGenerateImage, type LLMToolDef } from '../chat/chatService.js';
 import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 import { serverLogger } from '../observability/ServerLogger.js';
-import { getDiscoveredSkills, getSkillContentByName, deleteSkill } from '../skills/discovery.js';
+import { getModelVisibleSkills, getDiscoveredSkills, getSkillContentByName, deleteSkill } from '../skills/discovery.js';
 import { installFromSkillHub, installFromUrl, searchSkillHub } from '../skills/install.js';
 import { getSkillToolsToRegister } from '../skills/skillTools.js';
 import { addMessage as addXProactiveMessage, markRead as markXProactiveRead } from '../x/XProactiveMessages.js';
@@ -611,6 +613,20 @@ export class ToolExecutor {
     for (const definition of jobToolDefinitions) this.register(definition, jobHandlers[definition.name]!);
     const memoryHandlers = createMemoryTopicToolHandlers({ getMemoryServiceForUser: (userId) => this.getMemoryServiceForUser?.(userId) ?? Promise.resolve(null) });
     for (const definition of memoryTopicToolDefinitions) this.register(definition, memoryHandlers[definition.name]!);
+    this.register(presentCardDefinition, createPresentCardHandler());
+    this.register(runCodeDefinition, createRunCodeHandler({
+      listToolNames: (context) => {
+        const ctx = context as ExecutionContext | undefined;
+        const names = this.listTools(ctx?.userId).map((definition) => definition.name);
+        const allowed = ctx?.allowedToolNames ? names.filter((name) => ctx.allowedToolNames!.includes(name)) : names;
+        return allowed.filter((name) => !ctx?.blockedToolNames?.includes(name));
+      },
+      callTool: async (name, args, context) => {
+        const call = await this.execute({ id: `code-${uuid()}`, taskId: '__run_code__', action: name, toolName: name, toolInput: args, status: 'pending', riskLevel: 'low' }, 'container', context as ExecutionContext | undefined);
+        if (call.error) throw new Error(call.error);
+        return call.output;
+      },
+    }));
   }
 
   /** 由 createApiRouter 注入，用于 signal.emit 时触发用户配置的触发器 */
@@ -806,7 +822,7 @@ export class ToolExecutor {
   /** 供 Agent 循环使用：将已注册工具转为 LLM function calling 格式；userId 存在时包含该用户 scope 内工具 */
   getLLMToolDefs(userId?: string): LLMToolDef[] {
     const defs = this.listTools(userId);
-    const skills = getDiscoveredSkills(userId);
+    const skills = getModelVisibleSkills(userId);
     return defs.map((def) => {
       let description = def.description;
       if (def.name === 'skill.load' && skills.length > 0) {
@@ -917,7 +933,7 @@ export class ToolExecutor {
         if (!q) return { matches: [], message: 'query 为空' };
         const builtin = this.listTools(ctx?.userId).map((t) => ({ name: t.name, description: t.description ?? '' }));
         const fromCapabilities = listAllCapabilities(builtin);
-        const skills = getDiscoveredSkills((ctx as { userId?: string })?.userId).map((s) => ({
+        const skills = getModelVisibleSkills((ctx as { userId?: string })?.userId).map((s) => ({
           name: s.name,
           description: `[skill] ${s.description}. 用 skill.load(name) 加载完整说明`,
         }));
@@ -2311,7 +2327,7 @@ git clone https://${hostname}/${skillName}.git
         const raw = String(input?.name_or_dir ?? '').trim();
         if (!raw) throw new Error('skill.uninstall: name_or_dir 必填');
         const userId = (ctx as { userId?: string })?.userId;
-        const skills = getDiscoveredSkills(userId);
+        const skills = getModelVisibleSkills(userId);
         const match = skills.find(
           (s) => s.dirName === raw || s.name === raw || s.id === raw
         );
