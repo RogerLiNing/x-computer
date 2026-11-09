@@ -242,76 +242,29 @@ describe('认证流程集成测试', () => {
     it('有效 X-User-Id 时 GET /api/users/me 返回用户信息', async () => {
       const loginRes = await loginWithCaptcha(app, TEST_EMAIL, TEST_PASSWORD);
       const userId = loginRes.body.userId;
-      const res = await request(app).get('/api/users/me').set('X-User-Id', userId);
+      const res = await request(app).get('/api/users/me').set('Cookie',loginRes.headers['set-cookie']);
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(userId);
       expect(res.body.email).toBe(TEST_EMAIL);
     });
   });
 
-  describe('匿名数据同步（登录/注册后合并到新账号）', () => {
-    const SYNC_EMAIL = `sync-${Date.now()}@example.com`;
-    const SYNC_PASSWORD = 'syncpass123';
-    const ANON_USER = 'anon-sync-' + Date.now();
-
-    it('注册时匿名配置同步到新账号', async () => {
-      await request(app)
-        .put('/api/users/me/config')
-        .set('X-User-Id', ANON_USER)
-        .send({ test_sync_key: { value: 'anon-config-data' } });
-      const regRes = await registerWithCaptcha(app, SYNC_EMAIL, SYNC_PASSWORD, ANON_USER);
-      const reg = await regRes;
+  describe('不能凭用户编号合并他人数据', () => {
+    it('注册时不合并伪造的旧用户配置',async()=>{
+      await db.ensureUser('victim-config');await db.setConfig('victim-config','protected','retained');
+      const reg=await registerWithCaptcha(app,'new-'+Date.now()+'@example.test','password123','victim-config');
       expect(reg.status).toBe(201);
-      const userId = reg.body.userId;
-      const configRes = await request(app)
-        .get('/api/users/me/config')
-        .set('X-User-Id', userId);
-      expect(configRes.status).toBe(200);
-      expect(configRes.body.test_sync_key).toEqual({ value: 'anon-config-data' });
+      expect(await db.getConfig('victim-config','protected')).toBe('retained');
+      expect(await db.getConfig(reg.body.userId,'protected')).toBeUndefined();
     });
-
-    it('登录时匿名聊天会话同步到新账号', async () => {
-      const anon2 = 'anon-session-' + Date.now();
-      const createRes = await request(app)
-        .post('/api/chat/sessions')
-        .set('X-User-Id', anon2)
-        .send({ title: '匿名会话' });
-      expect(createRes.status).toBe(201);
-      const sessionId = createRes.body.id;
-      await request(app)
-        .post(`/api/chat/sessions/${sessionId}/messages`)
-        .set('X-User-Id', anon2)
-        .send({ role: 'user', content: '测试消息' });
-      const loginRes = await loginWithCaptcha(app, SYNC_EMAIL, SYNC_PASSWORD, anon2);
-      const userId = loginRes.body.userId;
-      const sessionsRes = await request(app)
-        .get('/api/chat/sessions')
-        .set('X-User-Id', userId);
-      expect(sessionsRes.status).toBe(200);
-      const sessions = sessionsRes.body as Array<{ id: string; title: string }>;
-      expect(sessions.length).toBeGreaterThanOrEqual(1);
-      expect(sessions.some((s) => s.title === '匿名会话')).toBe(true);
+    it('登录时不合并伪造的旧用户对话',async()=>{
+      await db.ensureUser('victim-chat');const session=await db.createSession('victim-chat','private');
+      const login=await loginWithCaptcha(app,TEST_EMAIL,TEST_PASSWORD,'victim-chat');
+      expect(login.status).toBe(200);expect((await db.getSession(session.id)).user_id).toBe('victim-chat');
+      const me=await request(app).get('/api/users/me').set('Cookie',login.headers['set-cookie']);expect(me.body.id).toBe(login.body.userId);
     });
-
-    it('注册时匿名沙箱文件同步到新账号', async () => {
-      const anon3 = 'anon-workspace-' + Date.now();
-      await userSandboxManager.getForUser(anon3);
-      const writeRes = await request(app)
-        .post('/api/fs/write')
-        .set('X-User-Id', anon3)
-        .send({ path: '文档/sync-test.txt', content: '匿名沙箱内容' });
-      expect(writeRes.status).toBe(200);
-      const syncEmail = `sync-file-${Date.now()}@example.com`;
-      const regRes = await registerWithCaptcha(app, syncEmail, SYNC_PASSWORD, anon3);
-      const reg = await regRes;
-      expect(reg.status).toBe(201);
-      const userId = reg.body.userId;
-      const readRes = await request(app)
-        .get('/api/fs/read')
-        .set('X-User-Id', userId)
-        .query({ path: '文档/sync-test.txt' });
-      expect(readRes.status).toBe(200);
-      expect(readRes.body.content).toContain('匿名沙箱内容');
+    it('伪造用户编号不能读取文件',async()=>{
+      const response=await request(app).get('/api/fs/read?path=private.txt').set('X-User-Id','victim-files');expect(response.status).toBe(401);
     });
   });
 });

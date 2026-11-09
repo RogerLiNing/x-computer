@@ -1,0 +1,48 @@
+import { serverLogger } from '../observability/ServerLogger.js';
+import type { SpaceStore, SpaceSummary } from './SpaceStore.js';
+import { SPACE_MOUNT_DIR, spaceFolderNames } from './SpaceAwareFS.js';
+
+type SpaceLister = Pick<SpaceStore, 'listSpacesForUser'>;
+
+const EMPTY_MANAGE = '# 共享空间\n你目前不在任何共享空间。用户想和别人共享资料时，可以用 x.space_create 建一个空间，再用 x.space_invite 生成邀请码。';
+const EMPTY_READONLY = '# 共享空间\n用户目前不在任何共享空间。';
+const HINT_MANAGE = '用户问起空间、成员或邀请时，按以上信息回答，需要操作时用 x.space_* 工具。';
+const HINT_FILES = `空间成员都能看到和修改空间文件夹里的文件，用文件工具读写，路径以「${SPACE_MOUNT_DIR}/空间名/」开头。由你判断文件属于用户个人还是某个空间，拿不准就先问；写进空间后要告诉用户放在了哪个空间的什么位置。Word、PDF、表格用 file.extract_text 读取；要把现有文件（例如「QQ收到的文件」里的）放进空间，用 file.move。空间里的共享记忆和日程还在开发中，暂时不要承诺。`;
+const HINT_READONLY = '本次对话不能管理空间。用户要建空间、邀请或退出时，请他在自己的 QQ 私聊或网页里操作，不要声称已经办好。';
+
+const MAX_LABEL_LENGTH = 30;
+
+/** 名称由用户填写，进入他人的提示词前去掉换行和控制字符并截断，避免夹带多行指令。 */
+export function sanitizeLabel(value: string): string {
+  const flat = String(value ?? '').replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const chars = [...flat];
+  return chars.length > MAX_LABEL_LENGTH ? `${chars.slice(0, MAX_LABEL_LENGTH).join('')}…` : flat;
+}
+
+function describeSpace(space: SpaceSummary, userId: string, folder: string): string {
+  const members = space.members
+    .map(m => `${sanitizeLabel(m.displayName)}${m.userId === userId ? '（你）' : ''}${m.role === 'owner' ? '·创建者' : ''}`)
+    .join('、');
+  return `- 「${sanitizeLabel(space.name)}」（id: ${space.id}，${space.members.length} 人，文件夹：${SPACE_MOUNT_DIR}/${sanitizeLabel(folder)}）成员：${members}`;
+}
+
+/** 拼进系统提示词的空间信息。查询失败时返回空字符串，不影响对话。 */
+export async function buildSpaceContext(store: SpaceLister, userId: string, options: { canManage?: boolean; canUseFiles?: boolean } = {}): Promise<string> {
+  const canManage = options.canManage ?? true;
+  const canUseFiles = options.canUseFiles ?? canManage;
+  try {
+    const spaces = await store.listSpacesForUser(userId);
+    if (spaces.length === 0) return canManage ? EMPTY_MANAGE : EMPTY_READONLY;
+    const folders = [...spaceFolderNames(spaces)];
+    return [
+      '# 共享空间',
+      '用户所在的共享空间如下。空间成员各有自己的助手，私人对话和私人记忆互不可见。',
+      ...folders.map(([folder, space]) => describeSpace(space, userId, folder)),
+      canManage ? HINT_MANAGE : HINT_READONLY,
+      ...(canUseFiles ? [HINT_FILES] : []),
+    ].filter(Boolean).join('\n');
+  } catch (error) {
+    serverLogger.warn('spaces', '读取空间信息失败，本轮对话不带空间上下文', `userId=${userId} ${String(error)}`);
+    return '';
+  }
+}

@@ -8,7 +8,7 @@ export const fileParseDefinition: ToolDefinition = {
   name: 'file.parse',
   displayName: '文件解析',
   description:
-    '使用本地解析器解析文档并提取文本（不调用任何外部 API）。支持 txt/md/json/csv/html、docx、xls/xlsx；其他格式会返回明确的本地不支持提示。',
+    '使用本地解析器解析文档并提取文本（不调用任何外部 API）。支持 txt/md/json/csv/html、PDF 文字、docx、xls/xlsx、pptx；PDF 保留页码，不识别图片或扫描件，warnings 标记未识别页面。扫描 PDF 可用 file.extract_text 的 ocr=true 本地识别；仅需读取且不写记忆时优先使用 file.extract_text。',
   domain: ['office', 'chat', 'agent'],
   riskLevel: 'low',
   parameters: [
@@ -45,14 +45,14 @@ export function createFileParseHandler(deps: ToolExecutorDeps): ToolHandler {
 
     let fileBuffer: Buffer;
     try {
-      fileBuffer = await fs.readBinary(path);
+      fileBuffer = await fs.readBinaryBounded(path);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { ok: false, error: `读取文件失败: ${msg}` };
     }
 
     try {
-      const parsed = await parseFileToText(path, fileBuffer);
+      const parsed = await parseFileToText(path, fileBuffer, (ctx as { signal?: AbortSignal } | undefined)?.signal);
       if (!parsed.ok) return { ok: false, error: `文件解析失败: ${parsed.error}` };
       const content = parsed.content ?? '';
 
@@ -93,6 +93,7 @@ export function createFileParseHandler(deps: ToolExecutorDeps): ToolHandler {
         ok: true,
         status: 'succeeded',
         content,
+        ...(parsed.warnings?.length ? { warnings: parsed.warnings } : {}),
         ...(indexed > 0 ? { indexed, message: `已解析并加入向量库 ${indexed} 条，X 可通过 memory_search 搜索` } : {}),
       };
     } catch (e) {

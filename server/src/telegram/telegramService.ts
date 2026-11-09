@@ -5,6 +5,9 @@
 
 import { Bot, type Context } from 'grammy';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { captureChannelOrigin, type ChannelOrigin } from '../messaging/channelIdentity.js';
+import { randomUUID } from 'node:crypto';
+import { createSendIdentity, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 
 export interface TelegramConfig {
   enabled?: boolean;
@@ -45,6 +48,7 @@ function isAllowed(config: TelegramConfig | null, fromId: string, isGroup: boole
 }
 
 export type TelegramMessagePayload = {
+  origin?: ChannelOrigin;
   chatId: string;
   fromId: string;
   fromUsername?: string;
@@ -56,6 +60,7 @@ export type TelegramMessagePayload = {
 
 class UserTelegramConnection {
   private bot: Bot | null = null;
+  private sendSessionId = randomUUID();
   private running = false;
   private botInfo: { username?: string; id?: number } | null = null;
 
@@ -68,12 +73,15 @@ class UserTelegramConnection {
   async connect(token: string): Promise<{ ok: boolean; error?: string }> {
     if (this.running) return { ok: true };
     try {
-      this.bot = new Bot(token);
+      const bot = this.bot = new Bot(token);
+      this.running = false; this.botInfo = null; this.sendSessionId = randomUUID();
 
-      this.bot.on('message:text', async (ctx: Context) => {
-        const rawConfig = this.getConfig(this.userId, 'telegram_config');
-        const config = parseTelegramConfig(rawConfig instanceof Promise ? await rawConfig : rawConfig);
-        if (!config?.enabled) return;
+      bot.on('message:text', async (ctx: Context) => {
+        if (this.bot !== bot) return;
+        const accountId = this.getSendIdentity()?.accountId, sessionId = this.sendSessionId;
+        const rawConfig = await this.getConfig(this.userId, 'telegram_config');
+        const config = parseTelegramConfig(rawConfig);
+        if (this.bot !== bot || !config?.enabled) return;
 
         const msg = ctx.message!;
         const fromId = String(msg.from?.id ?? '');
@@ -85,6 +93,7 @@ class UserTelegramConnection {
         if (!text.trim()) return;
 
         this.onMessage(this.userId, {
+            origin: captureChannelOrigin(accountId, sessionId, rawConfig),
           chatId,
           fromId,
           fromUsername: msg.from?.username,
@@ -95,13 +104,14 @@ class UserTelegramConnection {
         });
       });
 
-      const me = await this.bot.api.getMe();
+      const me = await bot.api.getMe();
+      if (this.bot !== bot) return { ok: false, error: '连接已变化' };
       this.botInfo = { username: me.username, id: me.id };
       serverLogger.info('telegram', `Bot 已连接: @${me.username} (${me.id}) userId=${this.userId}`);
 
-      this.bot.start({
+      bot.start({
         onStart: () => {
-          this.running = true;
+          if (this.bot === bot) this.running = true;
         },
       });
       this.running = true;
@@ -113,10 +123,14 @@ class UserTelegramConnection {
     }
   }
 
-  async sendMessage(chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.bot) return { ok: false, error: '未连接，请先配置 Bot Token' };
+  getSendIdentity() { return this.bot && this.running ? createSendIdentity(this.botInfo?.id, this.botInfo?.username, this.sendSessionId) : null; }
+
+  async sendMessage(chatId: string, text: string, expectedBinding?: string): Promise<{ ok: boolean; error?: string }> {
+    const bot = this.bot;
+    if (expectedBinding && this.getSendIdentity()?.binding !== expectedBinding) throw new SendExecutionDeniedError('Telegram 账号或连接已变化，尚未发送，请重新交办');
+    if (!bot || !this.running) return { ok: false, error: '未连接，请先配置 Bot Token' };
     try {
-      await this.bot.api.sendMessage(chatId, text);
+      await bot.api.sendMessage(chatId, text);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -183,9 +197,10 @@ export async function sendTelegramMessage(
   userId: string,
   chatId: string,
   message: string,
+  expectedBinding?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const conn = getOrCreateConnection(userId, getConfig);
-  return conn.sendMessage(chatId, message);
+  return conn.sendMessage(chatId, message, expectedBinding);
 }
 
 export async function reconnectTelegramForConfiguredUsers(

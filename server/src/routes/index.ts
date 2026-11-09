@@ -1,5 +1,4 @@
 export { createAgentsRouter } from './agents.js';
-export { createTasksRouter } from './tasks.js';
 export { createSchedulerRouter } from './scheduler.js';
 export { createLLMRouter } from './llm.js';
 export { createHealthRouter } from './health.js';
@@ -7,7 +6,6 @@ export { createMemoryRouter } from './memory.js';
 export { createPromptRouter } from './prompt.js';
 export { createXProactiveRouter } from './xProactive.js';
 export { createXPendingRouter } from './xPending.js';
-export { createXBoardRouter } from './xBoard.js';
 export { createXGroupRunRouter } from './xGroupRun.js';
 export { createXAppsRouter } from './xApps.js';
 export { createMcpRouter } from './mcp.js';

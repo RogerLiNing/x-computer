@@ -11,6 +11,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { assembleLayers, redactConfig, watchConfigFiles, type ConfigLayer } from './layeredConfig.js';
 
 const CONFIG_FILENAME = '.x-config.json';
 
@@ -42,6 +43,14 @@ export interface XConfigAuth {
 
 /** 容器隔离配置 */
 export interface XConfigContainer {
+  /** Optional browser image; enabled only with container isolation. */
+  browserEnabled?: boolean;
+  /** Browser network is separate from the shell network; host mode is never allowed. */
+  browserNetworkMode?: 'none' | 'bridge';
+  /** Optional encrypted DNS for VPN fake-IP environments. Default: system resolver. */
+  browserDnsMode?: 'system' | 'cloudflare';
+  imageName?: string;
+  browserAllowedOrigins?: string[];
   /** 是否启用容器隔离，默认 false（开发模式）；生产环境强烈建议设为 true */
   enabled?: boolean;
   /** CPU 核心数限制，默认 1 */
@@ -98,8 +107,10 @@ export interface XConfig {
   container?: XConfigContainer;
   /** 数据库类型：sqlite（默认）或 mysql；MySQL 需配置 MYSQL_* 环境变量 */
   database?: XConfigDatabase;
-  /** 工具加载模式，默认 all；on_demand 可大幅减少系统提示 token */
+  /** 工具加载模式，默认 on_demand；all 会在每次调用中暴露全部工具。 */
   tool_loading_mode?: ToolLoadingMode;
+  /** 服务运行档位：lightweight（默认）、balanced 或 full。 */
+  runtime_profile?: 'lightweight' | 'balanced' | 'full';
   /** 默认 MCP 服务器（联网搜索等），用户无 mcp_config 时使用；格式同 mcp-servers.json 的 servers 或 mcpServers 对象 */
   mcp_servers?: XConfigMcpServer[] | Record<string, Record<string, unknown>>;
   /** 系统邮件配置（发送验证码等系统邮件） */
@@ -130,7 +141,7 @@ export function getToolLoadingMode(): ToolLoadingMode {
   const cfg = loadDefaultConfig();
   const mode = (cfg?.tool_loading_mode as string)?.toLowerCase?.();
   if (mode === 'on_demand' || mode === 'all') return mode;
-  return 'all';
+  return 'on_demand';
 }
 
 function resolveEnvPlaceholders(text: string): string {
@@ -169,6 +180,9 @@ function getConfigCandidates(): string[] {
 }
 
 let cachedConfig: XConfig | null | undefined = undefined;
+let cachedLayers: ConfigLayer[] = [];
+let cachedBasePath: string | undefined;
+const reloadListeners = new Set<(config: XConfig) => void>();
 
 /**
  * 加载默认配置，若存在 .x-config.json 则返回解析后的对象（含 env 占位符解析），否则返回 {}。
@@ -181,8 +195,12 @@ export function loadDefaultConfig(): XConfig {
   for (const filepath of candidates) {
     try {
       const raw = fs.readFileSync(filepath, 'utf-8');
-      const parsed = JSON.parse(raw) as XConfig;
-      cachedConfig = resolveRecursive(parsed) as XConfig;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      // Profile, local and environment layers patch the base file; see layeredConfig.ts.
+      const layered = assembleLayers({ name: 'base', source: filepath, value: parsed }, { profile: process.env.X_COMPUTER_PROFILE ?? (parsed.runtime_profile as string | undefined) });
+      cachedLayers = layered.layers;
+      cachedBasePath = filepath;
+      cachedConfig = resolveRecursive(layered.value) as XConfig;
       return cachedConfig;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code === 'ENOENT') continue;
@@ -198,4 +216,29 @@ export function loadDefaultConfig(): XConfig {
  */
 export function clearDefaultConfigCache(): void {
   cachedConfig = undefined;
+  cachedLayers = [];
+}
+
+/** The layers that produced the current config (names and sources only) plus a redacted view of the result. */
+export function describeEffectiveConfig(): { layers: Array<{ name: string; source: string }>; config: unknown } {
+  const config = loadDefaultConfig();
+  return { layers: cachedLayers.map(({ name, source }) => ({ name, source })), config: redactConfig(config) };
+}
+
+/** Called after a reload; receives the freshly loaded config. */
+export function onDefaultConfigReload(listener: (config: XConfig) => void): () => void {
+  reloadListeners.add(listener);
+  return () => { reloadListeners.delete(listener); };
+}
+
+/** Watches the config files; a change clears the cache and notifies listeners. Returns a stop function. */
+export function startDefaultConfigWatcher(): () => void {
+  loadDefaultConfig();
+  if (!cachedBasePath) return () => {};
+  return watchConfigFiles(cachedBasePath, process.env.X_COMPUTER_PROFILE, (changed) => {
+    clearDefaultConfigCache();
+    const config = loadDefaultConfig();
+    console.info(`[x-computer] 配置已重新加载（${path.basename(changed)}）`);
+    for (const listener of reloadListeners) { try { listener(config); } catch (error) { console.warn('[x-computer] 配置重载监听器出错', error); } }
+  });
 }

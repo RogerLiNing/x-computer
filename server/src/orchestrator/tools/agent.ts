@@ -8,14 +8,20 @@
 import type { ToolDefinition } from '@x-computer/shared';
 import type { AgentDefinition, AgentTeam, AgentGroup } from '@x-computer/shared';
 import { parseAgentIds } from '../../utils/agentIds.js';
+import { UncertainToolOutcomeError } from '../../tooling/UncertainToolOutcomeError.js';
+import type {GroupRunProgressPayload} from '../ToolExecutor.js';
 
 // ── Config keys ────────────────────────────────────────────────────────────────
 
 const X_AGENTS_CONFIG_KEY = 'x_agents';
 const X_AGENT_TEAMS_CONFIG_KEY = 'x_agent_teams';
 const X_AGENT_GROUPS_CONFIG_KEY = 'x_agent_groups';
-const X_GROUP_RUN_HISTORY_KEY = 'x_group_run_history';
-const MAX_GROUP_RUN_HISTORY = 50;
+export interface ExpertDispatchRequest {
+  action:'dispatch'|'status'|'team'|'group'; userId:string; parentRunId:string; toolCallId:string;
+  agentId?:string; teamId?:string; groupId?:string; goal?:string; runId?:string; signal?:AbortSignal;
+  inputFiles?:string[];followUp?:boolean;waitForResult?:boolean;onProgress?:(data:GroupRunProgressPayload)=>void;
+}
+export type ExpertDispatchRunner=(request:ExpertDispatchRequest)=>Promise<unknown>;
 
 // ── Shared types ───────────────────────────────────────────────────────────────
 
@@ -68,8 +74,9 @@ async function loadAgents(getConfig: (userId: string, key: string) => string | u
   }
 }
 
-function saveAgents(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: AgentDefinition[]): void {
-  setConfig(userId, X_AGENTS_CONFIG_KEY, JSON.stringify(list));
+async function saveAgents(setConfig: (userId: string, key: string, value: string) => void | Promise<void>, userId: string, list: AgentDefinition[]): Promise<void> {
+  try{await setConfig(userId, X_AGENTS_CONFIG_KEY, JSON.stringify(list));}
+  catch{throw new UncertainToolOutcomeError('成员配置保存结果未知，请先查看成员列表，不要重复创建。');}
 }
 
 async function loadTeams(getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>, userId: string): Promise<AgentTeam[]> {
@@ -89,8 +96,9 @@ async function loadTeams(getConfig: (userId: string, key: string) => string | un
   }
 }
 
-function saveTeams(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: AgentTeam[]): void {
-  setConfig(userId, X_AGENT_TEAMS_CONFIG_KEY, JSON.stringify(list));
+async function saveTeams(setConfig: (userId: string, key: string, value: string) => void | Promise<void>, userId: string, list: AgentTeam[]): Promise<void> {
+  try{await setConfig(userId, X_AGENT_TEAMS_CONFIG_KEY, JSON.stringify(list));}
+  catch{throw new UncertainToolOutcomeError('团队配置保存结果未知，请先查看团队列表，不要重复创建。');}
 }
 
 async function loadGroups(getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>, userId: string): Promise<AgentGroup[]> {
@@ -110,36 +118,9 @@ async function loadGroups(getConfig: (userId: string, key: string) => string | u
   }
 }
 
-function saveGroups(setConfig: (userId: string, key: string, value: string) => void, userId: string, list: AgentGroup[]): void {
-  setConfig(userId, X_AGENT_GROUPS_CONFIG_KEY, JSON.stringify(list));
-}
-
-async function appendGroupRunHistory(
-  getConfig: ((userId: string, key: string) => string | undefined | Promise<string | undefined>) | undefined,
-  setConfig: ((userId: string, key: string, value: string) => void | Promise<void>) | undefined,
-  userId: string,
-  record: Omit<GroupRunRecord, 'id' | 'createdAt'>,
-): Promise<void> {
-  if (!getConfig || !setConfig) return;
-  const raw = await getConfigValue(getConfig, userId, X_GROUP_RUN_HISTORY_KEY);
-  let list: GroupRunRecord[];
-  try {
-    const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
-    list = Array.isArray(arr)
-      ? arr.filter((x): x is GroupRunRecord => Boolean(x && typeof x === 'object' && typeof (x as GroupRunRecord).createdAt === 'number'))
-      : [];
-  } catch {
-    list = [];
-  }
-  const full: GroupRunRecord = {
-    ...record,
-    id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt: Date.now(),
-  };
-  list.unshift(full);
-  list = list.slice(0, MAX_GROUP_RUN_HISTORY);
-  const setResult = setConfig(userId, X_GROUP_RUN_HISTORY_KEY, JSON.stringify(list));
-  if (setResult instanceof Promise) await setResult;
+async function saveGroups(setConfig: (userId: string, key: string, value: string) => void | Promise<void>, userId: string, list: AgentGroup[]): Promise<void> {
+  try{await setConfig(userId, X_AGENT_GROUPS_CONFIG_KEY, JSON.stringify(list));}
+  catch{throw new UncertainToolOutcomeError('群组配置保存结果未知，请先查看群组列表，不要重复创建。');}
 }
 
 // ── Tool Definitions ────────────────────────────────────────────────────────
@@ -176,15 +157,33 @@ export const listAgentsDef: ToolDefinition = {
 export const runAgentDef: ToolDefinition = {
   name: 'x.run_agent',
   displayName: '运行智能体',
-  description: '派发任务给已创建的智能体执行。你是管理者，智能体是执行者。传入 agent_id（x.list_agents 返回的 id）、goal（本次要完成的目标或用户消息）。智能体会用自己的提示词和工具完成任务并返回结果。',
+  description: '等待式兼容入口，实际执行保存在可停止恢复的独立任务中；新交办可优先使用对应的 x.dispatch_* 后台入口。派发任务给已创建的智能体执行。你是管理者，智能体是执行者。传入 agent_id（x.list_agents 返回的 id）、goal（本次要完成的目标或用户消息）。智能体会用自己的提示词和工具完成任务并返回结果。',
   domain: ['chat', 'agent'],
   riskLevel: 'low',
   parameters: [
+    {name:'input_files',type:'array',description:'可选：本轮附件、已读取文件或已交付成果；省略时带上本轮附件的完整工作副本。',required:false},
     { name: 'agent_id', type: 'string', description: '智能体 ID（从 x.list_agents 获取）', required: true },
     { name: 'goal', type: 'string', description: '本次要完成的目标或交给智能体的用户消息', required: true },
   ],
   requiredPermissions: [],
 };
+
+export const dispatchAgentDef:ToolDefinition={
+  name:'x.dispatch_agent',displayName:'交给专家后台办理',domain:['chat','agent'],riskLevel:'low',requiredPermissions:[],
+  description:'把任务交给已有专家后台执行，先保存独立工作记录，再返回运行编号。主对话可继续；这只是接单回执。用 x.get_agent_run 查看真实成果，完成后请用户在工作台验收；专家任务可在工作台单独停止和继续。',
+  parameters:[{name:'follow_up',type:'boolean',description:'默认让主助手在完成后核对并继续原目标；用户只要求转交、不要求后续处理时设为 false。',required:false},{name:'input_files',type:'array',description:'可选：本轮附件或已读取、已交付文件的路径；省略时带上本轮附件。',required:false},{name:'agent_id',type:'string',description:'已有专家编号',required:true},{name:'goal',type:'string',description:'本次目标、输入和交付要求',required:true}],
+};
+export const getAgentRunDef:ToolDefinition={
+  name:'x.get_agent_run',displayName:'查看专家进度和成果',domain:['chat','agent'],riskLevel:'low',requiredPermissions:[],
+  description:'按后台交办返回的 run_id 查看专家的实际状态、验收状态和可打开成果；有修改版时自动跟进最新版本。未验收或已退回的作品不能当作通过验收。处理中时不要频繁轮询；用户可在工作台查看进度。',
+  parameters:[{name:'run_id',type:'string',description:'后台专家运行编号',required:true}],
+};
+export const dispatchTeamDef:ToolDefinition={name:'x.dispatch_team',displayName:'交给团队后台接力',domain:['chat','agent'],riskLevel:'low',requiredPermissions:[],
+  description:'把任务交给已有团队后台接力，每位成员有独立工作记录。上一位完成后才交给下一位；失败或停止后可从保存进度继续。返回接单回执，用 x.get_agent_run 查看最终成果。',
+  parameters:[{name:'follow_up',type:'boolean',description:'默认让主助手在完成后核对并继续原目标；用户只要求转交、不要求后续处理时设为 false。',required:false},{name:'input_files',type:'array',description:'可选：本轮附件或已读取、已交付文件的路径；省略时带上本轮附件。',required:false},{name:'team_id',type:'string',description:'已有团队编号',required:true},{name:'goal',type:'string',description:'目标及成果要求',required:true}]};
+export const dispatchGroupDef:ToolDefinition={name:'x.dispatch_group',displayName:'交给群组后台协作',domain:['chat','agent'],riskLevel:'low',requiredPermissions:[],
+  description:'把同一目标交给已有群组，按并发上限分批独立执行，汇集真实结果。失败或停止后保留各成员进度，返回接单回执，用 x.get_agent_run 查看成果。',
+  parameters:[{name:'follow_up',type:'boolean',description:'默认让主助手在完成后核对并继续原目标；用户只要求转交、不要求后续处理时设为 false。',required:false},{name:'input_files',type:'array',description:'可选：本轮附件或已读取、已交付文件的路径；省略时带上本轮附件。',required:false},{name:'group_id',type:'string',description:'已有群组编号',required:true},{name:'goal',type:'string',description:'目标及成果要求',required:true}]};
 
 export const updateAgentDef: ToolDefinition = {
   name: 'x.update_agent',
@@ -242,10 +241,11 @@ export const listTeamsDef: ToolDefinition = {
 export const runTeamDef: ToolDefinition = {
   name: 'x.run_team',
   displayName: '运行团队',
-  description: '按团队顺序依次执行智能体（流水线）。传入 team_id（从 x.list_teams 获取）、goal（本次团队要完成的目标）。第一个智能体以 goal 执行；后续每个智能体会收到「上一环节输出」加本次 goal 作为目标，适合收集→撰写→审核等办公流程。',
+  description: '等待式兼容入口，实际执行保存在可停止恢复的独立任务中；新交办可优先使用对应的 x.dispatch_* 后台入口。按团队顺序依次执行智能体（流水线）。传入 team_id（从 x.list_teams 获取）、goal（本次团队要完成的目标）。第一个智能体以 goal 执行；后续每个智能体会收到「上一环节输出」加本次 goal 作为目标，适合收集→撰写→审核等办公流程。',
   domain: ['chat', 'agent'],
   riskLevel: 'low',
   parameters: [
+    {name:'input_files',type:'array',description:'可选：本轮附件、已读取文件或已交付成果；省略时带上本轮附件的完整工作副本。',required:false},
     { name: 'team_id', type: 'string', description: '团队 ID（从 x.list_teams 获取）', required: true },
     { name: 'goal', type: 'string', description: '本次团队要完成的目标', required: true },
   ],
@@ -328,10 +328,11 @@ export const removeAgentsFromGroupDef: ToolDefinition = {
 export const runGroupDef: ToolDefinition = {
   name: 'x.run_group',
   displayName: '运行群组',
-  description: '向群组派发任务并收集结果。传入 group_id、goal（本次要大家完成的目标或话题）。群内每个智能体会用同一 goal 执行一轮，你作为主脑会收到所有人的输出列表（results），可据此汇总或再引导。适合头脑风暴、多角色分别贡献、分工收集后由你汇总。',
+  description: '等待式兼容入口，实际执行保存在可停止恢复的独立任务中；新交办可优先使用对应的 x.dispatch_* 后台入口。向群组派发任务并收集结果。传入 group_id、goal（本次要大家完成的目标或话题）。群内每个智能体会用同一 goal 执行一轮，你作为主脑会收到所有人的输出列表（results），可据此汇总或再引导。适合头脑风暴、多角色分别贡献、分工收集后由你汇总。',
   domain: ['chat', 'agent'],
   riskLevel: 'low',
   parameters: [
+    {name:'input_files',type:'array',description:'可选：本轮附件、已读取文件或已交付成果；省略时带上本轮附件的完整工作副本。',required:false},
     { name: 'group_id', type: 'string', description: '群组 ID（从 x.list_groups 获取）', required: true },
     { name: 'goal', type: 'string', description: '本次派发给群组的目标或话题', required: true },
   ],
@@ -364,9 +365,15 @@ export const removeGroupDef: ToolDefinition = {
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 export function createAgentHandlers(ctx: {
-  resolveRunCustomAgentLoop: () => ((params: { agentDef: AgentDefinition; goal: string; userId: string }) => Promise<{ content: string }>) | undefined;
+  resolveRunCustomAgentLoop: () => ((params: { agentDef: AgentDefinition; goal: string; userId: string; signal?: AbortSignal; allowedToolNames?:string[]; blockedToolNames?:string[]; delegationDepth?:number }) => Promise<{ content: string }>) | undefined;
+  resolveExpertDispatchRunner?:()=>ExpertDispatchRunner|undefined;
 }) {
-  const { resolveRunCustomAgentLoop } = ctx;
+  const expertHandler=async(action:ExpertDispatchRequest['action'],input:any,context:any,waitForResult=false)=>{
+    const runner=ctx.resolveExpertDispatchRunner?.();
+    if(!runner||!context?.userId||!context.runId||!context.toolCallId)throw new Error('请在有工作记录的助手对话中交办专家任务。');
+    return runner({action,userId:context.userId,parentRunId:context.runId,toolCallId:context.toolCallId,
+      agentId:input.agent_id,teamId:input.team_id,groupId:input.group_id,goal:input.goal,runId:input.run_id,inputFiles:input.input_files,followUp:input.follow_up,waitForResult,onProgress:waitForResult&&action==='group'&&context.onGroupRunProgress?(data)=>context.onGroupRunProgress(context.userId,data):undefined,signal:context.signal});
+  };
 
   // ── Agent CRUD ────────────────────────────────────────────────────────────
 
@@ -399,7 +406,7 @@ export function createAgentHandlers(ctx: {
       createdAt: now, updatedAt: now,
     };
     list.push(agent);
-    saveAgents(setConfig, userId, list);
+    await saveAgents(setConfig, userId, list);
     return { ok: true, agentId: id, message: `已创建智能体「${name}」` };
   };
 
@@ -412,27 +419,7 @@ export function createAgentHandlers(ctx: {
     return { agents: list };
   };
 
-  const runAgentHandler = async (input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户', content: '' };
-    const getConfig = ctx?.getConfig;
-    if (!getConfig) return { ok: false, error: '无法读取配置', content: '' };
-    const agentId = String(input.agent_id ?? '').trim();
-    const goal = String(input.goal ?? '').trim();
-    if (!agentId || !goal) return { ok: false, error: 'agent_id 与 goal 必填', content: '' };
-    const list = await loadAgents(getConfig, userId);
-    const agent = list.find((a) => a.id === agentId);
-    if (!agent) return { ok: false, error: '未找到该智能体', content: '' };
-    const runCustomAgentLoop = resolveRunCustomAgentLoop();
-    if (!runCustomAgentLoop) return { ok: false, error: '服务未配置智能体执行', content: '' };
-    try {
-      const { content } = await runCustomAgentLoop({ agentDef: agent, goal, userId });
-      return { ok: true, content };
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      return { ok: false, error: msg, content: '' };
-    }
-  };
+  const runAgentHandler = (input: any, context: any): Promise<unknown> => expertHandler('dispatch',input,context,true);
 
   const updateAgentHandler = async (input: any, ctx: any): Promise<unknown> => {
     const userId = ctx?.userId;
@@ -457,7 +444,7 @@ export function createAgentHandlers(ctx: {
     if (input.llm_provider_id !== undefined) cur.llmProviderId = String(input.llm_provider_id).trim() || undefined;
     if (input.llm_model_id !== undefined) cur.llmModelId = String(input.llm_model_id).trim() || undefined;
     cur.updatedAt = now;
-    saveAgents(setConfig, userId, list);
+    await saveAgents(setConfig, userId, list);
     return { ok: true, message: '已更新智能体' };
   };
 
@@ -472,7 +459,7 @@ export function createAgentHandlers(ctx: {
     const original = await loadAgents(getConfig, userId);
     const list = original.filter((a) => a.id !== agentId);
     if (list.length === original.length) return { ok: false, error: '未找到该智能体' };
-    saveAgents(setConfig, userId, list);
+    await saveAgents(setConfig, userId, list);
     return { ok: true, message: '已删除智能体' };
   };
 
@@ -493,7 +480,7 @@ export function createAgentHandlers(ctx: {
     const now = Date.now();
     const team: AgentTeam = { id, name, agentIds, createdAt: now, updatedAt: now };
     teams.push(team);
-    saveTeams(setConfig, userId, teams);
+    await saveTeams(setConfig, userId, teams);
     return { ok: true, teamId: id, message: `已创建团队「${name}」` };
   };
 
@@ -506,38 +493,7 @@ export function createAgentHandlers(ctx: {
     return { teams };
   };
 
-  const runTeamHandler = async (input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户', content: '' };
-    const getConfig = ctx?.getConfig;
-    if (!getConfig) return { ok: false, error: '无法读取配置', content: '' };
-    const teamId = String(input.team_id ?? '').trim();
-    const goal = String(input.goal ?? '').trim();
-    if (!teamId || !goal) return { ok: false, error: 'team_id 与 goal 必填', content: '' };
-    const teams = await loadTeams(getConfig, userId);
-    const team = teams.find((t) => t.id === teamId);
-    if (!team) return { ok: false, error: '未找到该团队', content: '' };
-    const agents = await loadAgents(getConfig, userId);
-    const runCustomAgentLoop = resolveRunCustomAgentLoop();
-    if (!runCustomAgentLoop) return { ok: false, error: '服务未配置智能体执行', content: '' };
-    let prevOutput = '';
-    const steps: string[] = [];
-    for (let i = 0; i < team.agentIds.length; i++) {
-      const agentId = team.agentIds[i]!;
-      const agent = agents.find((a) => a.id === agentId);
-      if (!agent) return { ok: false, error: `团队中的智能体 ${agentId} 不存在`, content: prevOutput || '' };
-      const stepGoal = i === 0 ? goal : `上一环节输出：\n${prevOutput}\n\n本次目标：${goal}`;
-      try {
-        const { content } = await runCustomAgentLoop({ agentDef: agent, goal: stepGoal, userId });
-        prevOutput = content;
-        steps.push(`[${agent.name}] ${content.slice(0, 200)}${content.length > 200 ? '…' : ''}`);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { ok: false, error: `团队执行到「${agent.name}」时失败：${msg}`, content: prevOutput || '' };
-      }
-    }
-    return { ok: true, content: prevOutput, steps };
-  };
+  const runTeamHandler = (input: any, context: any): Promise<unknown> => expertHandler('team',input,context,true);
 
   const updateTeamHandler = async (input: any, ctx: any): Promise<unknown> => {
     const userId = ctx?.userId;
@@ -557,7 +513,7 @@ export function createAgentHandlers(ctx: {
       cur.agentIds = next.length > 0 ? next : cur.agentIds;
     }
     cur.updatedAt = Date.now();
-    saveTeams(setConfig, userId, teams);
+    await saveTeams(setConfig, userId, teams);
     return { ok: true, message: '已更新团队' };
   };
 
@@ -572,7 +528,7 @@ export function createAgentHandlers(ctx: {
     const list = await loadTeams(getConfig, userId);
     const next = list.filter((t) => t.id !== teamId);
     if (next.length === list.length) return { ok: false, error: '未找到该团队' };
-    saveTeams(setConfig, userId, next);
+    await saveTeams(setConfig, userId, next);
     return { ok: true, message: '已删除团队' };
   };
 
@@ -592,7 +548,7 @@ export function createAgentHandlers(ctx: {
     const now = Date.now();
     const group: AgentGroup = { id, name, agentIds, createdAt: now, updatedAt: now };
     groups.push(group);
-    saveGroups(setConfig, userId, groups);
+    await saveGroups(setConfig, userId, groups);
     return { ok: true, groupId: id, message: `已创建群组「${name}」` };
   };
 
@@ -621,7 +577,7 @@ export function createAgentHandlers(ctx: {
     const existing = new Set(g.agentIds);
     for (const id of toAdd) { if (!existing.has(id)) { g.agentIds.push(id); existing.add(id); } }
     g.updatedAt = Date.now();
-    saveGroups(setConfig, userId, groups);
+    await saveGroups(setConfig, userId, groups);
     return { ok: true, message: `已向群组加入 ${toAdd.length} 个智能体` };
   };
 
@@ -640,55 +596,11 @@ export function createAgentHandlers(ctx: {
     const set = new Set(toRemove);
     g.agentIds = g.agentIds.filter((id: string) => !set.has(id));
     g.updatedAt = Date.now();
-    saveGroups(setConfig, userId, groups);
+    await saveGroups(setConfig, userId, groups);
     return { ok: true, message: '已从群组移除指定智能体' };
   };
 
-  const runGroupHandler = async (input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') return { ok: false, error: '需要已登录用户', results: [] };
-    const getConfig = ctx?.getConfig;
-    if (!getConfig) return { ok: false, error: '无法读取配置', results: [] };
-    const groupId = String(input.group_id ?? '').trim();
-    const goal = String(input.goal ?? '').trim();
-    if (!groupId || !goal) return { ok: false, error: 'group_id 与 goal 必填', results: [] };
-    const groups = await loadGroups(getConfig, userId);
-    const group = groups.find((g) => g.id === groupId);
-    if (!group) return { ok: false, error: '未找到该群组', results: [] };
-    if (group.agentIds.length === 0) return { ok: false, error: '群组内暂无成员，请先用 x.add_agents_to_group 加人', results: [] };
-    const agents = await loadAgents(getConfig, userId);
-    const runCustomAgentLoop = resolveRunCustomAgentLoop();
-    if (!runCustomAgentLoop) return { ok: false, error: '服务未配置智能体执行', results: [] };
-    if (ctx?.clearGroupRunCancel && userId) ctx.clearGroupRunCancel(userId);
-    const results: Array<{ agentId: string; agentName: string; content: string }> = [];
-    const total = group.agentIds.length;
-    for (let i = 0; i < total; i++) {
-      if (ctx?.isGroupRunCancelRequested?.(userId)) {
-        if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, done: true, cancelled: true });
-        if (ctx?.setConfig && ctx?.getConfig) void appendGroupRunHistory(ctx.getConfig, ctx.setConfig, userId, { groupId, groupName: group.name, goal, results, cancelled: true });
-        return { ok: true, cancelled: true, results };
-      }
-      const agentId = group.agentIds[i]!;
-      const agent = agents.find((a) => a.id === agentId);
-      const nextAgent = i + 1 < total ? agents.find((a) => a.id === group.agentIds[i + 1]) : undefined;
-      if (!agent) {
-        results.push({ agentId, agentName: '(未知)', content: `[未找到智能体 ${agentId}]` });
-        if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, currentAgentName: nextAgent?.name, done: false });
-        continue;
-      }
-      try {
-        const { content } = await runCustomAgentLoop({ agentDef: agent, goal, userId });
-        results.push({ agentId: agent.id, agentName: agent.name, content });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        results.push({ agentId: agent.id, agentName: agent.name, content: `[执行失败: ${msg}]` });
-      }
-      if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, currentAgentName: nextAgent?.name, done: i === total - 1 });
-    }
-    if (ctx?.onGroupRunProgress && userId) ctx.onGroupRunProgress(userId, { groupId, goal, results, totalAgents: total, done: true });
-    if (ctx?.setConfig && ctx?.getConfig) void appendGroupRunHistory(ctx.getConfig, ctx.setConfig, userId, { groupId, groupName: group.name, goal, results });
-    return { ok: true, results };
-  };
+  const runGroupHandler = (input: any, context: any): Promise<unknown> => expertHandler('group',input,context,true);
 
   const updateGroupHandler = async (input: any, ctx: any): Promise<unknown> => {
     const userId = ctx?.userId;
@@ -704,7 +616,7 @@ export function createAgentHandlers(ctx: {
     const cur = groups[idx]!;
     if (input.name != null) cur.name = String(input.name).trim() || cur.name;
     cur.updatedAt = Date.now();
-    saveGroups(setConfig, userId, groups);
+    await saveGroups(setConfig, userId, groups);
     return { ok: true, message: '已更新群组' };
   };
 
@@ -719,11 +631,15 @@ export function createAgentHandlers(ctx: {
     const list = await loadGroups(getConfig, userId);
     const next = list.filter((g) => g.id !== groupId);
     if (next.length === list.length) return { ok: false, error: '未找到该群组' };
-    saveGroups(setConfig, userId, next);
+    await saveGroups(setConfig, userId, next);
     return { ok: true, message: '已删除群组' };
   };
 
   return {
+    dispatchAgentHandler:(input:any,context:any)=>expertHandler('dispatch',input,context),
+    getAgentRunHandler:(input:any,context:any)=>expertHandler('status',input,context),
+    dispatchTeamHandler:(input:any,context:any)=>expertHandler('team',input,context),
+    dispatchGroupHandler:(input:any,context:any)=>expertHandler('group',input,context),
     createAgentHandler,
     listAgentsHandler,
     runAgentHandler,

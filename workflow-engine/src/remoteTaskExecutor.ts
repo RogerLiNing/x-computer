@@ -11,9 +11,11 @@ export function createRemoteTaskExecutor(): TaskExecuteCallback | undefined {
   const url = `${base}/api/workflow/execute-task`;
 
   return async (params) => {
+    const token=process.env.WORKFLOW_SERVICE_TOKEN;
+    if(!token || token.length<32)throw new Error('WORKFLOW_SERVICE_TOKEN必须配置至少32字符');
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({
         userId: params.userId,
         instanceId: params.instanceId,

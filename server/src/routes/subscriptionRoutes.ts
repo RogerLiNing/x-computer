@@ -6,10 +6,13 @@ import { Router } from 'express';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 import type { StripePaymentService } from '../subscription/stripeService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import type { AppDatabase } from '../db/database.js';
+import { canConfigureUserLLM } from '../llm/userConfigAccess.js';
 
 export function createSubscriptionRoutes(
   subscriptionService: SubscriptionService,
-  stripeService?: StripePaymentService
+  stripeService?: StripePaymentService,
+  db?: Pick<AppDatabase, 'getEmailByUserId'>,
 ): Router {
   const router = Router();
 
@@ -47,7 +50,7 @@ export function createSubscriptionRoutes(
       const actualStorage = await subscriptionService.getActualStorageUsage(userId);
       if (usage) usage.storage = actualStorage;
 
-      const canConfigureLLM = subscription ? ['pro', 'enterprise'].includes(subscription.planId) : false;
+      const canConfigureLLM = await canConfigureUserLLM(userId, db, subscriptionService);
       res.json({
         subscription,
         limits,

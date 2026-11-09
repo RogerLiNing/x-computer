@@ -20,7 +20,7 @@ CREATE INDEX idx_hb_findings_run ON heartbeat_findings(user_id, run_at DESC);
 -- 心跳检查清单内容（替代 HEARTBEAT.md 文件，存储在数据库便于管理）
 CREATE TABLE IF NOT EXISTS heartbeat_checklist (
   user_id VARCHAR(128) PRIMARY KEY,
-  content TEXT NOT NULL DEFAULT '',
+  content TEXT NOT NULL,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 

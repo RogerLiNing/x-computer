@@ -3,6 +3,7 @@ import os from 'os';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { ToolExecutor } from './ToolExecutor.js';
 import { SandboxFS } from '../tooling/SandboxFS.js';
+import { shellApprovalRequest, ShellApprovalRequiredError } from '../tooling/shellApproval.js';
 
 describe('ToolExecutor file.list / grep / shell.run（对齐 OpenClaw/OpenCode）', () => {
   const workspaceRoot = path.join(os.tmpdir(), `x-computer-file-grep-shell-${Date.now()}`);
@@ -111,17 +112,36 @@ describe('ToolExecutor file.list / grep / shell.run（对齐 OpenClaw/OpenCode�
   });
 
   describe('shell.run', () => {
-    it('在沙箱内执行命令并返回 stdout', async () => {
-      const step = {
-        id: 's6',
-        taskId: 't1',
-        action: '执行 echo',
-        toolName: 'shell.run',
-        toolInput: { command: 'echo hello' },
-        status: 'pending' as const,
-        riskLevel: 'high' as const,
-      };
-      const call = await executor.execute(step, 'container');
+    const runContext = { userId: 'owner', runId: 'run-1', toolCallId: 'call-1' };
+    const approvedContext = async (input: Record<string, unknown>) => {
+      const request = await shellApprovalRequest(input, sandboxFS.getRoot(), runContext, 'host');
+      return { ...runContext, approvedShellHash: request.hash };
+    };
+    const shellStep = (id: string, toolInput: Record<string, unknown>) => ({
+      id,
+      taskId: 't1',
+      action: '执行 shell',
+      toolName: 'shell.run',
+      toolInput,
+      status: 'pending' as const,
+      riskLevel: 'high' as const,
+    });
+
+    it('没有交办记录时拒绝执行', async () => {
+      const call = await executor.execute(shellStep('s6a', { command: 'echo hello' }), 'container');
+      expect(call.error).toContain('可确认的交办记录');
+    });
+
+    it('未经确认时要求审批，不执行命令', async () => {
+      await expect(
+        executor.execute(shellStep('s6c', { command: 'touch should-not-exist.txt' }), 'container', runContext),
+      ).rejects.toBeInstanceOf(ShellApprovalRequiredError);
+      expect(await sandboxFS.exists('should-not-exist.txt')).toBe(false);
+    });
+
+    it('确认后在沙箱内执行命令并返回 stdout', async () => {
+      const input = { command: 'echo hello' };
+      const call = await executor.execute(shellStep('s6', input), 'container', await approvedContext(input));
       expect(call.error).toBeUndefined();
       const out = call.output as { exitCode?: number; stdout: string; stderr: string };
       expect(out.stdout.trim()).toContain('hello');
@@ -148,16 +168,8 @@ describe('ToolExecutor file.list / grep / shell.run（对齐 OpenClaw/OpenCode�
     });
 
     it('workdir 相对沙箱根', async () => {
-      const step = {
-        id: 's7',
-        taskId: 't1',
-        action: '在文档目录执行 pwd/ls',
-        toolName: 'shell.run',
-        toolInput: { command: process.platform === 'win32' ? 'cd' : 'pwd', workdir: '文档' },
-        status: 'pending' as const,
-        riskLevel: 'high' as const,
-      };
-      const call = await executor.execute(step, 'container');
+      const input = { command: process.platform === 'win32' ? 'cd' : 'pwd', workdir: '文档' };
+      const call = await executor.execute(shellStep('s7', input), 'container', await approvedContext(input));
       expect(call.error).toBeUndefined();
       const out = call.output as { exitCode?: number; stdout: string };
       expect(out.stdout).toContain('文档');

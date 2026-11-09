@@ -9,17 +9,19 @@ import { v4 as uuid } from 'uuid';
 import type { AppDatabase } from '../db/database.js';
 import type { XConfigOAuth } from '../config/defaultConfig.js';
 import { EmailVerificationService } from '../auth/emailVerification.js';
-import { PasswordResetService } from '../auth/passwordReset.js';
+import { PasswordResetService,passwordResetAvailable } from '../auth/passwordReset.js';
+import type {SessionAuth} from '../auth/sessionAuth.js';
 import { sendSystemEmail } from '../email/emailService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
 export function createAuthEnhancedRoutes(
   db: AppDatabase,
   oauthConfig?: XConfigOAuth,
+  sessions?:SessionAuth,
 ): Router {
   const router = Router();
   const verificationService = new EmailVerificationService(db);
-  const passwordResetService = new PasswordResetService(db);
+  const passwordResetService = new PasswordResetService(db,userId=>sessions?.credentialsChanged(userId));
 
   /**
    * POST /api/auth/send-verification-code
@@ -109,14 +111,15 @@ export function createAuthEnhancedRoutes(
    * 请求密码重置
    */
   router.post('/request-password-reset', async (req, res) => {
-    const { email } = req.body;
+    const { email } = req.body??{};
 
-    if (!email || typeof email !== 'string') {
-      return res.status(400).json({ error: 'Email is required' });
+    if (typeof email !== 'string'||email.length>254||!/^\S+@\S+\.\S+$/.test(email.trim())) {
+      return res.status(400).json({ error: '请输入有效的注册邮箱' });
     }
+    if(!passwordResetAvailable())return res.status(503).json({error:'暂时无法通过邮件找回，请联系管理员'});
 
     try {
-      const result = await passwordResetService.requestPasswordReset(email);
+      await passwordResetService.requestPasswordReset(email);
 
       // 为了安全，总是返回成功消息（不暴露邮箱是否存在）
       res.json({
@@ -125,7 +128,7 @@ export function createAuthEnhancedRoutes(
       });
     } catch (err) {
       serverLogger.error('auth/password-reset', `密码重置请求失败`, `error=${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: 'Failed to process password reset request' });
+      res.status(500).json({ error: '暂时无法处理找回密码，请稍后重试' });
     }
   });
 
@@ -134,23 +137,18 @@ export function createAuthEnhancedRoutes(
    * 重置密码
    */
   router.post('/reset-password', async (req, res) => {
-    const { email, code, newPassword } = req.body;
+    const { email, code, newPassword } = req.body??{};
 
-    if (!email || !code || !newPassword) {
-      return res.status(400).json({ error: 'Email, code, and new password are required' });
-    }
-
-    if (newPassword.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters long' });
+    if(typeof email!=='string'||email.length>254||!/^\S+@\S+\.\S+$/.test(email.trim())||typeof code!=='string'||!/^[\w-]{32}$/.test(code.trim())||typeof newPassword!=='string'||newPassword.length<8||newPassword.length>256){
+      return res.status(400).json({error:'请输入完整重置码，新密码须为 8 到 256 个字符'});
     }
 
     try {
-      const success = await passwordResetService.resetPassword(email, code, newPassword);
+      const success = await passwordResetService.resetPassword(email, code.trim(), newPassword);
 
       if (!success) {
         return res.status(400).json({
-          error: 'Invalid or expired code',
-          message: 'The reset code is invalid or has expired',
+          error: '重置码无效、已过期或已使用，请重新获取',
         });
       }
 
@@ -160,7 +158,7 @@ export function createAuthEnhancedRoutes(
       });
     } catch (err) {
       serverLogger.error('auth/password-reset', `密码重置失败`, `error=${err instanceof Error ? err.message : String(err)}`);
-      res.status(500).json({ error: 'Failed to reset password' });
+      res.status(500).json({ error: '暂时未能完成重置，请稍后重试或联系管理员' });
     }
   });
 

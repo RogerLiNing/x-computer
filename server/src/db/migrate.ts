@@ -14,6 +14,14 @@ export interface MigrationRecord {
   applied_at: number;
 }
 
+function prepareMigrationSql(sql: string, dialect: 'sqlite' | 'mysql'): string {
+  if (dialect === 'mysql') return sql;
+  return sql.replace(
+    /UNIX_TIMESTAMP\(\)\s*\*\s*1000/gi,
+    "CAST(strftime('%s', 'now') AS INTEGER) * 1000",
+  );
+}
+
 /**
  * 初始化迁移记录表（按数据库类型执行对应 DDL）
  */
@@ -107,7 +115,10 @@ export async function runMigrations(db: AsyncDatabase, migrationsDir?: string): 
     
     serverLogger.info('db/migrate', `应用迁移`, `file=${runFile}`);
     
-    const sql = await fs.readFile(filePath, 'utf-8');
+    const sql = prepareMigrationSql(
+      await fs.readFile(filePath, 'utf-8'),
+      dialect,
+    );
     
     try {
       // 执行迁移 SQL
@@ -119,8 +130,22 @@ export async function runMigrations(db: AsyncDatabase, migrationsDir?: string): 
       appliedCount++;
       serverLogger.info('db/migrate', `迁移成功`, `file=${file}`);
     } catch (err) {
-      serverLogger.error('db/migrate', `迁移失败`, `file=${file} error=${err instanceof Error ? err.message : String(err)}`);
-      throw new Error(`Migration ${file} failed: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      // 已存在的表/列/索引视为幂等成功（initSchema 可能已创建）
+      const isDuplicate = /(already exists|Duplicate (key|column)|ER_DUP_)/i.test(msg);
+      if (isDuplicate) {
+        if (dialect === 'sqlite') {
+          try {
+            await db.exec('ROLLBACK');
+          } catch {}
+        }
+        await recordMigration(db, file);
+        appliedCount++;
+        serverLogger.info('db/migrate', `迁移已存在（幂等跳过）`, `file=${file}`);
+      } else {
+        serverLogger.error('db/migrate', `迁移失败`, `file=${file} error=${msg}`);
+        throw new Error(`Migration ${file} failed: ${msg}`);
+      }
     }
   }
   

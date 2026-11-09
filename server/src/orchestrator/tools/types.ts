@@ -6,6 +6,7 @@ import type { SandboxFS } from '../../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../../tooling/UserSandboxManager.js';
 import type { MemoryService } from '../../memory/MemoryService.js';
 import type { ToolDefinition } from '@x-computer/shared';
+import type { JobRegistry } from '../../jobs/JobRegistry.js';
 
 export type { ToolDefinition };
 
@@ -21,6 +22,8 @@ export interface ToolExecutorDeps {
   ): Promise<{ providerId: string; modelId: string; baseUrl?: string; apiKey?: string } | null>;
   userSandboxManager?: UserSandboxManager;
   sandboxFS?: SandboxFS;
+  /** 后台任务注册表；存在时 shell.run 支持 run_in_background */
+  jobs?: JobRegistry;
 }
 
 /** 工具处理函数： (input, context?) => Promise<unknown>，由各工具模块的 createHandler(deps) 返回 */

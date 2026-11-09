@@ -5,6 +5,12 @@
  */
 
 import nodemailer from 'nodemailer';
+import { createHash } from 'node:crypto';
+import { isIP, type Socket } from 'node:net';
+import { domainToASCII } from 'node:url';
+import { withSmtpConnection, type SmtpOperation } from './smtpConnection.js';
+import { SendExecutionDeniedError } from '../tooling/sendApproval.js';
+import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
 import type { Transporter } from 'nodemailer';
 import { ImapFlow } from 'imapflow';
 import { marked } from 'marked';
@@ -28,41 +34,42 @@ function parseSmtpConfig(raw: string | undefined): EmailSmtpConfig | null {
     if (!o || typeof o !== 'object') return null;
     const c = o as Record<string, unknown>;
     const host = typeof c.host === 'string' ? c.host.trim() : '';
-    const port = typeof c.port === 'number' ? c.port : Number(c.port);
+    const port = c.port == null || c.port === '' ? 465 : typeof c.port === 'number' || typeof c.port === 'string' ? Number(c.port) : NaN;
     const user = typeof c.user === 'string' ? c.user.trim() : '';
     const pass = typeof c.pass === 'string' ? c.pass : '';
-    if (!host || !user || !pass) return null;
+    const from = typeof c.from === 'string' ? c.from.trim() : undefined;
+    if (!host || !user || !pass || !Number.isSafeInteger(port) || port < 1 || port > 65535
+      || /[\x00-\x20\x7f/@?#\\]/.test(host)
+      || /[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(user + (from ?? ''))
+      || (c.secure !== undefined && typeof c.secure !== 'boolean')) return null;
     return {
       host,
-      port: Number.isFinite(port) && port > 0 ? port : 465,
-      secure: c.secure !== false,
+      port,
+      secure: typeof c.secure === 'boolean' ? c.secure : port === 465,
       user,
       pass,
-      from: typeof c.from === 'string' ? c.from.trim() : undefined,
+      from,
     };
   } catch {
     return null;
   }
 }
 
-let cachedTransporter: { configKey: string; transporter: Transporter } | null = null;
-
-/** 配置变更时清除缓存，避免使用旧连接 */
-export function clearEmailTransporterCache(): void {
-  cachedTransporter = null;
+function createSmtpTransporter(config: EmailSmtpConfig, connection: Socket): Transporter {
+  // A transaction owns its transport; credentials and TLS settings never cross callers.
+  return nodemailer.createTransport({
+    host: config.host, port: config.port, secure: config.secure,
+    auth: { user: config.user, pass: config.pass },
+    connection, secured: !!config.secure, tls: { servername: isIP(config.host) ? undefined : domainToASCII(config.host), rejectUnauthorized: true },
+    connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 30000,
+  });
 }
 
-function getTransporter(config: EmailSmtpConfig): Transporter {
-  const configKey = `${config.host}:${config.port}:${config.user}`;
-  if (cachedTransporter?.configKey === configKey) return cachedTransporter.transporter;
-  const transporter = nodemailer.createTransport({
-    host: config.host,
-    port: config.port,
-    secure: config.secure ?? config.port === 465,
-    auth: { user: config.user, pass: config.pass },
-  });
-  cachedTransporter = { configKey, transporter };
-  return transporter;
+export function getEmailSendIdentity(raw: string | undefined) {
+  const config = parseSmtpConfig(raw);
+  if (!config) return null;
+  return { accountId: config.user, label: `${config.from || config.user} · ${config.host}:${config.port}`,
+    binding: createHash('sha256').update(JSON.stringify(config)).digest('hex') };
 }
 
 /** 解析 SMTP 配置（供管理工具复用） */
@@ -70,7 +77,7 @@ export function parseSmtpConfigExport(raw: string | undefined): EmailSmtpConfig 
   return parseSmtpConfig(raw);
 }
 
-export interface SendEmailOptions {
+export interface SendEmailOptions extends SmtpOperation {
   to: string;
   subject: string;
   body: string;
@@ -82,109 +89,65 @@ export interface SendEmailResult {
   ok: boolean;
   error?: string;
   messageId?: string;
+  accepted?: string[];
+  rejected?: string[];
 }
 
-/**
- * 使用用户配置的 SMTP 发送邮件。
- * @param getConfig 获取用户配置的函数
- * @param userId 用户 ID
- * @param options 收件人、主题、正文
- */
+/** Submit once and retain recipient acceptance; success does not prove inbox delivery. */
+async function deliverSmtp(config: EmailSmtpConfig, options: SendEmailOptions): Promise<SendEmailResult> {
+  if (options.signal?.aborted) throw new SendExecutionDeniedError('交办已停止，邮件尚未发送');
+  const to = options.to.trim(), subject = options.subject.trim(), body = options.body.trim();
+  if (!to || !subject || !body) return { ok: false, error: '收件人、主题、正文均不能为空' };
+  let transporter: Transporter | undefined;
+  try {
+    const html = options.html === false ? undefined : await marked.parse(body);
+    const info = await withSmtpConnection(config, options, async socket => {
+      transporter = createSmtpTransporter(config, socket);
+      return transporter.sendMail({ from: config.from || config.user, to, subject, ...(html ? { html, text: body } : { text: body }) });
+    });
+    const addresses = (list: unknown): string[] => Array.isArray(list) ? list.flatMap(item => {
+      const address = typeof item === 'string' ? item : item?.address;
+      return typeof address === 'string' && address ? [address] : [];
+    }) : [];
+    const accepted = addresses(info.accepted), rejected = addresses(info.rejected);
+    const messageId = typeof info.messageId === 'string' ? info.messageId : undefined;
+    const ok = !!messageId && Array.isArray(info.accepted) && Array.isArray(info.rejected) && accepted.length > 0 && rejected.length === 0;
+    return { ok, messageId, accepted, rejected,
+      ...(!ok ? { error: 'SMTP 未确认全部收件人，可能已接受部分邮件，请核对后再决定是否重新发送' } : {}) };
+  } catch (error) {
+    if (error instanceof SendExecutionDeniedError || error instanceof UncertainToolOutcomeError) throw error;
+    return { ok: false, error: 'SMTP 未返回完整发送回执，请核对邮件服务后再决定是否重新发送' };
+  } finally {
+    transporter?.close();
+  }
+}
+
 export async function sendEmail(
   getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>,
   userId: string,
   options: SendEmailOptions,
 ): Promise<SendEmailResult> {
-  const raw = getConfig(userId, 'email_smtp_config');
-  const value = raw instanceof Promise ? await raw : raw;
-  const config = parseSmtpConfig(value);
-  if (!config) {
-    return { ok: false, error: '未配置邮件 SMTP，请在 设置 → 通知/邮件 中配置（如 QQ 邮箱 host: smtp.qq.com, port: 465）' };
-  }
-  const to = options.to.trim();
-  const subject = options.subject.trim();
-  const body = options.body.trim();
-  if (!to || !subject || !body) {
-    return { ok: false, error: '收件人、主题、正文均不能为空' };
-  }
-  const from = config.from || config.user;
-  try {
-    const transporter = getTransporter(config);
-    const html = options.html === false ? undefined : (await marked.parse(body)) as string;
-    const info = await transporter.sendMail({
-      from,
-      to,
-      subject,
-      ...(html ? { html, text: body } : { text: body }),
-    });
-    return { ok: true, messageId: info.messageId };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `发送失败: ${msg}` };
-  }
+  const raw = await getConfig(userId, 'email_smtp_config');
+  const config = parseSmtpConfig(raw);
+  if (!config) return { ok: false, error: '未配置有效的邮件 SMTP，请在设置中配置' };
+  return deliverSmtp(config, options);
 }
 
 // ── 系统邮件发送（用于验证码等系统通知）───────────────────────────────────
-
-let systemTransporter: Transporter | null = null;
-
-function getSystemTransporter(): Transporter | null {
-  const config = loadDefaultConfig();
-  const smtp = config.email?.smtp;
-  if (!smtp) return null;
-
-  if (!systemTransporter) {
-    systemTransporter = nodemailer.createTransport({
-      host: smtp.host,
-      port: smtp.port ?? 465,
-      secure: smtp.secure ?? smtp.port === 465,
-      auth: { user: smtp.user, pass: smtp.pass },
-    });
-  }
-  return systemTransporter;
-}
 
 export interface SystemEmailOptions {
   to: string;
   subject: string;
   body: string;
-  /** 若为 false，body 作为纯文本发送；默认 true，将 body 从 Markdown 转成 HTML 发送富文本 */
   html?: boolean;
 }
+export interface SystemEmailResult extends SendEmailResult {}
 
-export interface SystemEmailResult {
-  ok: boolean;
-  error?: string;
-  messageId?: string;
-}
-
-/**
- * 使用系统级 SMTP 配置发送邮件（用于验证码等系统通知）
- */
+/** One snapshot supplies both authentication and From; SMTP acceptance is not inbox delivery. */
 export async function sendSystemEmail(options: SystemEmailOptions): Promise<SystemEmailResult> {
-  const transporter = getSystemTransporter();
-  if (!transporter) {
-    return { ok: false, error: '系统未配置邮件 SMTP（请在 .x-config.json 的 email.smtp 中配置）' };
-  }
-
-  const { to, subject, body } = options;
-  const config = loadDefaultConfig();
-  const smtp = config.email!.smtp!;
-  const from = smtp.from || smtp.user;
-
-  try {
-    const html = options.html !== false ? (await marked.parse(body)) as string : undefined;
-    const info = await transporter.sendMail({
-      from,
-      to,
-      subject,
-      ...(html ? { html, text: body } : { text: body }),
-    });
-    return { ok: true, messageId: info.messageId };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: `发送失败: ${msg}` };
-  }
+  const config = parseSmtpConfig(JSON.stringify(loadDefaultConfig().email?.smtp));
+  if (!config) return { ok: false, error: '系统未配置有效的邮件 SMTP' };
+  try { return await deliverSmtp(config, options); } catch { return { ok: false, error: '系统邮件未取得确定回执，请核对邮件服务' }; }
 }
 
 // ── IMAP 收信（R042 邮件渠道双向通信）─────────────────────────────────────────

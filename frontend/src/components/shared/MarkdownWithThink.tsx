@@ -32,15 +32,15 @@ function ThinkBlock({ content }: { content: string }) {
     <div className="border border-white/10 rounded-lg overflow-hidden bg-white/5 my-2">
       <button
         type="button"
-        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-desktop-text/90 hover:bg-white/5 transition-colors"
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] text-gray-200/90 hover:bg-white/5 transition-colors"
         onClick={() => setExpanded((e) => !e)}
       >
-        {expanded ? <ChevronDown size={12} className="text-desktop-muted" /> : <ChevronRight size={12} className="text-desktop-muted" />}
-        <Sparkles size={11} className="text-desktop-highlight/90" />
+        {expanded ? <ChevronDown size={12} className="text-gray-400" /> : <ChevronRight size={12} className="text-gray-400" />}
+        <Sparkles size={11} className="text-[#C8A96E]/90" />
         <span>思考过程</span>
       </button>
       {expanded && (
-        <div className="px-3 pb-2 text-[11px] text-desktop-text/80 leading-relaxed whitespace-pre-wrap">
+        <div className="px-3 pb-2 text-[11px] text-gray-200/80 leading-relaxed whitespace-pre-wrap">
           {content}
         </div>
       )}
@@ -62,18 +62,18 @@ const markdownComponents: Components = {
     );
   },
   a: ({ href, children, ...p }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="text-desktop-highlight hover:underline" {...p}>{children}</a>
+    <a href={href} target="_blank" rel="noopener noreferrer" className="text-[#C8A96E] hover:underline" {...p}>{children}</a>
   ),
   p: (p) => <p {...p} className="my-2" />,
   ul: (p) => <ul {...p} className="list-disc list-inside space-y-1 my-2 [&_input[type=checkbox]]:mr-2" />,
   ol: (p) => <ol {...p} className="list-decimal list-inside space-y-1 my-2 [&_input[type=checkbox]]:mr-2" />,
-  blockquote: (p) => <blockquote {...p} className="border-l-2 border-desktop-accent/50 pl-3 my-2 text-desktop-muted italic" />,
+  blockquote: (p) => <blockquote {...p} className="border-l-2 border-amber-500/50 pl-3 my-2 text-gray-400 italic" />,
   pre: (p) => <pre {...p} className="bg-[#1e1e1e] rounded-lg overflow-x-auto my-2 p-3 text-[13px] leading-relaxed" />,
   table: (p) => <div className="overflow-x-auto my-2"><table {...p} className="min-w-full border-collapse text-xs rounded-lg overflow-hidden" /></div>,
   thead: (p) => <thead {...p} className="bg-white/[0.06]" />,
-  th: (p) => <th {...p} className="border border-white/10 px-3 py-1.5 text-left text-desktop-text/90 font-semibold" />,
+  th: (p) => <th {...p} className="border border-white/10 px-3 py-1.5 text-left text-gray-200/90 font-semibold" />,
   tr: (p) => <tr {...p} className="border-b border-white/[0.06] hover:bg-white/[0.03] transition-colors" />,
-  td: (p) => <td {...p} className="border border-white/10 px-3 py-1.5 text-desktop-text/80" />,
+  td: (p) => <td {...p} className="border border-white/10 px-3 py-1.5 text-gray-200/80" />,
   // Task list checkboxes (GFM strikethrough for completed items)
   input: ({ type, checked, ...p }: any) => {
     if (type === 'checkbox') {
@@ -101,14 +101,14 @@ export function MarkdownWithThink({ content }: MarkdownWithThinkProps) {
 
   if (thinkBlocks.length === 0) {
     return (
-      <div className="text-sm text-desktop-text/90 leading-relaxed">
+      <div className="text-sm text-gray-200/90 leading-relaxed">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
       </div>
     );
   }
 
   return (
-    <div className="text-sm text-desktop-text/90 leading-relaxed space-y-2">
+    <div className="text-sm text-gray-200/90 leading-relaxed space-y-2">
       {/* 思考内容 */}
       {thinkBlocks.map((block, i) => (
         <ThinkBlock key={i} content={block} />

@@ -2,7 +2,7 @@
  * Telegram 消息处理循环：收到消息后存入 DB、发出 telegram_message_received 信号。
  */
 
-import { v4 as uuid } from 'uuid';
+import { channelInboxId, channelProcessedKey } from '../messaging/channelIdentity.js';
 import type { AppDatabase } from '../db/database.js';
 import { fireSignal } from '../signals/signalService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
@@ -24,8 +24,9 @@ export interface TelegramLoopDeps {
 async function loadProcessedIds(
   getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>,
   userId: string,
+  scopeId?: string,
 ): Promise<Set<string>> {
-  const raw = getConfig(userId, TELEGRAM_PROCESSED_IDS_KEY);
+  const raw = getConfig(userId, channelProcessedKey(TELEGRAM_PROCESSED_IDS_KEY, scopeId));
   const value = raw instanceof Promise ? await raw : raw;
   if (!value) return new Set();
   try {
@@ -40,8 +41,9 @@ async function saveProcessedIds(
   setConfig: (userId: string, key: string, value: string) => void | Promise<void>,
   userId: string,
   ids: string[],
+  scopeId?: string,
 ): Promise<void> {
-  const result = setConfig(userId, TELEGRAM_PROCESSED_IDS_KEY, JSON.stringify(ids.slice(-MAX_PROCESSED_IDS)));
+  const result = setConfig(userId, channelProcessedKey(TELEGRAM_PROCESSED_IDS_KEY, scopeId), JSON.stringify(ids.slice(-MAX_PROCESSED_IDS)));
   if (result instanceof Promise) await result;
 }
 
@@ -52,10 +54,11 @@ export async function handleTelegramMessage(
 ): Promise<void> {
   const { db, getConfig, setConfig, runIntent, runAgent, handleChannelMessageAsChat } = deps;
   const msgId = `tg-${msg.chatId}-${msg.messageId}`;
-  const processed = await loadProcessedIds(getConfig, userId);
-  if (processed.has(msgId)) return;
+  const processed = await loadProcessedIds(getConfig, userId, msg.origin?.scopeId);
+  const id = channelInboxId(userId, 'telegram', msg.chatId, msgId, msg.origin?.scopeId);
+  const processedId = msg.origin ? id : msgId;
+  if (processed.has(processedId)) return;
 
-  const id = `tg-${uuid()}`;
   await db.insertChannelMessage(userId, {
     id,
     channel: 'telegram',
@@ -72,7 +75,7 @@ export async function handleTelegramMessage(
 
   // 如果提供了handleChannelMessageAsChat，则使用Chat会话方式处理
   if (handleChannelMessageAsChat) {
-    await handleChannelMessageAsChat(userId, 'Telegram', msg.text, fromDisplay, { chatId: msg.chatId });
+    await handleChannelMessageAsChat(userId, 'Telegram', msg.text, fromDisplay, { chatId: msg.chatId, messageId: msgId, ...(msg.origin ? { origin: msg.origin, inboxId: id } : {}) });
   } else {
     // 后备：使用fireSignal触发意图处理
     const goal = `用户通过 Telegram 发来消息，请处理并回复。
@@ -86,6 +89,6 @@ ${msg.text}
     await fireSignal(userId, 'telegram_message_received', { from: msg.fromId, chatId: msg.chatId, text: msg.text, messageId: msgId, goal }, { getConfig, runIntent, runAgent });
   }
 
-  await saveProcessedIds(setConfig, userId, [...processed, msgId]);
+  await saveProcessedIds(setConfig, userId, [...processed, processedId], msg.origin?.scopeId);
   serverLogger.info('telegram/loop', `telegram_message_received 已发出`, `userId=${userId} from=${fromDisplay}`);
 }

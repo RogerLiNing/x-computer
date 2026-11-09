@@ -4,8 +4,8 @@ import type { AppDatabase } from '../db/database.js';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 import { resolveLLMCredentials } from '../llm/credentialResolver.js';
 import { runWithRetry } from '../scheduler/runScheduledIntent.js';
-import { fire as fireHook } from '../hooks/HookRegistry.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import type {ChatRunService} from '../chat/ChatRunService.js';
 
 export function createXGroupRunRouter(
   orchestrator: AgentOrchestrator,
@@ -13,14 +13,7 @@ export function createXGroupRunRouter(
   subscriptionService: SubscriptionService | undefined,
   getSystemPromptForScheduler: (uid: string) => Promise<string>,
   ensureUserMcpForScheduler: ((uid: string) => Promise<void>) | undefined,
-  ensureDefaultScheduleForUser: (userId: string | undefined) => void,
-  triggerXRunForUser: (
-    userId: string,
-    intent: string,
-    source?: string,
-    actionFingerprint?: string,
-    metadata?: Record<string, unknown>,
-  ) => void,
+  getRuns?:()=>ChatRunService|undefined,
 ): Router {
   const router = Router();
 
@@ -39,11 +32,16 @@ export function createXGroupRunRouter(
         intent?: string;
         providerId?: string;
         modelId?: string;
+        requestId?: string;
         // baseUrl/apiKey 不从客户端接收，防止安全绕过
       };
+      if ((body.intent !== undefined && typeof body.intent !== 'string') ||
+          (body.requestId !== undefined && (typeof body.requestId !== 'string' || !body.requestId || body.requestId.length > 128))) {
+        return res.status(400).json({ error: '交办内容或编号无效' });
+      }
       const intent =
         body.intent?.trim() ||
-        '用户手动触发：做一次自检，简要说明当前状态与待办；如有需要可联系用户。你可以使用任何工具（读对话、更新提示词、定下一个定时等）。';
+        '用户手动触发：做一次自检，简要说明当前状态与待办；如有需要可联系用户。不要修改文件、记忆、设置或主动发送消息。';
       if (ensureUserMcpForScheduler) await ensureUserMcpForScheduler(userId);
       // 服务器端凭证查找：不再接受客户端的 apiKey/baseUrl
       const llmConfig = await resolveLLMCredentials(
@@ -61,7 +59,7 @@ export function createXGroupRunRouter(
       }
       const systemPrompt = await getSystemPromptForScheduler(userId);
       serverLogger.info('x/run-now', `用户手动触发 X 执行`, `userId=${userId} intent=${intent.slice(0, 60)}`);
-      const { content } = await runWithRetry(
+      const result = await runWithRetry(
         () =>
           orchestrator.runIntentAsPersistedTask({
             intent,
@@ -74,17 +72,13 @@ export function createXGroupRunRouter(
             systemPrompt,
             userId,
             source: 'run_now',
+            sourceId: body.requestId,
             title: '手动执行',
+            metadata: body.intent?.trim() ? undefined : { allowedToolNames: [] },
           }),
         { logLabel: 'x/run-now' },
       );
-      ensureDefaultScheduleForUser(userId);
-      fireHook('x_chat_round_complete', {
-        userId,
-        lastUserMessage: intent,
-        lastAssistantContent: content ?? '',
-      });
-      res.json({ content: content?.trim() || '（执行完成，无文本回复）' });
+      res.json({ ...result, content: result.content?.trim() || '（执行完成，无文本回复）' });
     } catch (err: any) {
       serverLogger.error('x/run-now', err?.message, err?.stack);
       res.status(500).json({
@@ -95,7 +89,7 @@ export function createXGroupRunRouter(
   });
 
   /** 用户请求停止当前正在执行的群组任务（x.run_group 会在每名成员间检查此标志） */
-  router.post('/x/cancel-group-run', (req, res) => {
+  router.post('/x/cancel-group-run', async(req, res) => {
     try {
       const userId = (req as { userId?: string }).userId;
       if (!userId || userId === 'anonymous') {
@@ -103,7 +97,8 @@ export function createXGroupRunRouter(
         return;
       }
       orchestrator.setGroupRunCancel(userId, true);
-      res.json({ success: true, message: '已请求停止群组执行' });
+      const stopped=await getRuns?.()?.cancelGroupRuns(userId);
+      res.json({ success: true, stopped, message: '已请求停止群组执行' });
     } catch (err: any) {
       res.status(500).json({ error: err?.message ?? '操作失败' });
     }
@@ -134,7 +129,7 @@ export function createXGroupRunRouter(
       } catch {
         list = [];
       }
-      let runs = list;
+      let runs = [...await(getRuns?.()?.groupHistory(userId,groupId,limit)??[]),...list].sort((a,b)=>b.createdAt-a.createdAt);
       if (groupId) runs = runs.filter((r) => r.groupId === groupId);
       runs = runs.slice(0, limit);
       res.json({ runs });

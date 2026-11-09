@@ -1,28 +1,33 @@
-import { spawn } from 'child_process';
+import { SandboxShell } from '../../../tooling/SandboxShell.js';
 import type { ToolDefinition } from '@x-computer/shared';
 import type { ToolExecutorDeps, ToolHandler } from '../types.js';
 import { ScriptAnalyzer } from '../../../security/ScriptAnalyzer.js';
 import { DangerousCommandDetector } from '../../../security/DangerousCommandDetector.js';
+import { shellApprovalRequest, ShellApprovalRequiredError } from '../../../tooling/shellApproval.js';
+import { UncertainToolOutcomeError } from '../../../tooling/UncertainToolOutcomeError.js';
 
 export const shellRunDefinition: ToolDefinition = {
   name: 'shell.run',
   displayName: '运行命令',
   description:
-    '在沙箱工作区内执行 shell 命令。命令的 cwd 固定为宿主机上的工作区路径，你可先 file.write 写入脚本，再执行 node 脚本.js、python3 脚本.py 等；脚本在子目录时传 workdir 指定相对沙箱根的工作目录。',
+    '申请在工作区运行一条 Shell 命令。每条命令都须由用户在交办记录中逐次确认；申请后服务端暂停，尚未执行，不得自己确认或声称成功。批准只适用于保存的命令、工作目录和超时，不能换参数。workdir 是沙箱内相对目录。脚本及组合命令同样需要确认。',
   domain: ['coding', 'agent'],
   riskLevel: 'high',
   parameters: [
     { name: 'command', type: 'string', description: '要执行的命令（可包含你刚写入的脚本路径）', required: true },
     { name: 'workdir', type: 'string', description: '沙箱内工作目录，相对沙箱根', required: false },
     { name: 'timeout', type: 'number', description: '超时毫秒数，默认 60000', required: false },
+    { name: 'run_in_background', type: 'boolean', description: '为 true 时在后台运行并立即返回 job_id；用 job.output 查看输出、job.kill 结束。适合超过一分钟的命令', required: false },
   ],
   requiredPermissions: ['shell'],
 };
 
-type CtxWithUser = { userId?: string; agentId?: string };
+type CtxWithUser = { userId?: string; agentId?: string; agentRunId?:string; runId?:string;toolCallId?:string;approvedShellHash?:string;signal?: AbortSignal };
 
 export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
   return async (input, ctx) => {
+    const signal = (ctx as CtxWithUser | undefined)?.signal;
+    signal?.throwIfAborted();
     const fs = await deps.resolveFS(ctx);
     if (!fs) throw new Error('shell.run: 沙箱不可用');
     const command = String(input.command ?? '').trim();
@@ -33,6 +38,7 @@ export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
     if (cmdAnalysis.severity === 'critical') {
       return {
         ok: false,
+        error: '极度危险的命令已拒绝，尚未执行',
         exitCode: 1,
         stdout: '',
         stderr: `🔴 安全拦截：检测到极度危险的命令，已被拒绝\n\n` +
@@ -42,9 +48,15 @@ export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
         duration: 0,
       };
     }
+    const scope=(ctx as CtxWithUser|undefined) ?? {};
+    const target=scope.userId&&scope.userId!=='anonymous'&&deps.userSandboxManager
+      ? scope.agentId?await deps.userSandboxManager.getForAgent(scope.userId,scope.agentId,scope.agentRunId):await deps.userSandboxManager.getForUser(scope.userId):undefined;
+    const runner=target?.sandboxShell??new SandboxShell(fs.getRoot());
+    const request = await shellApprovalRequest(input, fs.getRoot(), scope, runner.getExecutionMode());
+    if ((ctx as CtxWithUser|undefined)?.approvedShellHash !== request.hash) throw new ShellApprovalRequiredError(request);
     
     if (cmdAnalysis.severity === 'high') {
-      console.warn('[SECURITY] 高风险命令:', command, '-', cmdAnalysis.description);
+      console.warn('[SECURITY] 已确认的高风险命令', cmdAnalysis.description);
     }
     
     // 安全检查 2：分析脚本执行命令
@@ -60,6 +72,7 @@ export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
         if (analysis.riskLevel === 'high') {
           return {
             ok: false,
+            error: '脚本安全检查未通过，尚未执行',
             exitCode: 1,
             stdout: '',
             stderr: `🔴 安全拦截：脚本包含高风险操作，已被拒绝\n\n` +
@@ -81,21 +94,25 @@ export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
       }
     }
     
-    const workdir = String(input.workdir ?? '').trim() || '.';
-    const timeoutMs = Math.min(300000, Math.max(5000, Number(input.timeout) || 60000));
-    const root = fs.getRoot();
+    const workdir = request.workdir;
+    const timeoutMs = request.timeout;
+    const root = request.workspace;
     const pathMod = await import('path');
     const cwd = pathMod.resolve(root, workdir.replace(/^\//, ''));
-    if (!cwd.startsWith(root)) throw new Error('shell.run: workdir 必须在沙箱内');
+    const relative=pathMod.relative(root,cwd);
+    if (relative==='..'||relative.startsWith('..'+pathMod.sep)||pathMod.isAbsolute(relative)) throw new Error('shell.run: workdir 必须在沙箱内');
 
-    const uid = (ctx as CtxWithUser)?.userId;
-    if (uid && uid !== 'anonymous' && deps.userSandboxManager) {
-      const agentId = (ctx as CtxWithUser)?.agentId;
-      const sandbox = agentId
-        ? await deps.userSandboxManager.getForAgent(uid, agentId)
-        : await deps.userSandboxManager.getForUser(uid);
+      if (input.run_in_background === true && deps.jobs && scope.userId && scope.userId !== 'anonymous') {
+        const job = deps.jobs.start(scope.userId, command.slice(0, 120), async (jobSignal, append) => {
+          const result = await runner.execute(command, cwd, Math.max(timeoutMs, 10 * 60 * 1000), jobSignal);
+          append([result.stdout, result.stderr ? `\n[stderr]\n${result.stderr}` : ''].join(''));
+          if (result.exitCode !== 0) throw new Error(`命令退出码 ${result.exitCode}`);
+          return undefined;
+        });
+        return { ok: true, background: true, jobId: job.id, message: `命令已在后台运行（${job.id}）。用 job.output 查看输出；完成后会通知用户。` };
+      }
       try {
-        const result = await sandbox.sandboxShell.execute(command, cwd, timeoutMs);
+        const result = await runner.execute(command, cwd, timeoutMs, signal);
         return {
           exitCode: result.exitCode,
           stdout: result.stdout.slice(0, 50000),
@@ -103,43 +120,9 @@ export function createShellRunHandler(deps: ToolExecutorDeps): ToolHandler {
           duration: result.duration,
         };
       } catch (err: unknown) {
+        if (err instanceof UncertainToolOutcomeError || err instanceof Error && err.name === 'AbortError') throw err;
         const msg = err instanceof Error ? err.message : String(err);
         throw new Error(`shell.run: ${msg}`);
       }
-    }
-
-    return new Promise((resolve, reject) => {
-      const proc = spawn(command, {
-        shell: true,
-        cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stdout = '';
-      let stderr = '';
-      proc.stdout?.on('data', (chunk) => (stdout += chunk.toString()));
-      proc.stderr?.on('data', (chunk) => (stderr += chunk.toString()));
-      const timer = setTimeout(() => {
-        proc.kill('SIGTERM');
-        resolve({
-          exitCode: -1,
-          timedOut: true,
-          stdout: stdout.slice(0, 50000),
-          stderr: (stderr + '\n[Command timed out]').slice(0, 10000),
-        });
-      }, timeoutMs);
-      proc.once('exit', (code, signal) => {
-        clearTimeout(timer);
-        resolve({
-          exitCode: code ?? undefined,
-          signal: signal ?? undefined,
-          stdout: stdout.slice(0, 50000),
-          stderr: stderr.slice(0, 10000),
-        });
-      });
-      proc.once('error', (err) => {
-        clearTimeout(timer);
-        reject(new Error(`shell.run: ${err.message}`));
-      });
-    });
   };
 }

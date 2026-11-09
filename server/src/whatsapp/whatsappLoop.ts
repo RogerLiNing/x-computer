@@ -3,7 +3,7 @@
  * 参考 emailCheckLoop，但 WhatsApp 为实时推送，由 whatsappService 的回调触发。
  */
 
-import { v4 as uuid } from 'uuid';
+import { channelInboxId, channelProcessedKey, type ChannelOrigin } from '../messaging/channelIdentity.js';
 import type { AppDatabase } from '../db/database.js';
 import { fireSignal } from '../signals/signalService.js';
 import { serverLogger } from '../observability/ServerLogger.js';
@@ -25,8 +25,9 @@ export interface WhatsAppLoopDeps {
 async function loadProcessedIds(
   getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>,
   userId: string,
+  scopeId?: string,
 ): Promise<Set<string>> {
-  const raw = getConfig(userId, WHATSAPP_PROCESSED_IDS_KEY);
+  const raw = getConfig(userId, channelProcessedKey(WHATSAPP_PROCESSED_IDS_KEY, scopeId));
   const value = raw instanceof Promise ? await raw : raw;
   if (!value) return new Set();
   try {
@@ -42,9 +43,10 @@ async function saveProcessedIds(
   setConfig: (userId: string, key: string, value: string) => void | Promise<void>,
   userId: string,
   ids: string[],
+  scopeId?: string,
 ): Promise<void> {
   const trimmed = ids.slice(-MAX_PROCESSED_IDS);
-  const result = setConfig(userId, WHATSAPP_PROCESSED_IDS_KEY, JSON.stringify(trimmed));
+  const result = setConfig(userId, channelProcessedKey(WHATSAPP_PROCESSED_IDS_KEY, scopeId), JSON.stringify(trimmed));
   if (result instanceof Promise) await result;
 }
 
@@ -54,14 +56,15 @@ async function saveProcessedIds(
 export async function handleWhatsAppMessage(
   deps: WhatsAppLoopDeps,
   userId: string,
-  msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean },
+  msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean; origin?: ChannelOrigin },
 ): Promise<void> {
   const { db, getConfig, setConfig, runIntent, runAgent, handleChannelMessageAsChat } = deps;
-  const msgId = msg.messageId ?? `${msg.fromJid}-${msg.timestamp ?? Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const processed = await loadProcessedIds(getConfig, userId);
-  if (processed.has(msgId)) return;
+  const msgId = msg.messageId ?? channelInboxId(userId, 'whatsapp', msg.fromJid, JSON.stringify([msg.timestamp, msg.text]));
+  const processed = await loadProcessedIds(getConfig, userId, msg.origin?.scopeId);
+  const id = channelInboxId(userId, 'whatsapp', msg.fromJid, msgId, msg.origin?.scopeId);
+  const processedId = msg.origin ? id : msgId;
+  if (processed.has(processedId)) return;
 
-  const id = `wa-${uuid()}`;
   await db.insertWhatsAppMessage(userId, {
     id,
     messageId: msg.messageId,
@@ -75,7 +78,7 @@ export async function handleWhatsAppMessage(
 
   // 如果提供了handleChannelMessageAsChat，则使用Chat会话方式处理
   if (handleChannelMessageAsChat) {
-    await handleChannelMessageAsChat(userId, 'WhatsApp', msg.text, fromDisplay, { to: msg.fromJid });
+    await handleChannelMessageAsChat(userId, 'WhatsApp', msg.text, fromDisplay, { to: msg.fromJid, messageId: msgId, ...(msg.origin ? { origin: msg.origin, inboxId: id } : {}) });
   } else {
     // 后备：使用fireSignal触发意图处理
     const goal = `用户通过 WhatsApp 发来消息，请处理并回复。
@@ -98,6 +101,6 @@ ${msg.text}
     );
   }
 
-  await saveProcessedIds(setConfig, userId, [...processed, msgId]);
+  await saveProcessedIds(setConfig, userId, [...processed, processedId], msg.origin?.scopeId);
   serverLogger.info('whatsapp/loop', `whatsapp_message_received 已发出`, `userId=${userId} from=${fromDisplay}`);
 }

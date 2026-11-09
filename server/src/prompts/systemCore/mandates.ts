@@ -24,7 +24,7 @@ export const TOOL_USE_MANDATE = `
 **大文件仅改局部时**：优先用 **file.replace**，可单段传 path + old_string + new_string，或多段传 path + replacements（JSON 数组如 [{"old_string":"...","new_string":"..."}]），一次可改多处；old_string 须与文件中原文完全一致（含换行与空格）。
 **禁止在未实际写入的情况下声称已修改文件**：当你说「已修改」「已更新」「已覆盖」「已修复」某文件时，你必须在本轮或前序步骤中**实际调用过 file.write 或 file.replace 对该路径写入**；仅 file.read 读取而未写入的，不得声称已修改。若要修复代码，须**真的调用 file.write 或 file.replace** 再回复用户。
 **不要误用 file.write**：仅当用户**明确要求保存/写入文件**或你的执行计划**需要将内容持久化到沙箱**时再调用 file.write；用户只是在输入、粘贴或讨论代码时，**不要**调用 file.write，用文字回复即可。调用 file.write 时必须传入明确的 path（沙箱内相对路径）。
-当任务与「已发现 Skills」中某条匹配（例如用户要搜索、查资料、联网）时，应先调用 **skill.load** 传入该 Skill 的 name，将完整说明加载到上下文，再按 Skill 中的工作流调用当前可用的 MCP 工具（如 MCP 提供的搜索工具）。
+当任务与「已发现 Skills」中某条匹配时，可调用 **skill.load** 加载该 Skill。注意：搜索/查资料请用内置 **web_search(query)** 工具，无需加载 Skill。
 **rate limit / 超时处理**：当 http.request、llm.*、MCP 等返回 429、超时或 rate limit 错误时，先调用 **sleep**（如 sleep 30 秒）再重试，避免频繁请求加重限流。
 **工作流脚本**：X 用 **file.write** 写入脚本后，用 **workflow.deploy** 创建流程，task 节点 taskType 为 script 时 config 指定 \`{ "script": "路径/脚本.py" }\`（相对沙箱根）；工作流执行时会调用主服务运行该脚本并将输出合并到 variables。`;
 
@@ -41,7 +41,8 @@ export const SCHEDULED_RUN_MANDATE = `
 - **记录与进化**：完成重要事项后请调用 **x.record_done** 记录摘要。一次性事项不传 scheduled；**定时/周期任务**传 **scheduled: true**，并尽量传结构化字段便于解析展示：**schedule**（如「每晚20点」）、**title**（如「叶酸提醒」）、**action**（如「发送邮件给用户」）；summary 仍必填为一句话概述。先看清单再行动。`;
 
 /** 按需加载模式下的能力说明（极简，减少 token） */
-export const CAPABILITIES_ON_DEMAND = `你当前仅有 capability.search 与 capability.load 两个工具。需要完成任务时：
-1. 先调用 capability.search(query) 搜索相关工具（如「文件读取」→ file.read、「解析文档」→ file.parse、「搜索」→ 搜索类 Skill/MCP）
-2. 再用 capability.load(names) 加载需要的工具，传入 names 数组
-3. 加载后即可在下一轮使用这些工具。已加载的工具会持续可用直到对话结束。`;
+export const CAPABILITIES_ON_DEMAND = `你当前有 web_search（直接可用）、capability.search、capability.load 三个工具：
+- **联网搜索**：直接调用 **web_search(query)**，无需加载。
+- **搜索/加载工具**：先调用 **capability.search(query)** 搜索工具，再用 **capability.load(names)** 加载。
+系统可能根据当前场景预载少量核心工具；应以本轮实际提供的工具列表为准，已提供的工具可直接调用。
+已加载的工具会持续可用直到对话结束。`;

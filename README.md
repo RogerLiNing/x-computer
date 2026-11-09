@@ -77,6 +77,8 @@ npm run dev
 # Backend API: http://localhost:4000
 ```
 
+For local acceptance without using an existing database or `.env`, use `npm run dev:isolated`. It creates a private SQLite environment on local ports 3100/4100. See [isolated development](docs/ISOLATED_DEVELOPMENT.md) for model setup, restart and data protection boundaries.
+
 ### Configuration
 
 X-Computer supports multiple LLM providers. Edit `.x-config.json`:

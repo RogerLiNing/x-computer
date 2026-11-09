@@ -5,6 +5,19 @@ import { useAdminStore } from '@/store/adminStore';
 import i18n from './i18n';
 
 const INSTALLED_APPS_KEY = 'x-computer-installed-apps';
+const ENABLED_PLUGINS_KEY = 'x-computer-enabled-plugins-v1';
+
+export const CORE_APP_IDS = new Set<BuiltinAppId>([
+  'file-manager',
+  'terminal',
+  'browser',
+  'chat',
+  'x',
+  'text-editor',
+  'settings',
+  'plugin-manager',
+  'system-monitor',
+]);
 
 export function setMiniAppsFromApi(list: Array<{ id: string; name: string; path: string }>): void {
   useMiniAppsStore.getState().set(list ?? []);
@@ -21,7 +34,7 @@ function getAppDescription(appId: BuiltinAppId): string {
 }
 
 /** 内置应用清单（与 shared 中 BuiltinAppId 一一对应） */
-export const BUILTIN_MANIFESTS: AppManifest[] = [
+const BUILTIN_MANIFESTS_RAW: AppManifest[] = [
   { id: 'file-manager', name: getAppName('file-manager'), description: getAppDescription('file-manager'), source: 'builtin', icon: 'FolderOpen' },
   { id: 'terminal', name: getAppName('terminal'), description: getAppDescription('terminal'), source: 'builtin', icon: 'Terminal' },
   { id: 'browser', name: getAppName('browser'), description: getAppDescription('browser'), source: 'builtin', icon: 'Globe' },
@@ -33,12 +46,14 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'email', name: getAppName('email'), description: getAppDescription('email'), source: 'builtin', icon: 'Mail' },
   { id: 'calendar', name: getAppName('calendar'), description: getAppDescription('calendar'), source: 'builtin', icon: 'Calendar', availability: 'demo' },
   { id: 'settings', name: getAppName('settings'), description: getAppDescription('settings'), source: 'builtin', icon: 'Settings' },
-  { id: 'task-timeline', name: getAppName('task-timeline'), description: getAppDescription('task-timeline'), source: 'builtin', icon: 'Clock' },
+  { id: 'plugin-manager', name: getAppName('plugin-manager'), description: getAppDescription('plugin-manager'), source: 'builtin', icon: 'Puzzle' },
+  { id: 'digital-human', name: getAppName('digital-human'), description: getAppDescription('digital-human'), source: 'builtin', icon: 'Bot' },
+
   { id: 'image-viewer', name: getAppName('image-viewer'), description: getAppDescription('image-viewer'), source: 'builtin', icon: 'Image' },
   { id: 'office-viewer', name: getAppName('office-viewer'), description: getAppDescription('office-viewer'), source: 'builtin', icon: 'FileSpreadsheet' },
   { id: 'media-viewer', name: getAppName('media-viewer'), description: getAppDescription('media-viewer'), source: 'builtin', icon: 'Play' },
   { id: 'agent-manager', name: getAppName('agent-manager'), description: getAppDescription('agent-manager'), source: 'builtin', icon: 'Bot' },
-  { id: 'x-board', name: getAppName('x-board'), description: getAppDescription('x-board'), source: 'builtin', icon: 'Kanban' },
+
   { id: 'subscription', name: getAppName('subscription'), description: getAppDescription('subscription'), source: 'builtin', icon: 'CreditCard' },
   { id: 'admin', name: getAppName('admin'), description: getAppDescription('admin'), source: 'builtin', icon: 'Shield' },
   { id: 'canvas', name: getAppName('canvas'), description: getAppDescription('canvas'), source: 'builtin', icon: 'Image' },
@@ -62,6 +77,21 @@ export const BUILTIN_MANIFESTS: AppManifest[] = [
   { id: 'reading-list', name: getAppName('reading-list'), description: getAppDescription('reading-list'), source: 'builtin', icon: 'BookMarked' },
 ];
 
+export const BUILTIN_MANIFESTS: AppManifest[] = BUILTIN_MANIFESTS_RAW.map((manifest) => {
+  const builtinId = manifest.id as BuiltinAppId;
+  const isCore = CORE_APP_IDS.has(builtinId);
+  return {
+    ...manifest,
+    runtime: isCore ? 'core' : 'plugin',
+    pluginId: isCore ? undefined : manifest.id,
+    startupPolicy: isCore ? 'eager' : 'on-demand',
+    permissions: getBuiltinPermissions(builtinId),
+    resourceBudget: isCore
+      ? { memoryMb: 64, cpuPercent: 10, backgroundTasks: 1 }
+      : { memoryMb: 128, cpuPercent: 20, backgroundTasks: 0 },
+  };
+});
+
 const BUILTIN_IDS = new Set<string>(BUILTIN_MANIFESTS.map((m) => m.id));
 
 const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
@@ -76,12 +106,14 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   email: { width: 820, height: 560 },
   calendar: { width: 740, height: 540 },
   settings: { width: 640, height: 500 },
-  'task-timeline': { width: 800, height: 540 },
+  'plugin-manager': { width: 820, height: 620 },
+  'digital-human': { width: 720, height: 620 },
+
   'image-viewer': { width: 640, height: 520 },
   'office-viewer': { width: 800, height: 600 },
   'media-viewer': { width: 640, height: 420 },
   'agent-manager': { width: 720, height: 560 },
-  'x-board': { width: 900, height: 600 },
+
   subscription: { width: 1000, height: 680 },
   admin: { width: 1000, height: 680 },
   canvas: { width: 900, height: 640 },
@@ -104,6 +136,94 @@ const DEFAULT_SIZES: Record<BuiltinAppId, { width: number; height: number }> = {
   'changelog': { width: 720, height: 640 },
   'reading-list': { width: 720, height: 640 },
 };
+
+let registryRevision = 0;
+const registryListeners = new Set<() => void>();
+
+function getBuiltinPermissions(id: BuiltinAppId): string[] {
+  switch (id) {
+    case 'file-manager':
+    case 'text-editor':
+    case 'code-editor':
+    case 'image-viewer':
+    case 'office-viewer':
+    case 'media-viewer':
+    case 'diff':
+      return ['filesystem.read', 'filesystem.write'];
+    case 'terminal':
+      return ['filesystem.read', 'filesystem.write', 'shell'];
+    case 'browser':
+    case 'bookmarks':
+    case 'reading-list':
+      return ['network', 'browser.control'];
+    case 'chat':
+    case 'x':
+    case 'agent-manager':
+      return ['llm', 'tools.execute'];
+    case 'email':
+      return ['network', 'email.read', 'email.send'];
+    case 'calendar':
+    case 'pomodoro':
+    case 'weekly-planner':
+      return ['scheduler'];
+    case 'admin':
+    case 'subscription':
+      return ['account.manage'];
+    default:
+      return [];
+  }
+}
+
+function loadEnabledPluginIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(ENABLED_PLUGINS_KEY);
+    if (!raw) return new Set(['digital-human']);
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((id): id is string => typeof id === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveEnabledPluginIds(ids: Set<string>): void {
+  try {
+    localStorage.setItem(ENABLED_PLUGINS_KEY, JSON.stringify([...ids].sort()));
+  } catch {
+    // ignore
+  }
+  registryRevision += 1;
+  registryListeners.forEach((listener) => listener());
+}
+
+export function subscribeAppRegistry(listener: () => void): () => void {
+  registryListeners.add(listener);
+  return () => registryListeners.delete(listener);
+}
+
+export function getAppRegistryRevision(): number {
+  return registryRevision;
+}
+
+export function getBundledPlugins(): AppManifest[] {
+  return BUILTIN_MANIFESTS.filter((manifest) => manifest.runtime === 'plugin');
+}
+
+export function isAppEnabled(id: AppIdentifier): boolean {
+  const app = getApp(id);
+  if (!app) return false;
+  if (app.source !== 'builtin' || app.runtime !== 'plugin') return true;
+  return loadEnabledPluginIds().has(app.pluginId ?? app.id);
+}
+
+export function setPluginEnabled(id: string, enabled: boolean): void {
+  const manifest = BUILTIN_MANIFESTS.find((app) => app.id === id && app.runtime === 'plugin');
+  if (!manifest) return;
+  const ids = loadEnabledPluginIds();
+  if (enabled) ids.add(manifest.pluginId ?? manifest.id);
+  else ids.delete(manifest.pluginId ?? manifest.id);
+  saveEnabledPluginIds(ids);
+}
 
 function loadInstalled(): AppManifest[] {
   try {
@@ -148,7 +268,8 @@ export function getAllApps(): AppManifest[] {
     icon: 'Layout',
     defaultSize: { width: 640, height: 480 },
   }));
-  const builtin = isAdmin ? BUILTIN_MANIFESTS : BUILTIN_MANIFESTS.filter((m) => m.id !== 'admin');
+  const visibleBuiltin = BUILTIN_MANIFESTS.filter((manifest) => isAppEnabled(manifest.id));
+  const builtin = isAdmin ? visibleBuiltin : visibleBuiltin.filter((m) => m.id !== 'admin');
   return [...builtin, ...loadInstalled(), ...miniapps];
 }
 

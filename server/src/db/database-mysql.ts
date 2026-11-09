@@ -11,9 +11,11 @@ import { v4 as uuid } from 'uuid';
 
 // 本地类型与常量（与 database.ts 对齐，完整接入时统一）
 interface UserRow { id: string; display_name: string | null; created_at: string; updated_at: string; }
-interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; parent_session_id?: string | null; }
+interface ChatSessionRow { id: string; user_id: string; title: string | null; created_at: string; updated_at: string; scene?: string | null; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; parent_session_id?: string | null; first_user_message?: string | null; }
 interface ChatMessageRow { id: string; session_id: string; role: string; content: string; tool_calls_json: string | null; images_json: string | null; attached_files_json: string | null; reactions: string | null; bookmarked: number | null; created_at: string; }
 interface NotificationRow { id: string; user_id: string; type: string; title: string; body: string | null; link: string | null; read: number; created_at: number; expires_at: number | null; }
+interface QuickNoteRow { id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string; }
+interface WeeklyPlanEntryRow { id: string; plan_id: string; user_id: string; date: string; completed: number; notes: string | null; created_at: string; updated_at: string; }
 const HANDLED_EVENTS_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
 type Pool = mysql.Pool;
@@ -141,7 +143,8 @@ export class MysqlDatabase {
       enabled TINYINT(1) NOT NULL DEFAULT 1,
       next_run BIGINT,
       created_at BIGINT NOT NULL,
-      session_id VARCHAR(36)
+      session_id VARCHAR(36),
+      scope_json TEXT
     )`, [], true);
     await this.ensureIndex(
       'scheduled_jobs',
@@ -257,6 +260,7 @@ export class MysqlDatabase {
     await this.ensureColumn('chat_sessions', 'summary', 'ALTER TABLE chat_sessions ADD COLUMN summary TEXT', true);
     await this.ensureColumn('chat_sessions', 'parent_session_id', 'ALTER TABLE chat_sessions ADD COLUMN parent_session_id VARCHAR(36)', true);
     await this.ensureColumn('scheduled_jobs', 'session_id', 'ALTER TABLE scheduled_jobs ADD COLUMN session_id VARCHAR(36)', true);
+    await this.ensureColumn('scheduled_jobs', 'scope_json', 'ALTER TABLE scheduled_jobs ADD COLUMN scope_json TEXT', true);
     await this.ensureColumn('chat_messages', 'images_json', 'ALTER TABLE chat_messages ADD COLUMN images_json LONGTEXT', true);
     await this.ensureColumn(
       'chat_messages',
@@ -799,22 +803,29 @@ export class MysqlDatabase {
   }
 
   listSessions(userId: string, limit = 50, scene?: string | null, includeArchived = false): Promise<ChatSessionRow[]> {
-    const orderBy = 'ORDER BY is_pinned DESC, updated_at DESC';
-    const archivedFilter = includeArchived ? '' : 'AND is_archived = 0';
+    const select = `SELECT s.*, (
+      SELECT m.content
+      FROM chat_messages m
+      WHERE m.session_id = s.id AND m.role = 'user'
+      ORDER BY m.created_at ASC
+      LIMIT 1
+    ) AS first_user_message FROM chat_sessions s`;
+    const orderBy = 'ORDER BY s.is_pinned DESC, s.updated_at DESC';
+    const archivedFilter = includeArchived ? '' : 'AND s.is_archived = 0';
     if (scene === 'x_direct') {
       return this.query<ChatSessionRow>(
-        `SELECT * FROM chat_sessions WHERE user_id = ? AND scene = ? ${archivedFilter} ${orderBy} LIMIT ?`,
+        `${select} WHERE s.user_id = ? AND s.scene = ? ${archivedFilter} ${orderBy} LIMIT ?`,
         [userId, 'x_direct', limit],
       );
     }
     if (scene === 'normal_chat' || scene == null || scene === '') {
       return this.query<ChatSessionRow>(
-        `SELECT * FROM chat_sessions WHERE user_id = ? AND (scene IS NULL OR scene = ?) ${archivedFilter} ${orderBy} LIMIT ?`,
+        `${select} WHERE s.user_id = ? AND (s.scene IS NULL OR s.scene = ?) ${archivedFilter} ${orderBy} LIMIT ?`,
         [userId, 'normal_chat', limit],
       );
     }
     return this.query<ChatSessionRow>(
-      `SELECT * FROM chat_sessions WHERE user_id = ? ${archivedFilter} ${orderBy} LIMIT ?`,
+      `${select} WHERE s.user_id = ? ${archivedFilter} ${orderBy} LIMIT ?`,
       [userId, limit],
     );
   }
@@ -905,6 +916,34 @@ export class MysqlDatabase {
       bookmarked: 0,
       created_at: now,
     };
+  }
+
+  /** 按运行分配的稳定 ID 保存消息；冲突更新不会改变所属会话或角色。 */
+  async upsertRunMessage(
+    sessionId: string,
+    messageId: string,
+    role: 'user' | 'assistant',
+    content: string,
+    toolCallsJson?: string,
+    imagesJson?: string,
+    attachedFilesJson?: string,
+  ): Promise<ChatMessageRow> {
+    const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    await this._run(
+      `INSERT INTO chat_messages (id, session_id, role, content, tool_calls_json, images_json, attached_files_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         content = IF(session_id = VALUES(session_id) AND role = VALUES(role), VALUES(content), content),
+         tool_calls_json = IF(session_id = VALUES(session_id) AND role = VALUES(role), VALUES(tool_calls_json), tool_calls_json),
+         images_json = IF(session_id = VALUES(session_id) AND role = VALUES(role), COALESCE(VALUES(images_json), images_json), images_json),
+         attached_files_json = IF(session_id = VALUES(session_id) AND role = VALUES(role), COALESCE(VALUES(attached_files_json), attached_files_json), attached_files_json)`,
+      [messageId, sessionId, role, content, toolCallsJson ?? null, imagesJson ?? null, attachedFilesJson ?? null, now],
+    );
+    const row = await this.queryOne<ChatMessageRow>('SELECT * FROM chat_messages WHERE id = ?', [messageId]);
+    if (!row) throw new Error('运行消息保存失败');
+    if (row.session_id !== sessionId || row.role !== role) throw new Error('消息 ID 已属于其他会话或角色');
+    await this.touchSession(sessionId);
+    return row;
   }
 
   updateMessageReactions(messageId: string, reactions: string): Promise<void> {
@@ -1185,10 +1224,11 @@ export class MysqlDatabase {
     next_run?: number | null;
     created_at: number;
     session_id?: string | null;
+    scope_json?: string | null;
   }): Promise<void> {
     return this._run(
-      'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at, job.session_id ?? null],
+      'INSERT INTO scheduled_jobs (id, user_id, name, intent, run_at, cron, enabled, next_run, created_at, session_id, scope_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [job.id, job.user_id, job.name ?? null, job.intent, job.run_at, job.cron ?? null, job.enabled !== false ? 1 : 0, job.next_run ?? job.run_at, job.created_at, job.session_id ?? null, job.scope_json ?? null],
     );
   }
 
@@ -1214,10 +1254,10 @@ export class MysqlDatabase {
   }
 
   getAllScheduledJobs(): Promise<
-    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null }[]
+    { id: string; user_id: string; name: string | null; intent: string; run_at: number; cron: string | null; enabled: number; next_run: number | null; created_at: number; session_id: string | null; scope_json: string | null }[]
   > {
     return this._query(
-      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id FROM scheduled_jobs ORDER BY next_run ASC',
+      'SELECT id, user_id, COALESCE(name, intent) as name, intent, run_at, cron, enabled, next_run, created_at, session_id, scope_json FROM scheduled_jobs ORDER BY next_run ASC',
     );
   }
 
@@ -1299,7 +1339,7 @@ export class MysqlDatabase {
 
   resolveAppPublicReadToken(token: string, appId: string): Promise<string | null> {
     return this.queryOne<{ user_id: string }>(
-      'SELECT user_id FROM app_public_read_tokens WHERE token = ? AND app_id = ?',
+      'SELECT user_id FROM app_public_read_tokens WHERE token = ? AND BINARY app_id = BINARY ?',
       [token, appId],
     ).then((r) => r?.user_id ?? null);
   }
@@ -1434,8 +1474,7 @@ export class MysqlDatabase {
     return this._run(
       `INSERT INTO whatsapp_messages (id, user_id, message_id, from_jid, to_jid, text, timestamp, is_group, unseen, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
-       ON DUPLICATE KEY UPDATE message_id = VALUES(message_id), from_jid = VALUES(from_jid), to_jid = VALUES(to_jid),
-       text = VALUES(text), timestamp = VALUES(timestamp), is_group = VALUES(is_group), unseen = 1`,
+       ON DUPLICATE KEY UPDATE id = id`,
       [
         msg.id,
         userId,
@@ -1490,7 +1529,7 @@ export class MysqlDatabase {
     await this._run(
       `INSERT INTO channel_messages (id, user_id, channel, channel_message_id, from_id, from_name, chat_id, text, timestamp, is_group, unseen, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW())
-       ON DUPLICATE KEY UPDATE from_id = VALUES(from_id), from_name = VALUES(from_name), text = VALUES(text), timestamp = VALUES(timestamp), is_group = VALUES(is_group), unseen = 1`,
+       ON DUPLICATE KEY UPDATE id = id`,
       [msg.id, userId, msg.channel, msg.channelMessageId ?? null, msg.fromId, msg.fromName ?? null, msg.chatId ?? null, msg.text ?? null, msg.timestamp ?? null, msg.isGroup ? 1 : 0],
     );
   }
@@ -1794,12 +1833,12 @@ export class MysqlDatabase {
       'INSERT INTO quick_notes (id, user_id, title, content, color, pinned) VALUES (?, ?, ?, ?, ?, ?)',
       [id, params.userId, params.title ?? '', params.content ?? '', params.color ?? '#fef3c7', params.pinned ? 1 : 0],
     );
-    const rows = await this._query('SELECT * FROM quick_notes WHERE id = ?', [id]);
+    const rows = await this._query<QuickNoteRow>('SELECT * FROM quick_notes WHERE id = ?', [id]);
     return rows[0];
   }
 
   async listQuickNotes(userId: string): Promise<{ id: string; user_id: string; title: string; content: string; color: string; pinned: number; created_at: string; updated_at: string }[]> {
-    return this._query('SELECT * FROM quick_notes WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC', [userId]);
+    return this._query<QuickNoteRow>('SELECT * FROM quick_notes WHERE user_id = ? ORDER BY pinned DESC, updated_at DESC', [userId]);
   }
 
   async updateQuickNote(id: string, userId: string, fields: {
@@ -1812,12 +1851,12 @@ export class MysqlDatabase {
     if (fields.color !== undefined) { sets.push('color = ?'); args.push(fields.color); }
     if (fields.pinned !== undefined) { sets.push('pinned = ?'); args.push(fields.pinned ? 1 : 0); }
     if (sets.length === 0) {
-      const rows = await this._query('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
+      const rows = await this._query<QuickNoteRow>('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
       return rows[0];
     }
     args.push(id, userId);
     await this._run(`UPDATE quick_notes SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, args);
-    const rows = await this._query('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
+    const rows = await this._query<QuickNoteRow>('SELECT * FROM quick_notes WHERE id = ? AND user_id = ?', [id, userId]);
     return rows[0];
   }
 
@@ -2122,15 +2161,15 @@ export class MysqlDatabase {
   async upsertWeeklyPlanEntry(params: {
     planId: string; userId: string; date: string; completed?: boolean; notes?: string;
   }): Promise<{ id: string; plan_id: string; user_id: string; date: string; completed: boolean; notes: string | null; created_at: string; updated_at: string }> {
-    const existing = await this._query('SELECT * FROM weekly_plan_entries WHERE plan_id = ? AND date = ?', [params.planId, params.date]);
+    const existing = await this._query<WeeklyPlanEntryRow>('SELECT * FROM weekly_plan_entries WHERE plan_id = ? AND date = ?', [params.planId, params.date]);
     if (existing[0]) {
       const sets: string[] = ['updated_at = NOW()'];
       const args: (string | number | null)[] = [];
       if (params.completed !== undefined) { sets.push('completed = ?'); args.push(params.completed ? 1 : 0); }
       if (params.notes !== undefined) { sets.push('notes = ?'); args.push(params.notes ?? null); }
-      args.push(existing[0].id as string);
+      args.push(existing[0].id);
       await this._run(`UPDATE weekly_plan_entries SET ${sets.join(', ')} WHERE id = ?`, args);
-      return { ...(existing[0] as any), completed: params.completed ?? !!existing[0].completed, notes: params.notes !== undefined ? (params.notes ?? null) : existing[0].notes };
+      return { ...existing[0], completed: params.completed ?? !!existing[0].completed, notes: params.notes !== undefined ? (params.notes ?? null) : existing[0].notes };
     }
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
     await this._run(
@@ -2204,8 +2243,13 @@ export class MysqlDatabase {
   }
 
   async deleteReadingItem(id: string, userId: string): Promise<boolean> {
-    const result = await this._run('DELETE FROM reading_list WHERE id = ? AND user_id = ?', [id, userId]);
-    return result.affectedRows > 0;
+    const existing = await this._queryOne<{ id: string }>(
+      'SELECT id FROM reading_list WHERE id = ? AND user_id = ?',
+      [id, userId],
+    );
+    if (!existing) return false;
+    await this._run('DELETE FROM reading_list WHERE id = ? AND user_id = ?', [id, userId]);
+    return true;
   }
 
   // ── Changelog ─────────────────────────────────────────────────────────────
@@ -2263,8 +2307,13 @@ export class MysqlDatabase {
   }
 
   async deleteChangelogEntry(id: string, userId: string): Promise<boolean> {
-    const result = await this._run('DELETE FROM changelog WHERE id = ? AND user_id = ?', [id, userId]);
-    return result.affectedRows > 0;
+    const existing = await this._queryOne<{ id: string }>(
+      'SELECT id FROM changelog WHERE id = ? AND user_id = ?',
+      [id, userId],
+    );
+    if (!existing) return false;
+    await this._run('DELETE FROM changelog WHERE id = ? AND user_id = ?', [id, userId]);
+    return true;
   }
 
   close(): void {

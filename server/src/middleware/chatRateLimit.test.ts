@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { chatRateLimit } from './chatRateLimit.js';
+import { chatRateLimit, resetRateLimitState } from './chatRateLimit.js';
 import type { Request, Response } from 'express';
 
-function mockReq(userId: string): Request {
-  return { userId } as unknown as Request;
+function mockReq(userId: string, originalUrl = '/api/chat/agent/stream'): Request {
+  return { userId, method: 'POST', originalUrl } as unknown as Request;
 }
 
 // Create fresh spy-backed mocks each time so tests don't share state
@@ -19,8 +19,8 @@ function createMockRes(): Response {
 
 describe('chatRateLimit', () => {
   beforeEach(() => {
-    // The module-level Map persists across tests.
-    // Each test uses a unique user ID so there is no cross-test interference.
+    resetRateLimitState();
+    vi.useRealTimers();
   });
 
   it('passes through when userId is empty string', () => {
@@ -65,14 +65,34 @@ describe('chatRateLimit', () => {
     );
   });
 
-  it('allows request again after interval passes', async () => {
+  it('allows sequential assistant operations on different channels', () => {
+    const userId = `uid_channel_${Date.now()}`;
+    const classifyNext = vi.fn();
+    const streamNext = vi.fn();
+
+    chatRateLimit(
+      mockReq(userId, '/api/chat/classify-writing-intent'),
+      createMockRes(),
+      classifyNext as any,
+    );
+    chatRateLimit(
+      mockReq(userId, '/api/chat/agent/stream'),
+      createMockRes(),
+      streamNext as any,
+    );
+
+    expect(classifyNext).toHaveBeenCalledOnce();
+    expect(streamNext).toHaveBeenCalledOnce();
+  });
+
+  it('allows request again after interval passes', () => {
+    vi.useFakeTimers();
     const userId = `uid_interval_${Date.now()}`;
 
     // First request
     chatRateLimit(mockReq(userId) as Request, createMockRes(), vi.fn());
 
-    // Wait for rate-limit window to expire (2 s + buffer)
-    await new Promise((r) => setTimeout(r, 2100));
+    vi.advanceTimersByTime(2_100);
 
     const res = createMockRes();
     const next = vi.fn();

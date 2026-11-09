@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import {constants} from 'node:fs';
 import type { SubscriptionService } from '../subscription/SubscriptionService.js';
 
 /**
@@ -97,20 +98,30 @@ export class SandboxFS {
   /**
    * Resolve and validate a path within the sandbox.
    */
-  private resolve(userPath: string): string {
-    // Normalize and resolve
-    const resolved = path.resolve(this.root, userPath.replace(/^\//, ''));
-
-    // Ensure it's within the sandbox root
-    if (!resolved.startsWith(this.root)) {
-      throw new Error('Path traversal detected — access denied');
+  private async resolve(userPath: string): Promise<string> {
+    const root = await fs.realpath(this.root);
+    const resolved = path.resolve(root, userPath.replace(/^\//, ''));
+    const relative = path.relative(root,resolved);
+    if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw new Error('Path traversal detected — access denied');
+    let ancestor=resolved;
+    while(true) {
+      try {
+        const actual=await fs.realpath(ancestor);
+        if(actual!==root&&!actual.startsWith(root+path.sep))throw new Error('Symlink traversal detected — access denied');
+        return resolved;
+      } catch(error) {
+        if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;
+        // A dangling symlink is not a safe location for a new output file.
+        try {if((await fs.lstat(ancestor)).isSymbolicLink())throw new Error('Dangling symlink — access denied');}
+        catch(check){if((check as NodeJS.ErrnoException).code!=='ENOENT')throw check;}
+        if(ancestor===root)throw error;
+        ancestor=path.dirname(ancestor);
+      }
     }
-
-    return resolved;
   }
 
   async list(dirPath: string): Promise<FSEntry[]> {
-    const resolved = this.resolve(dirPath);
+    const resolved = await this.resolve(dirPath);
     const entries = await fs.readdir(resolved, { withFileTypes: true });
 
     const results: FSEntry[] = [];
@@ -118,7 +129,7 @@ export class SandboxFS {
       if (entry.name.startsWith('.')) continue; // skip hidden files
       const fullPath = path.join(resolved, entry.name);
       try {
-        const stat = await fs.stat(fullPath);
+        const stat = await fs.lstat(fullPath);
         const created =
           stat.birthtime && stat.birthtime.getTime() > 0 ? stat.birthtime.toISOString() : stat.mtime.toISOString();
         results.push({
@@ -144,20 +155,34 @@ export class SandboxFS {
   }
 
   async read(filePath: string): Promise<string> {
-    const resolved = this.resolve(filePath);
+    const resolved = await this.resolve(filePath);
     return fs.readFile(resolved, 'utf-8');
   }
 
   /** 读取二进制文件（如图片），供图片查看器等使用 */
   async readBinary(filePath: string): Promise<Buffer> {
-    const resolved = this.resolve(filePath);
+    const resolved = await this.resolve(filePath);
     return fs.readFile(resolved);
+  }
+  /** Bounded regular-file reads for parsers and snapshots, with no symlink aliases. */
+  async readBinaryBounded(filePath:string,maxBytes=16*1024*1024):Promise<Buffer>{
+    if(!Number.isSafeInteger(maxBytes)||maxBytes<0)throw new Error('读取大小限制无效');
+    const target=await this.resolve(filePath);if(await fs.realpath(target)!==target)throw new Error('读取路径不能使用符号链接');
+    const file=await fs.open(target,constants.O_RDONLY|constants.O_NOFOLLOW);
+    try{
+      const before=await file.stat();if(!before.isFile()||before.size>maxBytes)throw new Error(`文件须为不超过 ${maxBytes} 字节的普通文件`);
+      const chunks:Buffer[]=[];let size=0;
+      for await(const part of file.createReadStream({autoClose:false})){size+=part.length;if(size>maxBytes)throw new Error('文件超过读取限制');chunks.push(Buffer.from(part));}
+      const after=await file.stat(),current=await fs.stat(target);
+      if(await fs.realpath(target)!==target||before.ino!==current.ino||before.dev!==current.dev||before.size!==size||after.mtimeMs!==before.mtimeMs||current.mtimeMs!==before.mtimeMs)throw new Error('文件正在变化，请稍后重试');
+      return Buffer.concat(chunks);
+    }finally{await file.close();}
   }
 
   /** 写入文本：若文件已存在则追加（前加换行），否则创建并写入。内容若为 HTML 实体编码则先解码。 */
   async write(filePath: string, content: string): Promise<void> {
     const decoded = decodeHtmlEntitiesIfNeeded(content);
-    const resolved = this.resolve(filePath);
+    const resolved = await this.resolve(filePath);
     const dir = path.dirname(resolved);
     await fs.mkdir(dir, { recursive: true });
     
@@ -182,7 +207,7 @@ export class SandboxFS {
   /** 覆写文件内容（不追加）；用于需要整体替换的文件。内容若为 HTML 实体编码则先解码。 */
   async writeOverwrite(filePath: string, content: string): Promise<void> {
     const decoded = decodeHtmlEntitiesIfNeeded(content);
-    const resolved = this.resolve(filePath);
+    const resolved = await this.resolve(filePath);
     const dir = path.dirname(resolved);
     await fs.mkdir(dir, { recursive: true });
     
@@ -201,7 +226,7 @@ export class SandboxFS {
 
   /** 写入二进制内容（如图片）到沙箱路径 */
   async writeBinary(filePath: string, data: Buffer): Promise<void> {
-    const resolved = this.resolve(filePath);
+    const resolved = await this.resolve(filePath);
     const dir = path.dirname(resolved);
     await fs.mkdir(dir, { recursive: true });
     
@@ -217,13 +242,24 @@ export class SandboxFS {
     this.recordStorageChange(data.length - oldSize);
   }
 
+  /** Publish a new version without overwriting an existing file or following its links. */
+  async writeBinaryNew(filePath: string, data: Buffer): Promise<void> {
+    const resolved = await this.resolve(filePath), directory = path.dirname(resolved);
+    await fs.mkdir(directory, { recursive: true });
+    if (await fs.realpath(directory) !== directory) throw new Error('新文件目录不能使用符号链接');
+    const file = await fs.open(resolved, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try { await file.writeFile(data); await file.sync(); }
+    finally { await file.close(); }
+    this.recordStorageChange(data.length);
+  }
+
   async mkdir(dirPath: string): Promise<void> {
-    const resolved = this.resolve(dirPath);
+    const resolved = await this.resolve(dirPath);
     await fs.mkdir(resolved, { recursive: true });
   }
 
   async delete(targetPath: string): Promise<void> {
-    const resolved = this.resolve(targetPath);
+    const resolved = await this.resolve(targetPath);
     const stat = await fs.stat(resolved);
     const sizeToDelete = stat.isDirectory() ? await this.getDirectorySize(resolved) : stat.size;
     
@@ -237,13 +273,13 @@ export class SandboxFS {
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
-    const resolvedOld = this.resolve(oldPath);
-    const resolvedNew = this.resolve(newPath);
+    const resolvedOld = await this.resolve(oldPath);
+    const resolvedNew = await this.resolve(newPath);
     await fs.rename(resolvedOld, resolvedNew);
   }
 
   async stat(filePath: string): Promise<{ size: number; modified: string; isDirectory: boolean }> {
-    const resolved = this.resolve(filePath);
+    const resolved = await this.resolve(filePath);
     const s = await fs.stat(resolved);
     return {
       size: s.size,
@@ -254,7 +290,7 @@ export class SandboxFS {
 
   async exists(filePath: string): Promise<boolean> {
     try {
-      const resolved = this.resolve(filePath);
+      const resolved = await this.resolve(filePath);
       await fs.access(resolved);
       return true;
     } catch {
@@ -280,7 +316,8 @@ export class SandboxFS {
   /**
    * 记录存储变化（正数表示增加，负数表示减少）
    */
-  private recordStorageChange(bytes: number): void {
+  /** Services that publish files atomically use the same storage ledger as normal writes. */
+  recordStorageChange(bytes: number): void {
     if (!this.userId || !this.subscriptionService || bytes === 0) {
       return;
     }
@@ -305,7 +342,7 @@ export class SandboxFS {
         if (entry.isDirectory()) {
           totalSize += await this.getDirectorySize(fullPath);
         } else {
-          const stat = await fs.stat(fullPath);
+          const stat = await fs.lstat(fullPath);
           totalSize += stat.size;
         }
       }

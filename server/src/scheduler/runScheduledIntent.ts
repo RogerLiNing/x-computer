@@ -1,14 +1,14 @@
 /**
  * 执行 X 主脑的定时意图：以对应用户身份跑一次 Agent 循环，intent 作为唯一用户消息。
  * 不限制内容——X 想做啥就做啥（进化提示词、搜索、写脚本、通知用户等）。
- * R018：LLM/网络类瞬时失败时自动重试（有限次数 + 退避）。
+ * 整轮 Agent 可能已产生副作用，不得因网络报错自动重放；仅幂等读取可显式开启重试。
  */
 
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
 import type { ScheduledJob } from './XScheduler.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 
-const MAX_RETRIES = 2; // 最多重试 2 次，共 3 次尝试
+const MAX_RETRIES = 0; // Callers must explicitly opt in for idempotent reads; agent turns are not replay-safe.
 const INITIAL_BACKOFF_MS = 2000;
 const BACKOFF_MULTIPLIER = 2.5;
 
@@ -26,7 +26,7 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 带重试执行异步函数（退避：2s、5s…），仅对 isRetriableError 为 true 的错重试 */
+/** 默认执行一次；只有幂等读取可显式指定 maxRetries，且仅对瞬时错误重试。 */
 export async function runWithRetry<T>(
   fn: () => Promise<T>,
   opts: { maxRetries?: number; initialBackoffMs?: number; backoffMultiplier?: number; logLabel?: string },

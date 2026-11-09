@@ -17,7 +17,7 @@ describe('executeWorkflowTask', () => {
   } as unknown as SandboxFS;
 
   const mockUserSandboxManager = {
-    getForUser: vi.fn().mockResolvedValue({ sandboxFS: mockFs }),
+    getForUser: vi.fn().mockResolvedValue({ sandboxFS: mockFs, sandboxShell: {execute:vi.fn().mockResolvedValue({stdout:'done',stderr:'',exitCode:0})} }),
   } as unknown as UserSandboxManager;
 
   beforeEach(() => {
@@ -39,6 +39,12 @@ describe('executeWorkflowTask', () => {
     expect(result._error).toContain('script 或 command 必填');
   });
 
+  it('script tasks reuse the user-provided isolated executor',async()=>{
+    const execute=vi.fn().mockResolvedValue({stdout:'{"ok":true}',stderr:'',exitCode:0});
+    const manager={getForUser:async()=>({sandboxFS:mockFs,sandboxShell:{execute}})} as unknown as UserSandboxManager;
+    const result=await executeWorkflowTask({userId:'u',instanceId:'i',nodeId:'n',taskType:'script',config:{command:'echo safe'},variables:{}},{userSandboxManager:manager});
+    expect(execute).toHaveBeenCalledWith('echo safe');expect(result._exitCode).toBe(0);
+  });
   it('ai 任务调用 runIntent', async () => {
     const runIntent = vi.fn();
     const result = await executeWorkflowTask(

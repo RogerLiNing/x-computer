@@ -1,6 +1,8 @@
-import { exec } from 'child_process';
+import { spawn } from 'child_process';
 import path from 'path';
+import {realpath} from 'node:fs/promises';
 import type { UserContainerManager } from '../container/UserContainerManager.js';
+import { UncertainToolOutcomeError } from './UncertainToolOutcomeError.js';
 
 /**
  * SandboxShell — executes commands within the sandboxed workspace.
@@ -64,6 +66,7 @@ export class SandboxShell {
   private userId?: string;
   private containerManager?: UserContainerManager;
   private useContainer: boolean;
+  private containerWorkspaceRoot?:string;
 
   constructor(
     workspaceRoot: string,
@@ -72,17 +75,25 @@ export class SandboxShell {
       userId?: string;
       containerManager?: UserContainerManager;
       useContainer?: boolean;
+      containerWorkspaceRoot?:string;
     }
   ) {
     this.workspaceRoot = workspaceRoot;
     this.timeout = timeoutMs;
     this.userId = options?.userId;
     this.containerManager = options?.containerManager;
+    this.containerWorkspaceRoot=options?.containerWorkspaceRoot;
     // 默认使用容器模式（如果提供了 containerManager）
     this.useContainer = options?.useContainer ?? (!!options?.containerManager && !!options?.userId);
   }
 
-  async execute(command: string, cwd?: string, timeoutOverrideMs?: number): Promise<ShellResult> {
+  getExecutionMode(): 'container' | 'host' { return this.useContainer && this.containerManager && this.userId ? 'container' : 'host'; }
+
+  async execute(command: string, cwd?: string, timeoutOverrideMs?: number, signal?: AbortSignal): Promise<ShellResult> {
+    signal?.throwIfAborted();
+    this.workspaceRoot=await realpath(this.workspaceRoot);
+    cwd=await realpath(cwd?path.resolve(this.workspaceRoot,cwd):this.workspaceRoot);
+    this.resolvePath(cwd);
     const startTime = Date.now();
 
     // Safety check
@@ -92,15 +103,16 @@ export class SandboxShell {
 
     // 安全审计日志（R060）
     const mode = this.useContainer ? 'CONTAINER' : 'DIRECT';
-    console.log(`[SECURITY] [${mode}] userId=${this.userId || 'anonymous'} cmd=${command.substring(0, 200)}`);
+    console.log(`[SECURITY] [${mode}] userId=${this.userId || 'anonymous'} shell execution`);
 
     // 容器模式：在隔离容器中执行（推荐）
     if (this.useContainer && this.containerManager && this.userId) {
+      // shortcut: Docker exec has no command-scoped cancellation here; wait for its result until a remote cancellation handle is available.
       return await this.executeInContainer(command, cwd, timeoutMs, startTime);
     }
 
     // 直接模式：在宿主机执行（仅用于开发/测试）
-    return await this.executeDirect(command, cwd, timeoutMs, startTime);
+    return await this.executeDirect(command, cwd, timeoutMs, startTime, signal);
   }
 
   /**
@@ -115,11 +127,10 @@ export class SandboxShell {
     try {
       // 容器内的工作目录：将宿主机路径转换为容器内路径
       // 宿主机：/var/folders/.../workspace/subdir -> 容器：/workspace/subdir
-      let containerCwd = '/workspace';
-      if (cwd && cwd.startsWith(this.workspaceRoot)) {
-        const relativePath = path.relative(this.workspaceRoot, cwd);
-        containerCwd = relativePath ? `/workspace/${relativePath}` : '/workspace';
-      }
+      const mount=await realpath(this.containerWorkspaceRoot??this.workspaceRoot);
+      const relativePath=path.relative(mount,cwd??this.workspaceRoot);
+      if(relativePath==='..'||relativePath.startsWith('..'+path.sep)||path.isAbsolute(relativePath))throw new Error('工作目录不在容器挂载范围');
+      const containerCwd=path.posix.join('/workspace',...relativePath.split(path.sep));
 
       const result = await this.containerManager!.execInContainer(
         this.userId!,
@@ -136,6 +147,7 @@ export class SandboxShell {
         duration: Date.now() - startTime,
       };
     } catch (error) {
+      if(error instanceof UncertainToolOutcomeError)throw error;
       return {
         stdout: '',
         stderr: error instanceof Error ? error.message : String(error),
@@ -153,34 +165,57 @@ export class SandboxShell {
     command: string,
     cwd: string | undefined,
     timeoutMs: number,
-    startTime: number
+    startTime: number,
+    signal?: AbortSignal,
   ): Promise<ShellResult> {
-    const workDir = cwd
-      ? this.resolvePath(cwd)
-      : this.workspaceRoot;
-
-    return new Promise((resolve) => {
-      const child = exec(command, {
+    const workDir = cwd ? this.resolvePath(cwd) : this.workspaceRoot;
+    signal?.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const child = spawn(command, {
+        shell: true,
         cwd: workDir,
-        timeout: timeoutMs,
-        maxBuffer: 1024 * 1024, // 1MB
-        // 安全加固（R060）：不传递宿主机环境变量，防止泄露敏感信息
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
         env: {
           HOME: this.workspaceRoot,
           USER: 'x-computer',
           TERM: 'xterm-256color',
           LANG: 'zh_CN.UTF-8',
           PATH: '/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin',
-          // 不包含 process.env，避免泄露 API Keys、数据库密码等敏感信息
         },
-      }, (error, stdout, stderr) => {
-        resolve({
-          stdout: stdout.toString().slice(0, 50_000),
-          stderr: stderr.toString().slice(0, 10_000),
-          exitCode: error?.code ?? (error ? 1 : 0),
-          command,
-          duration: Date.now() - startTime,
-        });
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf8');
+      child.stderr.setEncoding('utf8');
+      let timedOut = false;
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
+      const kill = (kind: NodeJS.Signals) => {
+        try {
+          if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, kind);
+          else child.kill(kind);
+        } catch { /* The process group may already have exited. */ }
+      };
+      const terminate = () => {
+        kill('SIGTERM');
+        killTimer ??= setTimeout(() => kill('SIGKILL'), 500);
+      };
+      const timer = setTimeout(() => { timedOut = true; terminate(); }, timeoutMs);
+      signal?.addEventListener('abort', terminate, { once: true });
+      if (signal?.aborted) terminate();
+      child.stdout.on('data', (chunk) => { stdout = (stdout + chunk.toString()).slice(0, 50000); });
+      child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(0, 10000); });
+      const cleanup = () => {
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        signal?.removeEventListener('abort', terminate);
+      };
+      child.once('error', (error) => { cleanup(); reject(error); });
+      child.once('close', (code) => {
+        cleanup();
+        if (signal?.aborted) { reject(new DOMException('命令已停止', 'AbortError')); return; }
+        resolve({ stdout, stderr: timedOut ? `${stderr}\n[Command timed out]` : stderr,
+          exitCode: timedOut ? 1 : code ?? 1, command, duration: Date.now() - startTime });
       });
     });
   }
@@ -196,7 +231,8 @@ export class SandboxShell {
 
   private resolvePath(userPath: string): string {
     const resolved = path.resolve(this.workspaceRoot, userPath);
-    if (!resolved.startsWith(this.workspaceRoot)) {
+    const relative=path.relative(this.workspaceRoot,resolved);
+    if (relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative)) {
       throw new Error('路径越界 — 访问被拒绝');
     }
     return resolved;

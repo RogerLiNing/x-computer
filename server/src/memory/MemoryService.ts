@@ -4,6 +4,7 @@
  */
 
 import type { SandboxFS } from '../tooling/SandboxFS.js';
+import { TopicNotes } from './TopicNotes.js';
 import type { VectorStore, VectorEntry } from './vectorStore.js';
 
 const MEMORY_DIR = 'memory';
@@ -19,6 +20,24 @@ export const ASSISTANT_PROMPT_FILE = 'memory/ASSISTANT_PROMPT.md';
 
 function dailyPath(date: string): string {
   return `${MEMORY_DIR}/${date}.md`;
+}
+
+/** 判断内容是否值得记录到每日记忆：过滤掉太短、纯确认语、纯工具调用结果等噪声 */
+function isWorthRemembering(content: string): boolean {
+  const trimmed = content.trim();
+  if (!trimmed || trimmed.length < 10) return false;
+  // 纯确认/寒暄
+  const ackPatterns = [
+    '好的', '好的！', '好的。', '嗯', '嗯嗯', '明白', '明白了', '了解', '知道了',
+    '好的，我明白了', '没问题', 'OK', 'ok', '好的收到', '好的，我来', '好的，请稍等',
+    '好的，请稍候', '马上', '稍等', '好的，马上', '好的，立即', '好的，稍等',
+  ];
+  if (ackPatterns.includes(trimmed)) return false;
+  // 开场白/寒暄（不含实质内容的首轮）
+  if (/^(hi|hello|嗨|你好|您好|hey|hallo)\s*[!,。！]*$/i.test(trimmed)) return false;
+  // 纯工具调用日志
+  if (/^\[对话\] 用户:/.test(trimmed)) return false;
+  return true;
 }
 
 type RetrievalMode = 'keyword' | 'hybrid' | 'keyword_fallback';
@@ -45,10 +64,23 @@ function statusPath(workspaceId?: string): string {
 }
 
 export class MemoryService {
+  /** 主题笔记、到期/作废条目、归档与撤销日志 */
+  readonly topics: TopicNotes;
   constructor(
     private fs: SandboxFS,
     private vectorStore?: VectorStore,
-  ) {}
+  ) {
+    this.topics = new TopicNotes(fs);
+  }
+
+  /** 注入系统提示的记忆：MEMORY.md 的有效条目 + 主题目录（正文按需用 memory_topic_read 读取） */
+  async promptMemory(): Promise<string> {
+    const [main, index] = await Promise.all([this.topics.promptMain(), this.topics.promptIndex()]);
+    const parts: string[] = [];
+    if (main) parts.push(main);
+    if (index) parts.push(`可按需读取的主题笔记（用 memory_topic_read）：\n${index}`);
+    return parts.join('\n\n');
+  }
 
   private async readStatusMeta(workspaceId?: string): Promise<MemoryRuntimeStatusMeta> {
     try {
@@ -79,8 +111,9 @@ export class MemoryService {
     await this.fs.writeOverwrite(statusPath(workspaceId), JSON.stringify(next));
   }
 
-  /** 追加到当日 Daily */
+  /** 追加到当日 Daily（若内容质量不足则跳过，避免无用记忆） */
   async appendDaily(content: string): Promise<void> {
+    if (!isWorthRemembering(content)) return;
     const date = new Date().toISOString().slice(0, 10);
     const path = dailyPath(date);
     let existing = '';
@@ -89,6 +122,8 @@ export class MemoryService {
     } catch {
       /* 文件不存在 */
     }
+    // 避免记录完全重复的内容（精确匹配近期条目）
+    if (existing.includes(content)) return;
     const sep = existing.endsWith('\n') ? '' : '\n';
     await this.fs.write(path, existing + sep + `\n---\n${new Date().toISOString()}\n${content}`);
   }
@@ -273,6 +308,9 @@ export class MemoryService {
       }
     }
 
+    const topicHits = await this.topics.recall(keywords);
+    for (const hit of topicHits) parts.push(`[主题 ${hit.name}]\n${hit.excerpt}`);
+
     return parts.join('\n\n').trim() || '';
   }
 
@@ -407,6 +445,7 @@ export class MemoryService {
    * 显式捕获：写入当日 Daily；若 type 为 preference 或 decision 则同时追加到 MEMORY.md
    */
   async capture(content: string, type?: 'preference' | 'decision' | 'fact'): Promise<void> {
+    if (!isWorthRemembering(content)) return;
     await this.appendDaily(content);
     if (type === 'preference' || type === 'decision') {
       await this.appendMemory(`- [${type}] ${content}`);

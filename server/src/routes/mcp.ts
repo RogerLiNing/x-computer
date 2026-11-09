@@ -16,6 +16,14 @@ import { listTools } from '../mcp/client.js';
 import { searchMcpRegistry } from '../mcp/registry.js';
 import type { McpServerConfig } from '../mcp/types.js';
 import { loadDefaultConfig } from '../config/defaultConfig.js';
+import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { validateStdioServer } from '../mcp/clientStdio.js';
+
+function publicMcpStatus(status: ReturnType<typeof getMcpStatus>) {
+  return { servers: (status?.servers ?? []).map(server => ({ id: server.id, name: server.name, transport: server.transport,
+    toolsCount: server.toolsCount, ...(server.error ? { error: '扩展暂不可用，请联系管理员检查' } : {}) })), totalTools: status?.totalTools ?? 0 };
+}
 
 export function createMcpRouter(
   orchestrator: AgentOrchestrator,
@@ -26,9 +34,9 @@ export function createMcpRouter(
   const router = Router();
 
   /** MCP 状态：已加载的服务器与工具数（配置见文档 MCP 配置） */
-  router.get('/mcp/status', (_req, res) => {
-    const status = getMcpStatus();
-    res.json(status ?? { servers: [], totalTools: 0 });
+  router.get('/mcp/status', (req, res) => {
+    const status = getMcpStatus(orchestrator, req.userId);
+    res.json(publicMcpStatus(status));
   });
 
   /** MCP 配置：获取当前配置（按用户隔离：有 userId 时优先用云端 db，与运行时一致，保证 headers 等不丢失） */
@@ -57,17 +65,16 @@ export function createMcpRouter(
           }
         }
       }
-      servers = await loadMcpConfig(workspaceRoot);
-      if (servers.length === 0) {
-        const defaults = loadDefaultConfig()?.mcp_servers;
-        if (defaults) {
-          const raw = Array.isArray(defaults) ? { servers: defaults } : typeof defaults === 'object' && defaults !== null ? { mcpServers: defaults } : {};
-          servers = normalizeMcpConfig(raw);
-        }
+      // Only a user's own file may be edited in the browser; inherited commands and headers stay server-side.
+      servers = [];
+      if (userSandboxManager && userId && userId !== 'anonymous') {
+        try { const own = JSON.parse(await fs.readFile(getMcpConfigPath(workspaceRoot), 'utf8')); servers = normalizeMcpConfig(own); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
       }
       const configPath = getMcpConfigPath(workspaceRoot);
       const fromEnv = !!process.env.X_COMPUTER_MCP_SERVERS?.trim();
-      res.json({ servers, configPath, fromEnv });
+      const inherited = servers.length === 0 && (fromEnv || !!loadDefaultConfig()?.mcp_servers || (await loadMcpConfig(workspaceRoot)).length > 0);
+      res.json({ servers, configPath, fromEnv, inherited });
     } catch (err: any) {
       res.status(500).json({ error: err.message ?? '获取配置失败' });
     }
@@ -111,7 +118,7 @@ export function createMcpRouter(
               db?.getConfig.bind(db),
             )
           : await reloadMcpAndRegister(orchestrator, workspaceRoot);
-      res.json({ success: true, configPath, result });
+      res.json({ success: true, configPath, result: publicMcpStatus(result) });
     } catch (err: any) {
       res.status(500).json({ error: err.message ?? '保存并重载失败' });
     }
@@ -143,7 +150,12 @@ export function createMcpRouter(
         res.status(400).json({ error: 'Body 需包含 id，以及 url（HTTP）或 command（Stdio）' });
         return;
       }
-      const tools = await listTools(server);
+      const userId = req.userId;
+      if (!userId || userId === 'anonymous') return res.status(401).json({ error: '需要登录后测试自己的扩展' });
+      if (hasStdio && !hasHttp) validateStdioServer(server);
+      const serverKey = createHash('sha256').update(JSON.stringify([server, false])).digest('hex');
+      const tools = await listTools(server, { owner: userId,
+        ...(hasStdio && !hasHttp ? { containerId: await orchestrator.getMcpContainerId(userId, serverKey) } : {}) });
       res.json({
         ok: true,
         toolsCount: tools.length,

@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Docker from 'dockerode';
+import { createDockerClient } from './dockerSocket.js';
 import { DockerShellSession, DockerShellSessionManager } from './DockerShellSession.js';
 
 describe('DockerShellSession', () => {
@@ -11,7 +12,7 @@ describe('DockerShellSession', () => {
   let containerId: string;
 
   beforeAll(async () => {
-    docker = new Docker({ socketPath: '/var/run/docker.sock' });
+    docker = createDockerClient();
 
     // 创建测试容器
     const container = await docker.createContainer({
@@ -140,7 +141,7 @@ describe('DockerShellSessionManager', () => {
   let manager: DockerShellSessionManager;
 
   beforeAll(async () => {
-    docker = new Docker({ socketPath: '/var/run/docker.sock' });
+    docker = createDockerClient();
 
     // 创建测试容器
     const container = await docker.createContainer({

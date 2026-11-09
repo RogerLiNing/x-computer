@@ -27,7 +27,7 @@ export function SessionSidebar({
   return (
     <div className="w-full sm:w-56 shrink-0 border-r border-white/5 bg-white/[0.02] flex flex-col absolute sm:relative inset-x-0 top-12 sm:top-0 bottom-0 sm:bottom-auto z-20 sm:z-auto">
       <button
-        className="flex items-center gap-2 px-3 py-2.5 m-2 rounded-lg bg-desktop-highlight/20 hover:bg-desktop-highlight/30 text-desktop-text text-xs transition-colors"
+        className="flex items-center gap-2 px-3 py-2.5 m-2 rounded-lg bg-[#C8A96E]/20 hover:bg-[#C8A96E]/30 text-gray-200 text-xs transition-colors"
         onClick={onStartNewChat}
       >
         <MessageSquarePlus size={14} />
@@ -38,13 +38,13 @@ export function SessionSidebar({
           <div
             key={s.id}
             className={`group flex items-center gap-0.5 rounded-lg ${
-              currentSessionId === s.id ? 'bg-desktop-accent/30' : 'hover:bg-white/5'
+              currentSessionId === s.id ? 'bg-amber-500/30' : 'hover:bg-white/5'
             }`}
           >
             <button
               type="button"
               className={`flex-1 min-w-0 text-left px-3 py-2 rounded-lg text-xs transition-colors truncate ${
-                currentSessionId === s.id ? 'text-desktop-text' : 'text-desktop-muted hover:text-desktop-text'
+                currentSessionId === s.id ? 'text-gray-200' : 'text-gray-400 hover:text-gray-200'
               }`}
               onClick={() => onSelectSession(s.id)}
             >
@@ -52,7 +52,7 @@ export function SessionSidebar({
             </button>
             <button
               type="button"
-              className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-text opacity-0 group-hover:opacity-100 transition-opacity"
+              className="shrink-0 p-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-gray-200 opacity-0 group-hover:opacity-100 transition-opacity"
               title="重命名"
               onClick={(e) => {
                 e.stopPropagation();
@@ -64,7 +64,7 @@ export function SessionSidebar({
             </button>
             <button
               type="button"
-              className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-desktop-accent opacity-0 group-hover:opacity-100 transition-opacity"
+              className="shrink-0 p-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity"
               title="导出 MD"
               onClick={(e) => { e.stopPropagation(); onExportSession(s.id, 'markdown'); }}
             >
@@ -72,7 +72,7 @@ export function SessionSidebar({
             </button>
             <button
               type="button"
-              className="shrink-0 p-1.5 rounded text-desktop-muted hover:bg-white/10 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="shrink-0 p-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
               title="删除会话"
               onClick={(e) => {
                 e.stopPropagation();

@@ -23,6 +23,13 @@ export interface DiscoveredSkill {
   dirName: string;
   /** 从 Skill 描述中解析出的需配置字段（环境变量、API Key 等），供设置页展示输入框 */
   configFields?: SkillConfigField[];
+  /** Agent Skills 规范字段 */
+  license?: string;
+  compatibility?: string;
+  /** 预先放行的工具名（实验性） */
+  allowedTools?: string[];
+  /** 为 true 时不在模型可见列表里出现，只能由用户用 /skill:name 显式触发 */
+  disableModelInvocation?: boolean;
 }
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---/;
@@ -78,15 +85,32 @@ function envKeyToLabel(key: string): string {
   return key.replace(/_/g, ' ');
 }
 
+export interface SkillSpecFields { license?: string; compatibility?: string; allowedTools?: string[]; disableModelInvocation?: boolean }
+
+/** The Agent Skills specification fields beyond name/description. */
+export function parseSkillSpecFields(block: string): SkillSpecFields {
+  const field = (key: string) => block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'))?.[1]?.trim().replace(/^['"]|['"]$/g, '');
+  const allowed = field('allowed-tools');
+  const allowedTools = allowed ? allowed.replace(/^\[|\]$/g, '').split(/[,\s]+/).map((item) => item.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean) : undefined;
+  const disable = field('disable-model-invocation');
+  return {
+    ...(field('license') ? { license: field('license') } : {}),
+    ...(field('compatibility') ? { compatibility: field('compatibility') } : {}),
+    ...(allowedTools?.length ? { allowedTools } : {}),
+    ...(disable !== undefined ? { disableModelInvocation: /^(true|yes|1)$/i.test(disable) } : {}),
+  };
+}
+
 function parseFrontmatter(
   mdContent: string
-): { name?: string; description?: string; requiresApiKey: boolean; configFields?: SkillConfigField[] } {
+): { name?: string; description?: string; requiresApiKey: boolean; configFields?: SkillConfigField[] } & SkillSpecFields {
   const match = mdContent.match(FRONTMATTER_RE);
   const block = match?.[1] ?? '';
   const content = match ? mdContent.slice(match[0].length) : mdContent;
   let name: string | undefined;
   let description: string | undefined;
   let requiresApiKey = false;
+  const spec = parseSkillSpecFields(block);
   const lines = block.split('\n');
   for (const line of lines) {
     const nameMatch = line.match(/^name:\s*(.+)/);
@@ -111,25 +135,32 @@ function parseFrontmatter(
   } else {
     requiresApiKey = true;
   }
-  return { name, description, requiresApiKey, configFields };
+  return { name, description, requiresApiKey, configFields, ...spec };
 }
 
 /**
  * 扫描目录下所有 SKILL.md，返回可发现的 Skill 列表。
  * @param skillsRoot 根目录（如项目根下的 skills/）
  */
-export function discoverSkills(skillsRoot: string): DiscoveredSkill[] {
+const MAX_SKILL_SCAN_DEPTH = 3;
+
+/** Directories containing SKILL.md are discovered recursively (Agent Skills layout), skipping node_modules and hidden folders. */
+export function discoverSkills(skillsRoot: string, depth = 0): DiscoveredSkill[] {
   const result: DiscoveredSkill[] = [];
   if (!fs.existsSync(skillsRoot) || !fs.statSync(skillsRoot).isDirectory()) {
     return result;
   }
-  const dirs = fs.readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+  const dirs = fs.readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory() && d.name !== 'node_modules' && !d.name.startsWith('.'));
   for (const dir of dirs) {
-    const skillPath = path.join(skillsRoot, dir.name, 'SKILL.md');
-    if (!fs.existsSync(skillPath)) continue;
+    const skillDir = path.join(skillsRoot, dir.name);
+    const skillPath = path.join(skillDir, 'SKILL.md');
+    if (!fs.existsSync(skillPath)) {
+      if (depth < MAX_SKILL_SCAN_DEPTH) result.push(...discoverSkills(skillDir, depth + 1).map((skill) => ({ ...skill, dirName: `${dir.name}/${skill.dirName}` })));
+      continue;
+    }
     try {
       const content = fs.readFileSync(skillPath, 'utf-8');
-      const { name, description, requiresApiKey, configFields } = parseFrontmatter(content);
+      const { name, description, requiresApiKey, configFields, ...spec } = parseFrontmatter(content);
       if (!name || !description) continue;
       result.push({
         id: name,
@@ -138,6 +169,7 @@ export function discoverSkills(skillsRoot: string): DiscoveredSkill[] {
         requiresApiKey,
         dirName: dir.name,
         ...(configFields?.length ? { configFields } : {}),
+        ...spec,
       });
     } catch {
       // 解析失败则跳过
@@ -228,10 +260,11 @@ export function getDiscoveredSkills(userId?: string): DiscoveredSkill[] {
   const mainRoot = getMainSkillsRoot();
   for (const s of discoverSkills(mainRoot)) byDir.set(s.dirName, s);
 
-  // Also discover from .claude/skills (skillhub --project installs here)
-  const claudeSkillsRoot = path.join(process.cwd(), '.claude', 'skills');
-  if (fs.existsSync(claudeSkillsRoot) && fs.statSync(claudeSkillsRoot).isDirectory()) {
-    for (const s of discoverSkills(claudeSkillsRoot)) byDir.set(s.dirName, s);
+  // Also discover from .claude/skills (skillhub --project installs here) and the Agent Skills location .agents/skills
+  for (const extraRoot of [path.join(process.cwd(), '.claude', 'skills'), path.join(process.cwd(), '.agents', 'skills')]) {
+    if (fs.existsSync(extraRoot) && fs.statSync(extraRoot).isDirectory()) {
+      for (const s of discoverSkills(extraRoot)) byDir.set(s.dirName, s);
+    }
   }
 
   if (userId && userId !== 'anonymous' && getSkillsRootForUser) {
@@ -240,6 +273,17 @@ export function getDiscoveredSkills(userId?: string): DiscoveredSkill[] {
   }
 
   return Array.from(byDir.values());
+}
+
+/** Skills the model may pick on its own; `disable-model-invocation: true` ones are only reachable via /skill:name. */
+export function getModelVisibleSkills(userId?: string): DiscoveredSkill[] {
+  return getDiscoveredSkills(userId).filter((skill) => !skill.disableModelInvocation);
+}
+
+/** Parses a user command of the form `/skill:name rest of the request`. */
+export function parseSkillCommand(message: string): { name: string; args: string } | undefined {
+  const match = /^\/skill:([a-z0-9][a-z0-9-]{0,63})(?:\s+([\s\S]*))?$/i.exec(message.trim());
+  return match ? { name: match[1], args: (match[2] ?? '').trim() } : undefined;
 }
 
 /** 目录名安全校验：仅允许字母数字、短横线、下划线，禁止路径穿越 */

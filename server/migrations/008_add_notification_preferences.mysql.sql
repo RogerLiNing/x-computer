@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS notification_preferences (
   heartbeat TINYINT(1) NOT NULL DEFAULT 1,
   heartbeat_daily TINYINT(1) NOT NULL DEFAULT 1,
   webhook TINYINT(1) NOT NULL DEFAULT 1,
-  system TINYINT(1) NOT NULL DEFAULT 1,
+  `system` TINYINT(1) NOT NULL DEFAULT 1,
   skill TINYINT(1) NOT NULL DEFAULT 1,
   quiet_hours_enabled TINYINT(1) NOT NULL DEFAULT 0,
   quiet_hours_start VARCHAR(5),

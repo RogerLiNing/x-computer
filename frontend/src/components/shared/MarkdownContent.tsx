@@ -19,7 +19,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className="text-desktop-accent hover:underline"
+        className="text-amber-400 hover:underline"
         {...props}
       >
         {children}
@@ -59,7 +59,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
     ),
     // 自定义引用块样式
     blockquote: (props) => (
-      <blockquote {...props} className="border-l-2 border-desktop-accent/50 pl-3 my-2 text-desktop-muted italic" />
+      <blockquote {...props} className="border-l-2 border-amber-500/50 pl-3 my-2 text-gray-400 italic" />
     ),
     // 自定义段落样式
     p: (props) => (
@@ -78,7 +78,7 @@ export function MarkdownContent({ content }: MarkdownContentProps) {
   };
 
   return (
-    <div className="text-sm text-desktop-text/90 leading-relaxed">
+    <div className="text-sm text-gray-200/90 leading-relaxed">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {content}
       </ReactMarkdown>

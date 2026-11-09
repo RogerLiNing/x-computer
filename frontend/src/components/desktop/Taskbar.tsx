@@ -2,21 +2,22 @@ import { useState, useEffect } from 'react';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConfigStore } from '@/store/configStore';
 import { useConnectionStore } from '@/store/connectionStore';
-import { useTaskStore } from '@/store/taskStore';
-import { getAppTitle, getApp } from '@/appRegistry';
+
+import { getAppTitle, getApp, isAppEnabled } from '@/appRegistry';
+import { useAppRegistryRevision } from '@/hooks/useAppRegistry';
 import { getUserId } from '@/utils/userId';
 import {
   FolderOpen, Terminal, Globe, MessageSquare, Brain, Code,
   FileText, Mail, Settings, Clock, Bot, Zap, Shield,
   Bell, Table, Calendar, Search, Layout, FileSpreadsheet, Image,
-  Play, Kanban, CreditCard,
+Play, CreditCard, Puzzle,
 } from 'lucide-react';
 import type { AppIdentifier } from '@shared/index';
 
 const ICON_BY_NAME: Record<string, React.ElementType> = {
   FolderOpen, Terminal, Globe, MessageSquare, Brain, Code,
   FileText, Mail, Settings, Clock, Table, Calendar, Layout,
-  FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield,
+  FileSpreadsheet, Image, Bot, Play, CreditCard, Shield, Puzzle,
 };
 
 const API_BASE = '/api';
@@ -27,8 +28,8 @@ export function Taskbar() {
     openApp, focusWindow, minimizeWindow,
   } = useDesktopStore();
   const { taskbarPinned, toggleSearch } = useConfigStore();
-  const { notifications, connected } = useConnectionStore();
-  const tasks = useTaskStore((s) => s.tasks);
+  const { connected } = useConnectionStore();
+  useAppRegistryRevision();
 
   const [clock, setClock] = useState(new Date());
 
@@ -37,11 +38,7 @@ export function Taskbar() {
     return () => clearInterval(timer);
   }, []);
 
-  const notificationsList = Array.isArray(notifications) ? notifications : [];
-  const tasksList = Array.isArray(tasks) ? tasks : [];
-  const unreadCount = notificationsList.filter((n) => !n.read).length;
-  const runningTasks = tasksList.filter((t) => t.status === 'running').length;
-  const pendingApprovals = tasksList.filter((t) => t.status === 'awaiting_approval').length;
+  const unreadCount = 0;
 
   return (
     <div className="h-12 sm:h-[52px] bg-desktop-taskbar/95 backdrop-blur-xl border-t border-white/5 flex items-center px-2 sm:px-3 gap-0.5 sm:gap-1 z-50 relative select-none safe-area-pb">
@@ -68,6 +65,7 @@ export function Taskbar() {
       {/* Pinned & open apps：小屏横向滚动 */}
       <div className="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden py-1 scrollbar-thin">
         {taskbarPinned.map((appId) => {
+          if (!isAppEnabled(appId)) return null;
           const app = getApp(appId);
           const Icon = app ? (ICON_BY_NAME[app.icon] ?? FileText) : FileText;
           const title = getAppTitle(appId);
@@ -140,28 +138,6 @@ export function Taskbar() {
 
       {/* System tray */}
       <div className="flex items-center gap-1.5">
-        {/* Running tasks indicator */}
-        {(runningTasks > 0 || pendingApprovals > 0) && (
-          <button
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-500/10 hover:bg-blue-500/20 transition-colors"
-            onClick={() => openApp('task-timeline')}
-            title="查看任务"
-          >
-            {runningTasks > 0 && (
-              <span className="flex items-center gap-1 text-[10px] text-blue-400">
-                <Zap size={10} className="animate-pulse" />
-                {runningTasks}
-              </span>
-            )}
-            {pendingApprovals > 0 && (
-              <span className="flex items-center gap-1 text-[10px] text-yellow-400">
-                <Shield size={10} />
-                {pendingApprovals}
-              </span>
-            )}
-          </button>
-        )}
-
         {/* Connection status */}
         <div className={`w-2 h-2 rounded-full ${connected ? 'bg-green-400' : 'bg-red-400 animate-pulse'}`}
           title={connected ? '已连接到服务器' : '未连接'}
@@ -170,7 +146,7 @@ export function Taskbar() {
         {/* Notifications */}
         <button
           className="relative w-8 h-8 rounded-lg flex items-center justify-center hover:bg-white/8 transition-colors"
-          onClick={() => openApp('task-timeline')}
+          onClick={() => openApp('chat')}
         >
           <Bell size={15} className="text-desktop-muted" />
           {unreadCount > 0 && (

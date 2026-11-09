@@ -78,9 +78,13 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   xProactiveMessages: [],
   addXProactiveMessage: (msg) =>
     set((s) => ({
-      xProactiveMessages: [msg, ...s.xProactiveMessages].slice(0, 100),
+      xProactiveMessages: [{...msg,read:msg.read===true||s.xProactiveMessages.some(existing=>existing.id===msg.id&&existing.read===true)}, ...s.xProactiveMessages.filter(existing=>existing.id!==msg.id)].slice(0, 100),
     })),
-  setXProactiveMessages: (list) => set({ xProactiveMessages: list }),
+  setXProactiveMessages: (list) => set((s)=>{
+    const readIds=new Set([...s.xProactiveMessages,...list].filter(message=>message.read===true).map(message=>message.id));
+    const unique=new Map(list.map(message=>[message.id,{...message,read:readIds.has(message.id)}]));
+    return {xProactiveMessages:[...unique.values()].slice(0,100)};
+  }),
   markXProactiveRead: (id) => {
     set((s) => ({
       xProactiveMessages: s.xProactiveMessages.map((m) => (m.id === id ? { ...m, read: true } : m)),

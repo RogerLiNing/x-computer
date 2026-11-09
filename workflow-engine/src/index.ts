@@ -7,6 +7,7 @@ import cors from 'cors';
 import path from 'path';
 import { WorkflowStore } from './store.js';
 import { WorkflowRunner } from './runner.js';
+import { serviceAuth } from './serviceAuth.js';
 import { createRouter } from './routes.js';
 import { startTimerScheduler } from './triggers.js';
 import { createRemoteTaskExecutor } from './remoteTaskExecutor.js';
@@ -23,7 +24,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use('/api', createRouter({ store, runner }));
+app.use('/api', serviceAuth, createRouter({ store, runner }));
 
 startTimerScheduler({ store, runner });
 

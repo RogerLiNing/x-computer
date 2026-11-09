@@ -70,6 +70,8 @@ async function clearCaches(): Promise<void> {
  * 退出登录时调用，随后应执行页面刷新（刷新后 getUserId 会生成新匿名 ID）。
  */
 export async function clearAllLocalData(): Promise<void> {
+  const response=await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'});
+  if(!response.ok)throw new Error('退出未完成，请重试');
   clearLocalStorage();
   clearCookies();
   await clearCaches();

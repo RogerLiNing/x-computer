@@ -4,17 +4,18 @@ import { useConfigStore } from '@/store/configStore';
 import { useAdminStore } from '@/store/adminStore';
 import { useMiniAppsStore } from '@/store/miniAppsStore';
 import { getAllApps } from '@/appRegistry';
+import { useAppRegistryRevision } from '@/hooks/useAppRegistry';
 import {
-  Search, FolderOpen, Terminal, Globe, MessageSquare, Brain, Code,
+  Search, FolderOpen, Folder, Terminal, Globe, MessageSquare, Brain, Code,
   FileText, Mail, Calendar, Settings, Clock, Table, Zap,
-  Command, ArrowRight, Layout, FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield, Hash,
+  Command, ArrowRight, Layout, FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield, Hash, Puzzle,
 } from 'lucide-react';
 import type { AppIdentifier } from '@shared/index';
 
 const ICON_BY_NAME: Record<string, React.ElementType> = {
-  FolderOpen, Terminal, Globe, MessageSquare, Brain, Code,
+  FolderOpen, Folder, Terminal, Globe, MessageSquare, Brain, Code,
   FileText, Mail, Calendar, Settings, Clock, Table, Layout,
-  FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield,
+  FileSpreadsheet, Image, Bot, Play, Kanban, CreditCard, Shield, Puzzle,
 };
 
 interface SearchItem {
@@ -25,6 +26,7 @@ interface SearchItem {
   icon: React.ElementType;
   action: () => void;
   category: string;
+  folderId?: string;
 }
 
 export function SearchLauncher() {
@@ -47,6 +49,7 @@ export function SearchLauncher() {
   // Global keyboard shortcut
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
+      if (['Meta', 'Control', 'Alt', 'Shift'].includes(e.key)) return;
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
         e.preventDefault();
         useConfigStore.getState().toggleSearch();
@@ -58,6 +61,7 @@ export function SearchLauncher() {
 
   const miniApps = useMiniAppsStore((s) => s.list);
   const isAdmin = useAdminStore((s) => s.isAdmin);
+  const registryRevision = useAppRegistryRevision();
   const searchSessions = useConfigStore((s) => s.searchSessions);
 
   // Session navigation: close search and switch to chat, then select session
@@ -69,15 +73,26 @@ export function SearchLauncher() {
   };
 
   const allItems: SearchItem[] = useMemo(() => {
-    const appItems: SearchItem[] = getAllApps().map((app) => ({
-      id: app.id,
-      appId: app.id as AppIdentifier,
-      label: app.name,
-      sublabel: app.availability === 'demo' ? `${app.description ?? ''} · 演示` : (app.description ?? ''),
-      icon: ICON_BY_NAME[app.icon as string] ?? FileText,
-      action: () => openApp(app.id),
-      category: '应用',
-    }));
+    const appFolders = useConfigStore.getState().appFolders;
+    const appFolderAssignments = useConfigStore.getState().appFolderAssignments;
+
+    const appItems: SearchItem[] = getAllApps()
+      .filter((app) => !appFolderAssignments[app.id] || appFolders.some((f) => f.id === appFolderAssignments[app.id]))
+      .map((app) => {
+        const folderId = appFolderAssignments[app.id];
+        const folder = appFolders.find((f) => f.id === folderId);
+        const category = folder ? `📁 ${folder.name}` : '应用';
+        return {
+          id: app.id,
+          appId: app.id as AppIdentifier,
+          label: app.name,
+          sublabel: app.availability === 'demo' ? `${app.description ?? ''} · 演示` : (app.description ?? ''),
+          icon: ICON_BY_NAME[app.icon as string] ?? FileText,
+          action: () => openApp(app.id),
+          category,
+          folderId,
+        };
+      });
 
     // Sessions
     const sessionItems: SearchItem[] = searchSessions.map((s) => ({
@@ -102,7 +117,7 @@ export function SearchLauncher() {
     }));
 
     return [...appItems, ...sessionItems, ...tagItems];
-  }, [openApp, miniApps, isAdmin, searchSessions]);
+  }, [openApp, miniApps, isAdmin, searchSessions, registryRevision]);
 
   const filtered = useMemo(() => {
     if (!query.trim()) return allItems;

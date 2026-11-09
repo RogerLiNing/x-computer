@@ -74,4 +74,19 @@ describe('ToolVectorStore', () => {
     expect(toolNames).toContain('file.write');
     expect(toolNames).toContain('grep');
   });
+
+  it('并发 syncFull 只执行一次向量生成', async () => {
+    const capabilities = [{ name: 'file.read', description: '读取文件内容' }];
+    let calls = 0;
+    const embed = async (texts: string[]) => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return texts.map(() => [1, 2, 3]);
+    };
+    await Promise.all([
+      store.syncFull(capabilities, embed),
+      store.syncFull(capabilities, embed),
+    ]);
+    expect(calls).toBe(1);
+  });
 });

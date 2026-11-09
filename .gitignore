@@ -69,5 +69,8 @@ temp/
 Thumbs.db
 Desktop.ini
 
+# Worktrees
+.worktrees/
+
 # Misc
 *.local

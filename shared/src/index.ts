@@ -83,11 +83,12 @@ export interface Artifact {
 
 // ── Execution Model ────────────────────────────────────────
 
-export type ExecutionMode = 'auto' | 'approval';
+// ExecutionMode removed - approval system deprecated
+// export type ExecutionMode = 'auto' | 'approval';
 
+// ExecutionMode removed - use RuntimeType directly
 export interface ExecutionContext {
   taskId: string;
-  mode: ExecutionMode;
   runtimeType: RuntimeType;
   sessionId: string;
   workingDirectory: string;
@@ -118,31 +119,10 @@ export interface ResourceLimits {
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
-export type DataClassification = 'public' | 'internal' | 'sensitive' | 'regulated';
-
-export interface PolicyRule {
-  id: string;
-  name: string;
-  description: string;
-  toolPattern: string;
-  minRiskLevel: RiskLevel;
-  requiresApproval: boolean;
-  allowedRuntimes: RuntimeType[];
-  dataClassification: DataClassification;
-}
-
-export interface ApprovalRequest {
-  id: string;
-  stepId: string;
-  taskId: string;
-  action: string;
-  riskLevel: RiskLevel;
-  reason: string;
-  status: 'pending' | 'approved' | 'rejected';
-  createdAt: number;
-  resolvedAt?: number;
-  resolvedBy?: string;
-}
+// PolicyRule and ApprovalRequest removed - approval system deprecated
+// export type DataClassification = 'public' | 'internal' | 'sensitive' | 'regulated';
+// export interface PolicyRule { ... }
+// export interface ApprovalRequest { ... }
 
 export interface AuditEntry {
   id: string;
@@ -204,12 +184,14 @@ export type BuiltinAppId =
   | 'email'
   | 'calendar'
   | 'settings'
-  | 'task-timeline'
+  | 'plugin-manager'
+  | 'digital-human'
+
   | 'image-viewer'
   | 'office-viewer'
   | 'media-viewer'
   | 'agent-manager'
-  | 'x-board'
+
   | 'subscription'
   | 'admin'
   | 'canvas'
@@ -253,6 +235,117 @@ export interface MiniAppDefinition {
 /** 可用性：available = 真实可用，demo = 演示/占位（UI 可标注「演示」或「即将推出」） */
 export type AppAvailability = 'available' | 'demo';
 
+/** 应用运行层级：core 随系统提供，plugin 可独立启用和停用。 */
+export type AppRuntime = 'core' | 'plugin';
+
+/** 插件启动策略。 */
+export type PluginStartupPolicy = 'eager' | 'on-demand' | 'manual';
+
+/** 插件可声明的资源预算，用于运行时调度和诊断。 */
+export interface PluginResourceBudget {
+  memoryMb?: number;
+  cpuPercent?: number;
+  backgroundTasks?: number;
+}
+
+/** 前后端通用的插件契约。 */
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  permissions: string[];
+  startupPolicy: PluginStartupPolicy;
+  resourceBudget?: PluginResourceBudget;
+  frontend?: {
+    appId?: string;
+    entry?: string;
+  };
+  backend?: {
+    routes?: string[];
+    tools?: string[];
+  };
+}
+
+// ── X Package Model ─────────────────────────────────────────
+
+/** 包内可装载的三类内容：有界面的应用、给模型新增的工具、技能/提示词。 */
+export type XPackageKind = 'ui' | 'tools' | 'skill';
+
+/** 包的来源：模型生成、用户手动安装、共享空间分发、公共目录、系统内置。 */
+export type XPackageSource = 'generated' | 'installed' | 'space' | 'catalog' | 'builtin';
+
+export interface XPackageUi {
+  /** 相对包目录的入口文件，默认 index.html */
+  entry: string;
+  defaultSize?: { width: number; height: number };
+}
+
+/** 声明式工具实现。刻意不允许在宿主进程加载任意代码。 */
+export type XPackageToolImpl =
+  | { type: 'kv' }
+  | { type: 'http'; url: string; method?: 'GET' | 'POST' | 'PUT' | 'DELETE' }
+  | { type: 'mcp'; server: string; tool: string }
+  | { type: 'script'; entry: string; runtime: 'python' };
+
+export interface XPackageTool {
+  name: string;
+  description: string;
+  parameters: ToolParameter[];
+  impl: XPackageToolImpl;
+  riskLevel?: RiskLevel;
+}
+
+export interface XPackageManifest {
+  format: 1;
+  /** 反向域名风格；模型生成的包默认 x.<user>.<slug> */
+  id: string;
+  name: string;
+  /** 语义化版本 */
+  version: string;
+  description?: string;
+  icon?: string;
+  author?: string;
+  kinds: XPackageKind[];
+  ui?: XPackageUi;
+  tools?: XPackageTool[];
+  skill?: { entry: string };
+  /** 最小授权原则；与 PluginManifest.permissions 使用同一套权限名 */
+  permissions: string[];
+  engines?: { 'x-computer'?: string };
+  startupPolicy?: PluginStartupPolicy;
+}
+
+/** 注册表中的一条已安装包记录 */
+export interface XPackageRecord {
+  userId: string;
+  manifest: XPackageManifest;
+  enabled: boolean;
+  source: XPackageSource;
+  /** 包目录相对用户沙箱根的路径；内置包为空 */
+  path?: string;
+  installedAt: number;
+  updatedAt: number;
+}
+
+/**
+ * 桌面文件夹
+ */
+export interface AppFolder {
+  id: string;
+  name: string;
+  /** emoji 或 lucide 图标名 */
+  icon: string;
+  /** 包含的应用 ID 列表 */
+  appIds: string[];
+  /** 网格中的列位置 */
+  col: number;
+  /** 网格中的行位置 */
+  row: number;
+  /** 是否展开 */
+  expanded: boolean;
+}
+
 /**
  * 应用清单 — 符合开发规范的应用元数据，内置与安装应用均使用此结构。
  * 第三方开发者按此规范编写 manifest 即可被 X-Computer 识别并安装。
@@ -272,6 +365,16 @@ export interface AppManifest {
   author?: string;
   /** 来源：builtin | installed */
   source: AppSource;
+  /** core 随系统启用；plugin 可由用户按需启用。 */
+  runtime?: AppRuntime;
+  /** 对应插件标识；内置可拔插应用默认与 id 相同。 */
+  pluginId?: string;
+  /** 插件启动策略；默认 on-demand。 */
+  startupPolicy?: PluginStartupPolicy;
+  /** 插件运行所需权限。 */
+  permissions?: string[];
+  /** 插件建议资源预算。 */
+  resourceBudget?: PluginResourceBudget;
   /**
    * 图标：lucide-react 图标名（如 FolderOpen）或 URL。
    * 内置应用使用 lucide 名，安装应用可填 URL 或 lucide 名。
@@ -286,6 +389,8 @@ export interface AppManifest {
   entry?: string;
   /** 建议默认窗口宽高 */
   defaultSize?: { width: number; height: number };
+  /** 所属文件夹 ID，undefined 表示在桌面根目录 */
+  folderId?: string;
 }
 
 export interface AppWindow {
@@ -303,10 +408,10 @@ export interface AppWindow {
   metadata?: Record<string, unknown>;
 }
 
+// ExecutionMode removed - approval system deprecated
 export interface DesktopState {
   windows: AppWindow[];
   activeWindowId: string | null;
-  executionMode: ExecutionMode;
   taskbarPinned: AppIdentifier[];
   notifications: Notification[];
 }
@@ -334,10 +439,10 @@ export interface TaskSummary {
   stepsTotal: number;
 }
 
+// ExecutionMode removed - approval system deprecated
 /** 前端上报的整机状态，总 AI 可感知 */
 export interface ComputerContext {
   timestamp: number;
-  executionMode: ExecutionMode;
   activeWindowId: string | null;
   windows: Array<Pick<AppWindow, 'id' | 'appId' | 'title' | 'isMinimized' | 'isFocused' | 'metadata'>>;
   tasks: TaskSummary[];
@@ -355,6 +460,134 @@ export interface TaskLLMConfig {
   modelId: string;
   baseUrl?: string;
   apiKey?: string;
+  apiType?: 'openai' | 'anthropic';
+}
+
+export type LivingAIPhase =
+  | 'sleeping'
+  | 'observing'
+  | 'reflecting'
+  | 'acting'
+  | 'waiting'
+  | 'paused'
+  | 'error';
+
+export type LivingAIAutonomyMode = 'observe' | 'proactive' | 'autonomous';
+
+export interface LivingAIIdentity {
+  continuityId: string;
+  name: string;
+  role: string;
+  embodiment: string;
+  relationship: 'peer';
+  values: string[];
+  bornAt: number;
+}
+
+export interface LivingAIDrive {
+  id: 'continuity' | 'understanding' | 'commitment' | 'growth' | 'stewardship';
+  label: string;
+  weight: number;
+}
+
+export interface LivingAIGoal {
+  id: string;
+  title: string;
+  description: string;
+  priority: number;
+  status: 'active' | 'paused' | 'completed' | 'abandoned';
+  origin: 'intrinsic' | 'user' | 'reflection';
+  progress: number;
+  createdAt: number;
+  updatedAt: number;
+  nextReviewAt: number;
+  lastAttemptAt?: number;
+  lastResult?: string;
+  strategy?: string;
+  nextAction?: string;
+  blockers?: string[];
+  attemptCount: number;
+  stagnationCount: number;
+}
+
+export interface LivingAIConfig {
+  enabled: boolean;
+  autonomyMode: LivingAIAutonomyMode;
+  cycleIntervalMinutes: number;
+  maxActionsPerCycle: number;
+  allowLowRiskActions: boolean;
+  quietHours: {
+    enabled: boolean;
+    startHour: number;
+    endHour: number;
+  };
+}
+
+export type LivingAICognitiveMode = 'explore' | 'execute' | 'verify' | 'recover';
+
+export interface LivingAICognition {
+  mode: LivingAICognitiveMode;
+  focusGoalId: string | null;
+  situationAssessment: string;
+  strategy: string;
+  hypothesis: string;
+  nextAction: string;
+  uncertainties: string[];
+  confidence: number;
+  stagnationCount: number;
+  consecutiveIdleCycles: number;
+  lastObservationFingerprint: string | null;
+  lastDecisionFingerprint: string | null;
+  learningSummary: string;
+}
+
+export interface LivingAIEpisode {
+  id: string;
+  cycle: number;
+  goalId: string;
+  trigger: 'timer' | 'manual' | 'interaction';
+  cognitiveMode: LivingAICognitiveMode;
+  observationFingerprint: string;
+  observationChanged: boolean;
+  decision: 'idle' | 'acted' | 'needs_user';
+  situationAssessment: string;
+  strategy: string;
+  hypothesis: string;
+  action: string;
+  outcome: string;
+  evidence: string[];
+  lesson: string;
+  confidence: number;
+  progressBefore: number;
+  progressAfter: number;
+  repeatedDecision: boolean;
+  createdAt: number;
+}
+
+export interface LivingAIState {
+  version: 2;
+  identity: LivingAIIdentity;
+  config: LivingAIConfig;
+  phase: LivingAIPhase;
+  drives: LivingAIDrive[];
+  goals: LivingAIGoal[];
+  cognition: LivingAICognition;
+  episodes: LivingAIEpisode[];
+  cycleCount: number;
+  lastCycleAt: number | null;
+  nextCycleAt: number | null;
+  lastInteractionAt: number | null;
+  lastObservation: string;
+  lastReflection: string;
+  lastAction: string;
+  lastError: string | null;
+  updatedAt: number;
+}
+
+export interface LivingAIStatus {
+  running: boolean;
+  inCycle: boolean;
+  state: LivingAIState;
 }
 
 /** 近期对话记录，供任务 Agent 了解上下文 */
@@ -363,11 +596,11 @@ export interface ChatContextMessage {
   content: string;
 }
 
+// ExecutionMode removed - approval system deprecated
 export interface CreateTaskRequest {
   domain: TaskDomain;
   title: string;
   description: string;
-  mode?: ExecutionMode;
   /** 可选：任务内 llm.generate 等工具使用的 LLM 配置 */
   llmConfig?: TaskLLMConfig;
   /** 为 true 且提供 llmConfig 时，用 LLM 根据描述生成步骤（否则用模板） */
@@ -393,6 +626,22 @@ export type LLMModality = 'chat' | 'text' | 'video' | 'image' | 'image_edit' | '
 export interface ModalityModelSelection {
   providerId: string;
   modelId: string;
+}
+
+/** The official DeepSeek API paths identify different wire protocols. */
+export function deepSeekApiType(baseUrl: unknown): 'openai' | 'anthropic' | undefined {
+  if (typeof baseUrl !== 'string') return;
+  try {
+    const url = new URL(baseUrl);
+    if (url.origin !== 'https://api.deepseek.com' || url.username || url.password || url.search || url.hash) return;
+    if (/^\/anthropic(?:\/v1)?\/?$/.test(url.pathname)) return 'anthropic';
+    if (/^\/(?:v1)?\/?$/.test(url.pathname)) return 'openai';
+  } catch { /* Custom endpoints use their explicitly configured protocol. */ }
+}
+
+export function resolveLlmApiType(providerId: string, baseUrl: unknown, apiType?: unknown): 'openai' | 'anthropic' {
+  return deepSeekApiType(baseUrl)
+    ?? (apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic') ? 'anthropic' : 'openai');
 }
 
 /** 单个大模型提供商配置（API Key 由前端安全存储，不参与序列化到后端） */

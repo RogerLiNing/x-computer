@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, isQuotaError } from '@/utils/api';
-import { useConnectionStore } from '@/store/connectionStore';
-import { useTaskStore } from '@/store/taskStore';
-import { useLLMConfigStore } from '@/store/llmConfigStore';
+import { api } from '@/utils/api';
+
+
+
 
 interface TerminalLine {
   type: 'input' | 'output' | 'error' | 'system';
@@ -64,8 +64,7 @@ export function TerminalApp({ windowId }: Props) {
   const [currentDir, setCurrentDir] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const addTask = useTaskStore((s) => s.addTask);
-  const addNotification = useConnectionStore((s) => s.addNotification);
+
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -112,58 +111,9 @@ export function TerminalApp({ windowId }: Props) {
         return;
       }
 
-      // AI command
+      // AI command (disabled)
       if (command === 'ai') {
-        if (args.length === 0) {
-          addLines([{ type: 'error', content: '用法: ai <任务描述>' }]);
-        } else {
-          const desc = args.join(' ');
-          addLines([
-            { type: 'system', content: `[AI] 正在提交任务: "${desc}"` },
-          ]);
-          try {
-            const llmState = useLLMConfigStore.getState();
-            const cfg = llmState.llmConfig;
-            const sel = cfg?.defaultByModality?.chat;
-            const providerId = sel?.providerId ?? cfg?.providers?.[0]?.id;
-            const provider = cfg?.providers?.find((p: { id: string }) => p.id === providerId);
-            const taskLlmConfig =
-              providerId && provider
-                ? {
-                    providerId,
-                    modelId: sel?.modelId ?? '__custom__',
-                    baseUrl: provider?.baseUrl ?? undefined,
-                    apiKey: llmState.getProviderApiKey(providerId) || undefined,
-                  }
-                : undefined;
-            const task = await api.createTask({
-              domain: 'agent',
-              title: desc.slice(0, 50),
-              description: desc,
-              llmConfig: taskLlmConfig,
-            });
-            addLines([
-              { type: 'system', content: `[AI] 任务已创建: ${(task as any).id}` },
-              { type: 'system', content: `[AI] 状态: ${(task as any).status}` },
-            ]);
-            addNotification({
-              type: 'info',
-              title: 'AI 任务已提交',
-              message: desc.slice(0, 60),
-              relatedTaskId: (task as any).id,
-            });
-          } catch (err: any) {
-            const msg = isQuotaError(err) ? t('errors.quotaExceededFriendly') : err?.message ?? String(err);
-            addLines([{ type: 'error', content: `[AI] 提交失败: ${msg}` }]);
-            if (isQuotaError(err)) {
-              addNotification({
-                type: 'error',
-                title: t('errors.quotaExceeded'),
-                message: `${t('errors.quotaExceededFriendly')} ${t('errors.quotaUpgradeHint')}`,
-              });
-            }
-          }
-        }
+        addLines([{ type: 'error', content: 'AI 命令暂不可用' }]);
         setInput('');
         return;
       }
@@ -202,7 +152,7 @@ export function TerminalApp({ windowId }: Props) {
         setRunning(false);
       }
     },
-    [addLines, addNotification, t],
+    [addLines, t],
   );
 
   // 计算公共前缀

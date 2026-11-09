@@ -86,6 +86,14 @@ export function createWebhookTriggerRouter(
       return;
     }
 
+    // Providers retry deliveries; the same delivery id (or an Idempotency-Key) never starts a second task.
+    const deliveryKey = deliveryId ?? (typeof req.headers['idempotency-key'] === 'string' ? req.headers['idempotency-key'] : null);
+    const fingerprint = deliveryKey && /^[\x21-\x7e]{1,128}$/.test(deliveryKey) ? `webhook:${webhook.id}:${deliveryKey}` : null;
+    if (fingerprint && await db.hasHandledEvent(webhook.userId, fingerprint)) {
+      res.status(200).json({ received: true, duplicate: true, event });
+      return;
+    }
+
     serverLogger.info('webhook-trigger', `Webhook 触发: id=${webhook.id} event=${event} ip=${ip}`);
 
     // 处理事件
@@ -113,6 +121,8 @@ export function createWebhookTriggerRouter(
       responseStatus = 500;
       responseBody = JSON.stringify({ error: 'Internal error', detail: errMsg });
     }
+
+    if (fingerprint && responseStatus === 200) await db.insertHandledEvent(webhook.userId, fingerprint).catch(() => {});
 
     // 记录日志
     await svc.logWebhookCall({

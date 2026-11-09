@@ -6,13 +6,17 @@ import { useState, useEffect } from 'react';
 import { Wrench, ChevronDown, ChevronRight, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { useConnectionStore } from '@/store/connectionStore';
 import type { ToolCallRecord } from './types';
+import { ActionCard, extractActionCard } from './ActionCard';
 
 interface ToolCallBlockProps {
   tc: ToolCallRecord;
+  /** Receives the message of a clicked card action; the caller puts it into the composer. */
+  onAction?: (message: string) => void;
 }
 
-export function ToolCallBlock({ tc }: ToolCallBlockProps) {
+export function ToolCallBlock({ tc, onAction }: ToolCallBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const card = tc.status === 'completed' ? extractActionCard(tc.output) : undefined;
   const tools = useConnectionStore((s) => s.tools);
   const fetchTools = useConnectionStore((s) => s.fetchTools);
 
@@ -51,27 +55,27 @@ export function ToolCallBlock({ tc }: ToolCallBlockProps) {
       >
         {hasDetail ? (
           expanded ? (
-            <ChevronDown size={10} className="text-desktop-muted shrink-0" />
+            <ChevronDown size={10} className="text-gray-400 shrink-0" />
           ) : (
-            <ChevronRight size={10} className="text-desktop-muted shrink-0" />
+            <ChevronRight size={10} className="text-gray-400 shrink-0" />
           )
         ) : (
           <span className="w-[10px]" />
         )}
-        <Wrench size={10} className="text-desktop-muted shrink-0" />
+        <Wrench size={10} className="text-gray-400 shrink-0" />
         {statusIcon}
-        <span className="text-[10px] text-desktop-muted truncate flex-1">
+        <span className="text-[10px] text-gray-400 truncate flex-1">
           {toolDisplayName}
           {tc.duration != null && tc.status !== 'running' && (
-            <span className="text-desktop-muted/60 ml-1">({tc.duration}ms)</span>
+            <span className="text-gray-400/60 ml-1">({tc.duration}ms)</span>
           )}
         </span>
       </button>
       {expanded && hasDetail && (
-        <div className="px-2.5 py-1.5 text-[10px] text-desktop-muted/80 border-t border-white/5 space-y-1 max-h-32 overflow-auto">
+        <div className="px-2.5 py-1.5 text-[10px] text-gray-400/80 border-t border-white/5 space-y-1 max-h-32 overflow-auto">
           {tc.input && Object.keys(tc.input).length > 0 && (
             <div>
-              <span className="text-desktop-muted/60">输入:</span>
+              <span className="text-gray-400/60">输入:</span>
               <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono">
                 {JSON.stringify(tc.input, null, 2)}
               </pre>
@@ -79,12 +83,17 @@ export function ToolCallBlock({ tc }: ToolCallBlockProps) {
           )}
           {outputStr && (
             <div>
-              <span className="text-desktop-muted/60">{tc.error ? '错误:' : '输出:'}</span>
-              <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-desktop-text/90">
+              <span className="text-gray-400/60">{tc.error ? '错误:' : '输出:'}</span>
+              <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-gray-200/90">
                 {outputStr.length > 500 ? outputStr.slice(0, 500) + '...' : outputStr}
               </pre>
             </div>
           )}
+                </div>
+      )}
+      {card && (
+        <div className="px-2.5 pb-2.5">
+          <ActionCard card={card} onAction={onAction} />
         </div>
       )}
     </div>

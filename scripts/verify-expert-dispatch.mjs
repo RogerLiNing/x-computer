@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';import path from 'node:path';
+import {SqliteAppDatabase,SqliteDatabaseAdapter} from '../server/dist/server/src/db/database.js';
+import {UserSandboxManager} from '../server/dist/server/src/tooling/UserSandboxManager.js';
+import {AgentOrchestrator} from '../server/dist/server/src/orchestrator/AgentOrchestrator.js';
+import {AuditLogger} from '../server/dist/server/src/observability/AuditLogger.js';
+import {ChatRunService} from '../server/dist/server/src/chat/ChatRunService.js';
+import {resolveLLMCredentials} from '../server/dist/server/src/llm/credentialResolver.js';
+import {SubscriptionService} from '../server/dist/server/src/subscription/SubscriptionService.js';
+const root='/Users/rogerlee/.codex/runtime/x-computer-acceptance-20261101',user='acceptance-20261101';
+assert.equal(process.env.X_COMPUTER_CONFIG_PATH,path.join(root,'config.private.json'));
+assert.equal(JSON.parse(await readFile(process.env.X_COMPUTER_CONFIG_PATH,'utf8')).database.type,'sqlite');
+const sqlite=new SqliteAppDatabase(root),db=new SqliteDatabaseAdapter(sqlite);
+try{
+ const subscriptions=new SubscriptionService(db);const features=await subscriptions.getPlanFeatures(user);assert.ok(!features.includes('advanced_tools'));
+ const workspaces=new UserSandboxManager(root),sandbox=(await workspaces.getForUser(user)).sandboxFS;
+ const config=await resolveLLMCredentials(user,db,subscriptions);assert.ok(config?.apiKey);
+ const nonce=randomUUID().slice(0,8),agentId=`independent-${nonce}`,file=`文档/专家交付-${nonce}.md`;
+ const agents=JSON.parse(await db.getConfig(user,'x_agents')??'[]');agents.push({id:agentId,name:'独立写作专家',systemPrompt:'只按交办生成文件并实际交付，不操作记忆，不虚构结果。',toolNames:['file.write','file.present'],createdAt:Date.now(),updatedAt:Date.now()});await db.setConfig(user,'x_agents',JSON.stringify(agents));
+ const orchestrator=new AgentOrchestrator(new AuditLogger(),sandbox,workspaces,db,undefined,undefined,undefined,subscriptions);
+ orchestrator.setGetLLMConfigForAgent(async()=>config);
+ const original=orchestrator.runChatAgentLoop.bind(orchestrator);let entered;const waiting=new Promise(resolve=>entered=resolve);
+ orchestrator.runChatAgentLoop=async input=>{if(input.agentId===agentId){entered();await new Promise((_resolve,reject)=>input.signal.addEventListener('abort',()=>reject(new DOMException('stopped','AbortError')),{once:true}));}return original(input);};
+ const make=()=>new ChatRunService({db,orchestrator,getSandboxFS:async()=>sandbox,getLLMConfig:async()=>config});
+ let runs=make();orchestrator.setExpertDispatchRunner(request=>runs.expertDispatch(request));
+ const session=await db.createSession(user,'后台专家停止恢复验收','normal_chat');
+ const intent=`只调用一次 x.dispatch_agent，agent_id 为 ${agentId}，goal 为“用 file.write 创建 ${file}，内容为一篇中文短文，标题为‘独立专家验收’，正文说明春天播种的原因，随后用 file.present 交付该文件”。收到接单回执后告知已交办并结束本轮。不要等待专家，不要自行写文件或查询进度。`;
+ const parent=await runs.accept({userId:user,sessionId:session.id,requestId:nonce,messages:[{role:'user',content:intent}],userMessage:{content:intent},providerId:config.providerId,modelId:config.modelId,systemPrompt:'按用户指令交给专家，只调用一次后台交办工具。',allowedToolNames:['x.dispatch_agent','file.write','file.present'],toolLoadingMode:'all'});
+ await runs.launch(user,parent.id);
+ const parentResult=await runs.get(user,parent.id);assert.equal(parentResult.status,'completed');assert.equal(parentResult.toolCalls.length,1);
+ const childId=parentResult.toolCalls[0].output.runId;assert.ok(childId);
+ await waiting;
+ await runs.stop(user,childId);await runs.wait(childId);assert.equal((await runs.get(user,childId)).status,'paused');
+ orchestrator.runChatAgentLoop=original;runs=make();orchestrator.setExpertDispatchRunner(request=>runs.expertDispatch(request));
+ await runs.resume(user,childId);await runs.wait(childId);const child=await runs.get(user,childId);assert.equal(child.status,'completed');
+ const expected=child.expert?.isolatedWorkspace?`agents/${agentId}/runs/${childId}/${file}`:`agents/${agentId}/${file}`;assert.ok(child.artifacts.some(item=>item.path===expected));const body=await sandbox.read(expected);assert.ok(body.includes('独立专家验收'));
+ const follow=`请只调用一次 x.get_agent_run，run_id 为 ${childId}，查看专家实际结果并交付已有文件，不创建任何文件。`;
+ const summary=await runs.accept({userId:user,sessionId:session.id,requestId:`summary-${nonce}`,messages:[{role:'user',content:follow}],userMessage:{content:follow},providerId:config.providerId,modelId:config.modelId,systemPrompt:'查询专家真实结果，不虚构成果。',allowedToolNames:['x.get_agent_run'],toolLoadingMode:'all'});
+ await runs.launch(user,summary.id);const result=await runs.get(user,summary.id);assert.equal(result.status,'completed');assert.ok(result.artifacts.some(item=>item.path===expected));
+ for(const id of [parent.id,childId,summary.id]){const row=await db.queryOne('SELECT metadata_json FROM tasks WHERE id=?',[id]);assert.ok(!row.metadata_json.includes(config.apiKey));}
+ const report={success:true,realModel:true,features,parentRunId:parent.id,expertRunId:childId,summaryRunId:summary.id,sessionId:session.id,artifact:expected,childStopped:true,reloadedServiceBeforeResume:true,stoppedBeforeFirstExpertModelCall:true,resultReturnedToMainAssistant:true,credentialsNotPersisted:true};
+ const out=process.argv[2]??'/Users/rogerlee/.codex/outputs/x-computer-expert-dispatch-20261102';await mkdir(out,{recursive:true});await writeFile(path.join(out,'real-model.json'),JSON.stringify(report,null,2));process.stdout.write(JSON.stringify(report)+'\n');
+}finally{sqlite.close();}

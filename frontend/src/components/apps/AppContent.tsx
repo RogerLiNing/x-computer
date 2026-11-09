@@ -1,43 +1,7 @@
+import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from 'react';
 import type { AppIdentifier, BuiltinAppId } from '@shared/index';
-import { resolveBuiltinId, isMiniApp } from '@/appRegistry';
-import { FileManagerApp } from './FileManagerApp';
-import { TerminalApp } from './TerminalApp';
-import { BrowserApp } from './BrowserApp';
-import { ChatApp } from './ChatApp';
-import { CodeEditorApp } from './CodeEditorApp';
-import { TextEditorApp } from './TextEditorApp';
-import { SpreadsheetApp } from './SpreadsheetApp';
-import { EmailApp } from './EmailApp';
-import { CalendarApp } from './CalendarApp';
-import { SettingsApp } from './SettingsApp';
-import { TaskTimelineApp } from './TaskTimelineApp';
-import { ImageViewerApp } from './ImageViewerApp';
-import { OfficeViewerApp } from './OfficeViewerApp';
-import { MediaViewerApp } from './MediaViewerApp';
-import { XApp } from './XApp';
-import { AgentManagerApp } from './AgentManagerApp';
-import { XBoardApp } from './XBoardApp';
-import { SubscriptionApp } from './SubscriptionApp';
-import { AdminApp } from './AdminApp';
-import { CanvasApp } from './CanvasApp';
-import { DiffApp } from './DiffApp';
-import { SystemMonitorApp } from './SystemMonitorApp';
-import { QuickNotesApp } from './QuickNotesApp';
-import { PomodoroTimerApp } from './PomodoroTimerApp';
-import { WorldClockApp } from './WorldClockApp';
-import { BookmarkManagerApp } from './BookmarkManagerApp';
-import { ClipboardManagerApp } from './ClipboardManagerApp';
-import { HabitTrackerApp } from './HabitTrackerApp';
-import { PasswordGeneratorApp } from './PasswordGeneratorApp';
-import { UnitConverterApp } from './UnitConverterApp';
-import { CalculatorApp } from './CalculatorApp';
-import { ColorPickerApp } from './ColorPickerApp';
-import { DiceRollerApp } from './DiceRollerApp';
-import DecisionJournalApp from './DecisionJournalApp';
-import DelegationTrackerApp from './DelegationTrackerApp';
-import WeeklyPlannerApp from './WeeklyPlannerApp';
-import ChangelogApp from './ChangelogApp';
-import ReadingListApp from './ReadingListApp';
+import { isMiniApp, resolveBuiltinId } from '@/appRegistry';
+import { APP_LOADERS, type AppComponentProps } from './appLoaders';
 import { MiniAppView } from './MiniAppView';
 
 interface Props {
@@ -46,103 +10,42 @@ interface Props {
   metadata?: Record<string, unknown>;
 }
 
-function BuiltinAppContent({ builtinId, windowId, metadata }: { builtinId: BuiltinAppId; windowId: string; metadata?: Record<string, unknown> }) {
-  switch (builtinId) {
-    case 'file-manager':
-      return <FileManagerApp windowId={windowId} metadata={metadata} />;
-    case 'terminal':
-      return <TerminalApp windowId={windowId} />;
-    case 'browser':
-      return <BrowserApp windowId={windowId} metadata={metadata} />;
-    case 'chat':
-      return <ChatApp windowId={windowId} />;
-    case 'x':
-      return <XApp />;
-    case 'code-editor':
-      return <CodeEditorApp windowId={windowId} metadata={metadata} />;
-    case 'text-editor':
-      return <TextEditorApp windowId={windowId} metadata={metadata} />;
-    case 'spreadsheet':
-      return <SpreadsheetApp windowId={windowId} />;
-    case 'email':
-      return <EmailApp windowId={windowId} />;
-    case 'calendar':
-      return <CalendarApp windowId={windowId} />;
-    case 'settings':
-      return <SettingsApp windowId={windowId} />;
-    case 'task-timeline':
-      return <TaskTimelineApp windowId={windowId} />;
-    case 'agent-manager':
-      return <AgentManagerApp windowId={windowId} />;
-    case 'x-board':
-      return <XBoardApp windowId={windowId} />;
-    case 'subscription':
-      return <SubscriptionApp />;
-    case 'admin':
-      return <AdminApp />;
-    case 'canvas':
-      return <CanvasApp windowId={windowId} />;
-    case 'diff':
-      return <DiffApp windowId={windowId} />;
-    case 'system-monitor':
-      return <SystemMonitorApp windowId={windowId} />;
-    case 'quick-notes':
-      return <QuickNotesApp windowId={windowId} />;
-    case 'pomodoro':
-      return <PomodoroTimerApp windowId={windowId} />;
-    case 'world-clock':
-      return <WorldClockApp windowId={windowId} />;
-    case 'bookmarks':
-      return <BookmarkManagerApp windowId={windowId} />;
-    case 'dice-roller':
-      return <DiceRollerApp windowId={windowId} />;
-    case 'decision-journal':
-      return <DecisionJournalApp windowId={windowId} />;
-    case 'delegation-tracker':
-      return <DelegationTrackerApp windowId={windowId} />;
-    case 'weekly-planner':
-      return <WeeklyPlannerApp windowId={windowId} />;
-    case 'color-picker':
-      return <ColorPickerApp windowId={windowId} />;
-    case 'calculator':
-      return <CalculatorApp windowId={windowId} />;
-    case 'unit-converter':
-      return <UnitConverterApp windowId={windowId} />;
-    case 'password-generator':
-      return <PasswordGeneratorApp windowId={windowId} />;
-    case 'habit-tracker':
-      return <HabitTrackerApp windowId={windowId} />;
-    case 'clipboard-manager':
-      return <ClipboardManagerApp windowId={windowId} />;
-    case 'changelog':
-      return <ChangelogApp windowId={windowId} />;
-    case 'reading-list':
-      return <ReadingListApp windowId={windowId} />;
-    case 'image-viewer':
-      return <ImageViewerApp windowId={windowId} metadata={metadata} />;
-    case 'office-viewer':
-      return <OfficeViewerApp windowId={windowId} metadata={metadata} />;
-    case 'media-viewer':
-      return <MediaViewerApp windowId={windowId} metadata={metadata} />;
-    default:
-      return (
-        <div className="flex items-center justify-center h-full text-desktop-muted text-sm">
-          未知应用: {builtinId}
-        </div>
-      );
-  }
+const cache = new Map<BuiltinAppId, LazyExoticComponent<ComponentType<AppComponentProps>>>();
+
+function getComponent(id: BuiltinAppId): LazyExoticComponent<ComponentType<AppComponentProps>> {
+  const cached = cache.get(id);
+  if (cached) return cached;
+  const component = lazy(APP_LOADERS[id]);
+  cache.set(id, component);
+  return component;
+}
+
+function AppLoading() {
+  return (
+    <div className="flex h-full items-center justify-center bg-desktop-window text-desktop-muted">
+      <div className="flex items-center gap-2 text-xs">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-desktop-highlight" />
+        正在按需加载应用…
+      </div>
+    </div>
+  );
 }
 
 export function AppContent({ appId, windowId, metadata }: Props) {
   const builtinId = resolveBuiltinId(appId);
   if (builtinId) {
-    return <BuiltinAppContent builtinId={builtinId} windowId={windowId} metadata={metadata} />;
+    const Component = getComponent(builtinId);
+    return (
+      <Suspense fallback={<AppLoading />}>
+        <Component windowId={windowId} metadata={metadata} />
+      </Suspense>
+    );
   }
   if (isMiniApp(appId)) {
     return <MiniAppView appId={appId} />;
   }
   return (
-    <div className="flex items-center justify-center h-full text-desktop-muted text-sm">
+    <div className="flex h-full items-center justify-center text-sm text-desktop-muted">
       未知应用: {appId}
     </div>
   );

@@ -1,8 +1,8 @@
 /**
- * Board、通知（邮件/WhatsApp/Telegram/Discord/Slack/QQ）、MCP 配置管理、
+ * 通知（邮件/WhatsApp/Telegram/Discord/Slack/QQ）、MCP 配置管理、
  * MiniApp 后端 KV/队列/推送 工具。
  *
- * 从 ToolExecutor.ts 提取（lines 2672–3756），减少主文件体积。
+ * 从 ToolExecutor.ts 提取，减少主文件体积。
  */
 
 import { v4 as uuid } from 'uuid';
@@ -13,16 +13,18 @@ import type { McpServerConfig } from '../../mcp/types.js';
 
 // ── 通知服务 ───────────────────────────────────────────────────────────────────
 
-import { sendEmail, parseSmtpConfigExport, clearEmailTransporterCache, fetchEmails, parseImapConfig } from '../../email/emailService.js';
-import { sendWhatsAppMessage, parseWhatsAppConfig } from '../../whatsapp/whatsappService.js';
-import { sendTelegramMessage, parseTelegramConfig } from '../../telegram/telegramService.js';
-import { sendDiscordMessage, parseDiscordConfig } from '../../discord/discordService.js';
-import { sendSlackMessage, parseSlackConfig } from '../../slack/slackService.js';
-import { sendQQMessage, parseQQConfig } from '../../qq/qqService.js';
+import { sendEmail, getEmailSendIdentity, parseSmtpConfigExport, fetchEmails, parseImapConfig } from '../../email/emailService.js';
+import { sendWhatsAppMessage, parseWhatsAppConfig, getWhatsAppConnection } from '../../whatsapp/whatsappService.js';
+import { sendTelegramMessage, parseTelegramConfig, getTelegramConnection } from '../../telegram/telegramService.js';
+import { sendDiscordMessage, parseDiscordConfig, getDiscordConnection } from '../../discord/discordService.js';
+import { sendSlackMessage, parseSlackConfig, getSlackConnection } from '../../slack/slackService.js';
+import { sendQQMessage, parseQQConfig, getQQConnection } from '../../qq/qqService.js';
 import { normalizeMcpConfig } from '../../mcp/loadAndRegister.js';
 import { broadcastToAppChannel } from '../../wsBroadcast.js';
-import { markRead as markXProactiveRead } from '../../x/XProactiveMessages.js';
+import { markReadWithHistory } from '../../x/XProactiveMessages.js';
 import { getConfigValue } from './utils.js';
+import { requireSendApproval, sendWithReceipt, SendExecutionDeniedError } from '../../tooling/sendApproval.js';
+import { channelProcessedKey } from '../../messaging/channelIdentity.js';
 
 // ── Config key constants ────────────────────────────────────────────────────────
 
@@ -31,69 +33,16 @@ const EMAIL_IMAP_CONFIG_KEY = 'email_imap_config';
 const EMAIL_FROM_FILTER_KEY = 'email_from_filter';
 const MCP_CONFIG_KEY = 'mcp_config';
 
+const SEND_CONFIRMATION = '参数齐全时直接调用本工具；系统会先展示收件人、发送内容并暂停，用户确认后才会发送。不要先用 x.ask_user 重复询问是否发送。';
+
 // ── Tool Definitions ──────────────────────────────────────────────────────────
-
-export const boardListDef: ToolDefinition = {
-  name: 'x.board_list',
-  displayName: '查看看板',
-  description: '列出当前看板中的所有任务项，按状态分栏（todo/in_progress/pending/done）。可用于了解当前工作安排、决定下一步。',
-  domain: ['chat', 'agent'],
-  riskLevel: 'low',
-  parameters: [
-    { name: 'status', type: 'string', description: '筛选状态（todo/in_progress/pending/done），不传返回全部', required: false },
-  ],
-  requiredPermissions: [],
-};
-
-export const boardAddDef: ToolDefinition = {
-  name: 'x.board_add',
-  displayName: '添加看板项',
-  description: '向看板添加新任务项。status: todo（待做）、in_progress（进行中）、pending（等待/阻塞）、done（已完成）。priority: low/medium/high。',
-  domain: ['chat', 'agent'],
-  riskLevel: 'low',
-  parameters: [
-    { name: 'title', type: 'string', description: '任务标题', required: true },
-    { name: 'description', type: 'string', description: '任务描述', required: false },
-    { name: 'status', type: 'string', description: '初始状态，默认 todo', required: false },
-    { name: 'priority', type: 'string', description: '优先级，默认 medium', required: false },
-  ],
-  requiredPermissions: [],
-};
-
-export const boardUpdateDef: ToolDefinition = {
-  name: 'x.board_update',
-  displayName: '更新看板项',
-  description: '更新看板项的状态、标题、描述或优先级。常用于把任务从 todo 移到 in_progress，或标记为 done。',
-  domain: ['chat', 'agent'],
-  riskLevel: 'low',
-  parameters: [
-    { name: 'id', type: 'string', description: '看板项 ID', required: true },
-    { name: 'title', type: 'string', description: '新标题', required: false },
-    { name: 'description', type: 'string', description: '新描述', required: false },
-    { name: 'status', type: 'string', description: '新状态（todo/in_progress/pending/done）', required: false },
-    { name: 'priority', type: 'string', description: '新优先级（low/medium/high）', required: false },
-  ],
-  requiredPermissions: [],
-};
-
-export const boardRemoveDef: ToolDefinition = {
-  name: 'x.board_remove',
-  displayName: '移除看板项',
-  description: '从看板中删除一个任务项。',
-  domain: ['chat', 'agent'],
-  riskLevel: 'low',
-  parameters: [
-    { name: 'id', type: 'string', description: '看板项 ID', required: true },
-  ],
-  requiredPermissions: [],
-};
 
 export const sendEmailDef: ToolDefinition = {
   name: 'x.send_email',
   displayName: '发送邮件',
-  description: '通过邮件触达用户。需先配置 SMTP（x.set_email_config 或 设置 → 通知/邮件）。to 不填时默认发给当前登录用户；subject、body 必填。',
+  description: SEND_CONFIRMATION + '通过邮件触达用户。需先配置 SMTP（x.set_email_config 或 设置 → 通知/邮件）。to 不填时默认发给当前登录用户；subject、body 必填。',
   domain: ['chat', 'agent'],
-  riskLevel: 'low',
+  riskLevel: 'high',
   parameters: [
     { name: 'to', type: 'string', description: '收件人邮箱；不填时发给当前登录用户', required: false },
     { name: 'subject', type: 'string', description: '邮件主题', required: true },
@@ -105,9 +54,9 @@ export const sendEmailDef: ToolDefinition = {
 export const sendWhatsAppDef: ToolDefinition = {
   name: 'x.send_whatsapp',
   displayName: '发送 WhatsApp',
-  description: '通过 WhatsApp 发送消息。需先在 设置 → 通知/WhatsApp 中扫码登录并配置白名单。to 为收件人号码（E.164 格式，如 +8613800138000 或 13800138000）。',
+  description: SEND_CONFIRMATION + '通过 WhatsApp 发送消息。需先在 设置 → 通知/WhatsApp 中扫码登录并配置白名单。to 为收件人号码（E.164 格式，如 +8613800138000 或 13800138000）。',
   domain: ['chat', 'agent'],
-  riskLevel: 'low',
+  riskLevel: 'high',
   parameters: [
     { name: 'to', type: 'string', description: '收件人号码，E.164 格式（如 +8613800138000）', required: true },
     { name: 'message', type: 'string', description: '消息内容', required: true },
@@ -118,9 +67,9 @@ export const sendWhatsAppDef: ToolDefinition = {
 export const sendTelegramDef: ToolDefinition = {
   name: 'x.send_telegram',
   displayName: '发送 Telegram',
-  description: '通过 Telegram Bot 发送消息。需先在 设置 → 通知/Telegram 中配置 Bot Token 并连接。chatId 为接收者的 Chat ID。',
+  description: SEND_CONFIRMATION + '通过 Telegram Bot 发送消息。需先在 设置 → 通知/Telegram 中配置 Bot Token 并连接。chatId 为接收者的 Chat ID。',
   domain: ['chat', 'agent'],
-  riskLevel: 'low',
+  riskLevel: 'high',
   parameters: [
     { name: 'chatId', type: 'string', description: '目标 Chat ID', required: true },
     { name: 'message', type: 'string', description: '消息内容', required: true },
@@ -131,9 +80,9 @@ export const sendTelegramDef: ToolDefinition = {
 export const sendDiscordDef: ToolDefinition = {
   name: 'x.send_discord',
   displayName: '发送 Discord',
-  description: '通过 Discord Bot 发送消息。需先在 设置 → 通知/Discord 中配置 Bot Token 并连接。channelId 为目标频道或 DM 的 Channel ID。',
+  description: SEND_CONFIRMATION + '通过 Discord Bot 发送消息。需先在 设置 → 通知/Discord 中配置 Bot Token 并连接。channelId 为目标频道或 DM 的 Channel ID。',
   domain: ['chat', 'agent'],
-  riskLevel: 'low',
+  riskLevel: 'high',
   parameters: [
     { name: 'channelId', type: 'string', description: '目标 Channel ID', required: true },
     { name: 'message', type: 'string', description: '消息内容', required: true },
@@ -144,9 +93,9 @@ export const sendDiscordDef: ToolDefinition = {
 export const sendSlackDef: ToolDefinition = {
   name: 'x.send_slack',
   displayName: '发送 Slack',
-  description: '通过 Slack Bot 发送消息。需先在 设置 → 通知/Slack 中配置 Token 并连接。channelId 为频道或 DM 的 Channel ID，可选 threadTs 进行线程回复。',
+  description: SEND_CONFIRMATION + '通过 Slack Bot 发送消息。需先在 设置 → 通知/Slack 中配置 Token 并连接。channelId 为频道或 DM 的 Channel ID，可选 threadTs 进行线程回复。',
   domain: ['chat', 'agent'],
-  riskLevel: 'low',
+  riskLevel: 'high',
   parameters: [
     { name: 'channelId', type: 'string', description: '目标 Channel ID', required: true },
     { name: 'message', type: 'string', description: '消息内容', required: true },
@@ -158,9 +107,9 @@ export const sendSlackDef: ToolDefinition = {
 export const sendQQDef: ToolDefinition = {
   name: 'x.send_qq',
   displayName: '发送 QQ 消息',
-  description: '通过 QQ 官方 Bot 发送消息。需先在 设置 → 通知/QQ 中配置 AppID+Secret 并连接。targetType 为 private/group/guild 或 self（发给自己）。targetId 为对应的用户ID/群ID/频道ID。使用 self 时会自动使用用户已记录的 OpenID（用户首次私聊时会自动记录）。',
+  description: SEND_CONFIRMATION + '通过 QQ 官方 Bot 发送消息。需先在 设置 → 通知/QQ 中配置 AppID+Secret 并连接。targetType 为 private/group/guild 或 self（发给自己）。targetId 为对应的用户ID/群ID/频道ID。使用 self 时会自动使用用户已记录的 OpenID（用户首次私聊时会自动记录）。',
   domain: ['chat', 'agent'],
-  riskLevel: 'low',
+  riskLevel: 'high',
   parameters: [
     { name: 'targetType', type: 'string', description: '消息目标类型：private（私聊）、group（群聊）、guild（频道）或 self（发给自己）', required: true },
     { name: 'targetId', type: 'string', description: '目标 ID（用户 openid、群 openid 或频道 channel_id）。当 targetType 为 self 时此参数可选', required: false },
@@ -458,68 +407,6 @@ export function createBoardHandlers(ctx: {
 }) {
   const { resolveDB, resolveFS } = ctx;
 
-  // ── Board ──────────────────────────────────────────────────────────────────
-
-  const VALID_BOARD_STATUSES = ['todo', 'in_progress', 'pending', 'done'];
-  const VALID_BOARD_PRIORITIES = ['low', 'medium', 'high'];
-
-  const boardListHandler = async (_input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-    const db = resolveDB();
-    if (!db) throw new Error('数据库不可用');
-    const items = await Promise.resolve(db.listBoardItems(userId));
-    const statusFilter =
-      typeof _input.status === 'string' && VALID_BOARD_STATUSES.includes(_input.status) ? _input.status : null;
-    const filtered = statusFilter ? items.filter((i) => i.status === statusFilter) : items;
-    return { items: filtered, total: items.length };
-  };
-
-  const boardAddHandler = async (input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-    const db = resolveDB();
-    if (!db) throw new Error('数据库不可用');
-    const title = String(input.title ?? '').trim();
-    if (!title) throw new Error('title 必填');
-    const status = VALID_BOARD_STATUSES.includes(String(input.status)) ? String(input.status) : 'todo';
-    const priority = VALID_BOARD_PRIORITIES.includes(String(input.priority)) ? String(input.priority) : 'medium';
-    const id = uuid();
-    await Promise.resolve(db.insertBoardItem({ id, user_id: userId, title, description: input.description ? String(input.description).trim() : undefined, status, priority }));
-    return { ok: true, id, title, status, priority };
-  };
-
-  const boardUpdateHandler = async (input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-    const db = resolveDB();
-    if (!db) throw new Error('数据库不可用');
-    const id = String(input.id ?? '').trim();
-    if (!id) throw new Error('id 必填');
-    const existing = await Promise.resolve(db.getBoardItem(id));
-    if (!existing || existing.user_id !== userId) throw new Error('未找到该看板项');
-    const fields: Record<string, unknown> = {};
-    if (input.title !== undefined) fields.title = String(input.title).trim();
-    if (input.description !== undefined) fields.description = String(input.description).trim();
-    if (input.status !== undefined && VALID_BOARD_STATUSES.includes(String(input.status))) fields.status = String(input.status);
-    if (input.priority !== undefined && VALID_BOARD_PRIORITIES.includes(String(input.priority))) fields.priority = String(input.priority);
-    await Promise.resolve(db.updateBoardItem(id, fields));
-    return { ok: true, id, updated: fields };
-  };
-
-  const boardRemoveHandler = async (input: any, ctx: any): Promise<unknown> => {
-    const userId = ctx?.userId;
-    if (!userId || userId === 'anonymous') throw new Error('需要已登录用户');
-    const db = resolveDB();
-    if (!db) throw new Error('数据库不可用');
-    const id = String(input.id ?? '').trim();
-    if (!id) throw new Error('id 必填');
-    const existing = await Promise.resolve(db.getBoardItem(id));
-    if (!existing || existing.user_id !== userId) throw new Error('未找到该看板项');
-    await Promise.resolve(db.deleteBoardItem(id));
-    return { ok: true, removed: id };
-  };
-
   // ── Notification helpers ────────────────────────────────────────────────────
 
 
@@ -537,9 +424,18 @@ export function createBoardHandlers(ctx: {
     const body = String(input.body ?? '').trim();
     if (!subject || !body) throw new Error('x.send_email: subject 与 body 必填');
     if (!to) throw new Error('x.send_email: 未指定收件人且当前用户无绑定邮箱，请传入 to 参数');
-    const result = await sendEmail(getConfig, userId, { to, subject, body });
-    if (!result.ok) throw new Error(result.error ?? '发送失败');
-    return { ok: true, messageId: result.messageId, message: '邮件已发送' };
+    const rawConfig = await getConfigValue(getConfig, userId, EMAIL_SMTP_CONFIG_KEY);
+    const sender = getEmailSendIdentity(rawConfig);
+    if (!rawConfig || !sender) throw new Error('未配置有效的 SMTP');
+    await requireSendApproval(ctx, 'x.send_email', { to, subject, body }, rawConfig, sender);
+    const result = await sendWithReceipt(() => sendEmail(
+      (uid, key) => uid === userId && key === EMAIL_SMTP_CONFIG_KEY ? rawConfig : getConfig(uid, key),
+      userId, { to, subject, body, signal: ctx.signal, assertSendActive: async () => {
+        await ctx.assertSendActive();
+        if (await getConfigValue(getConfig, userId, EMAIL_SMTP_CONFIG_KEY) !== rawConfig) throw new SendExecutionDeniedError('SMTP 配置已变化，邮件尚未发送，请重新交办并确认');
+      } },
+    ));
+    return { ok: true, messageId: result.messageId, accepted: result.accepted, message: 'SMTP 已接受邮件，是否送达收件箱仍需核对' };
   };
 
   const listEmailConfigsHandler = async (_input: any, ctx: any): Promise<unknown> => {
@@ -576,7 +472,6 @@ export function createBoardHandlers(ctx: {
     const config = { host, port, secure, user, pass, ...(from ? { from } : {}) };
     const setResult = setConfig(userId, EMAIL_SMTP_CONFIG_KEY, JSON.stringify(config));
     if (setResult instanceof Promise) await setResult;
-    clearEmailTransporterCache();
     return { ok: true, message: '邮箱配置已保存，可使用 x.send_email 发信' };
   };
 
@@ -590,7 +485,6 @@ export function createBoardHandlers(ctx: {
     if (!config) return { ok: true, message: '当前未配置邮箱' };
     const setResult = setConfig(userId, EMAIL_SMTP_CONFIG_KEY, '{}');
     if (setResult instanceof Promise) await setResult;
-    clearEmailTransporterCache();
     return { ok: true, message: '邮箱配置已删除' };
   };
 
@@ -700,10 +594,16 @@ export function createBoardHandlers(ctx: {
     const to = String(input.to ?? '').trim();
     const message = String(input.message ?? input.content ?? '').trim();
     if (!to || !message) throw new Error('x.send_whatsapp: to 与 message 必填');
-    const config = parseWhatsAppConfig(await getConfigValue(getConfig, userId, 'whatsapp_config'));
-    if (!config?.enabled) throw new Error('x.send_whatsapp: 未启用 WhatsApp，请在 设置 → 通知/WhatsApp 中配置并扫码登录');
-    const result = await sendWhatsAppMessage(getConfig, userId, to, message);
-    if (!result.ok) throw new Error(result.error ?? '发送失败');
+    const rawConfig = await getConfigValue(getConfig, userId, 'whatsapp_config');
+    const config = parseWhatsAppConfig(rawConfig);
+    if (!rawConfig || !config?.enabled) throw new Error('x.send_whatsapp: 未启用 WhatsApp，请在 设置 → 通知/WhatsApp 中配置并扫码登录');
+    const sender = getWhatsAppConnection(userId, getConfig).getSendIdentity();
+    if (!sender) throw new SendExecutionDeniedError('WhatsApp 尚未连接登录账号，尚未发送，请先扫码连接后重新交办');
+    await requireSendApproval(ctx, 'x.send_whatsapp', { to, message }, rawConfig, sender);
+    await sendWithReceipt(() => sendWhatsAppMessage(
+      (uid, key) => uid === userId && key === 'whatsapp_config' ? rawConfig : getConfig(uid, key),
+      userId, to, message, sender.binding,
+    ));
     return { ok: true, message: 'WhatsApp 消息已发送' };
   };
 
@@ -717,10 +617,16 @@ export function createBoardHandlers(ctx: {
     const chatId = String(input.chatId ?? '').trim();
     const message = String(input.message ?? input.content ?? '').trim();
     if (!chatId || !message) throw new Error('x.send_telegram: chatId 与 message 必填');
-    const config = parseTelegramConfig(await getConfigValue(getConfig, userId, 'telegram_config'));
-    if (!config?.enabled) throw new Error('x.send_telegram: 未启用 Telegram，请在设置中配置');
-    const result = await sendTelegramMessage(getConfig, userId, chatId, message);
-    if (!result.ok) throw new Error(result.error ?? '发送失败');
+    const rawConfig = await getConfigValue(getConfig, userId, 'telegram_config');
+    const config = parseTelegramConfig(rawConfig);
+    if (!rawConfig || !config?.enabled) throw new Error('x.send_telegram: 未启用 Telegram，请在设置中配置');
+    const sender = getTelegramConnection(userId, getConfig).getSendIdentity();
+    if (!sender) throw new SendExecutionDeniedError('Telegram 尚未连接可确认的发送账号，请先连接后重新交办');
+    await requireSendApproval(ctx, 'x.send_telegram', { chatId, message }, rawConfig, sender);
+    await sendWithReceipt(() => sendTelegramMessage(
+      (uid, key) => uid === userId && key === 'telegram_config' ? rawConfig : getConfig(uid, key),
+      userId, chatId, message, sender.binding,
+    ));
     return { ok: true, message: 'Telegram 消息已发送' };
   };
 
@@ -734,10 +640,16 @@ export function createBoardHandlers(ctx: {
     const channelId = String(input.channelId ?? '').trim();
     const message = String(input.message ?? input.content ?? '').trim();
     if (!channelId || !message) throw new Error('x.send_discord: channelId 与 message 必填');
-    const config = parseDiscordConfig(await getConfigValue(getConfig, userId, 'discord_config'));
-    if (!config?.enabled) throw new Error('x.send_discord: 未启用 Discord，请在设置中配置');
-    const result = await sendDiscordMessage(getConfig, userId, channelId, message);
-    if (!result.ok) throw new Error(result.error ?? '发送失败');
+    const rawConfig = await getConfigValue(getConfig, userId, 'discord_config');
+    const config = parseDiscordConfig(rawConfig);
+    if (!rawConfig || !config?.enabled) throw new Error('x.send_discord: 未启用 Discord，请在设置中配置');
+    const sender = getDiscordConnection(userId, getConfig).getSendIdentity();
+    if (!sender) throw new SendExecutionDeniedError('Discord 尚未连接可确认的发送账号，请先连接后重新交办');
+    await requireSendApproval(ctx, 'x.send_discord', { channelId, message }, rawConfig, sender);
+    await sendWithReceipt(() => sendDiscordMessage(
+      (uid, key) => uid === userId && key === 'discord_config' ? rawConfig : getConfig(uid, key),
+      userId, channelId, message, sender.binding,
+    ));
     return { ok: true, message: 'Discord 消息已发送' };
   };
 
@@ -752,10 +664,16 @@ export function createBoardHandlers(ctx: {
     const message = String(input.message ?? input.content ?? '').trim();
     const threadTs = input.threadTs ? String(input.threadTs).trim() : undefined;
     if (!channelId || !message) throw new Error('x.send_slack: channelId 与 message 必填');
-    const config = parseSlackConfig(await getConfigValue(getConfig, userId, 'slack_config'));
-    if (!config?.enabled) throw new Error('x.send_slack: 未启用 Slack，请在设置中配置');
-    const result = await sendSlackMessage(getConfig, userId, channelId, message, threadTs);
-    if (!result.ok) throw new Error(result.error ?? '发送失败');
+    const rawConfig = await getConfigValue(getConfig, userId, 'slack_config');
+    const config = parseSlackConfig(rawConfig);
+    if (!rawConfig || !config?.enabled) throw new Error('x.send_slack: 未启用 Slack，请在设置中配置');
+    const sender = getSlackConnection(userId, getConfig).getSendIdentity();
+    if (!sender) throw new SendExecutionDeniedError('Slack 尚未连接可确认的发送账号，请先连接后重新交办');
+    await requireSendApproval(ctx, 'x.send_slack', threadTs ? { channelId, message, threadTs } : { channelId, message }, rawConfig, sender);
+    await sendWithReceipt(() => sendSlackMessage(
+      (uid, key) => uid === userId && key === 'slack_config' ? rawConfig : getConfig(uid, key),
+      userId, channelId, message, threadTs, sender.binding,
+    ));
     return { ok: true, message: 'Slack 消息已发送' };
   };
 
@@ -772,7 +690,8 @@ export function createBoardHandlers(ctx: {
 
     let targetType: 'private' | 'group' | 'guild' = 'private';
     if (targetTypeRaw === 'self') {
-      const selfOpenid = await getConfigValue(getConfig, userId, 'qq_self_openid');
+      const account = getQQConnection(userId, getConfig).getSendIdentity()?.accountId;
+      const selfOpenid = account ? await getConfigValue(getConfig, userId, channelProcessedKey('qq_self_openid', account)) : undefined;
       if (!selfOpenid) {
         throw new Error('x.send_qq: 尚未记录您的 QQ OpenID。请先通过 QQ 私聊发送一条消息，系统会自动记录。');
       }
@@ -795,10 +714,16 @@ export function createBoardHandlers(ctx: {
       }
     }
 
-    const config = parseQQConfig(await getConfigValue(getConfig, userId, 'qq_config'));
-    if (!config?.enabled) throw new Error('x.send_qq: 未启用 QQ，请在设置中配置');
-    const result = await sendQQMessage(getConfig, userId, { type: targetType, id: targetId }, message);
-    if (!result.ok) throw new Error(result.error ?? '发送失败');
+    const rawConfig = await getConfigValue(getConfig, userId, 'qq_config');
+    const config = parseQQConfig(rawConfig);
+    if (!rawConfig || !config?.enabled) throw new Error('x.send_qq: 未启用 QQ，请在设置中配置');
+    const sender = getQQConnection(userId, getConfig).getSendIdentity();
+    if (!sender) throw new SendExecutionDeniedError('QQ 尚未连接可确认的发送账号，请先连接后重新交办');
+    await requireSendApproval(ctx, 'x.send_qq', { targetType, targetId, message }, rawConfig, sender);
+    await sendWithReceipt(() => sendQQMessage(
+      (uid, key) => uid === userId && key === 'qq_config' ? rawConfig : getConfig(uid, key),
+      userId, { type: targetType, id: targetId }, message, sender.binding,
+    ));
     return { ok: true, message: 'QQ 消息已发送' };
   };
 
@@ -1005,7 +930,7 @@ export function createBoardHandlers(ctx: {
         throw new Error('x.mark_proactive_read: message_ids 须为 JSON 数组字符串');
       }
     }
-    for (const id of ids) if (id) markXProactiveRead(userId, id);
+    for (const id of ids) if (id) await markReadWithHistory(resolveDB()??undefined,userId,id);
     return { ok: true, marked: ids.length };
   };
 
@@ -1102,11 +1027,6 @@ export function createBoardHandlers(ctx: {
   };
 
   return {
-    // Board
-    boardListHandler,
-    boardAddHandler,
-    boardUpdateHandler,
-    boardRemoveHandler,
     // Email
     sendEmailHandler,
     listEmailConfigsHandler,

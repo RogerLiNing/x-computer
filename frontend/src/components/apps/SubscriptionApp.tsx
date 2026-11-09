@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, Loader2, CreditCard, Calendar, TrendingUp, FileText } from 'lucide-react';
 import { getUserId } from '@/utils/userId';
 import { api } from '@/utils/api';
+import { ModelUsagePanel } from './ModelUsagePanel';
 
 interface Plan {
   id: string;
@@ -322,6 +323,8 @@ export function SubscriptionApp() {
               )}
             </div>
           )}
+
+          <div className="mt-6"><ModelUsagePanel /></div>
 
           {/* 使用量（免费与付费用户均显示） */}
           {subscriptionData && (

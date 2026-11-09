@@ -7,7 +7,7 @@ interface FormatChatErrorResult {
   quotaError: boolean;
 }
 
-/** 格式化 API 错误为展示内容；配额超限时返回 quotaError 以显示升级入口 */
+/** 格式化 API 错误；额度用尽时显示进度保留提示与用量入口。 */
 export function useFormatChatError() {
   const { t } = useTranslation();
   return useCallback((err: unknown): FormatChatErrorResult => {

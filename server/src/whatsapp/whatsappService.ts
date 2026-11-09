@@ -21,7 +21,9 @@ import os from 'os';
 import fs from 'fs';
 import QRCode from 'qrcode';
 import { v4 as uuid } from 'uuid';
+import { SendExecutionDeniedError, createSendIdentity } from '../tooling/sendApproval.js';
 import { serverLogger } from '../observability/ServerLogger.js';
+import { captureChannelOrigin, type ChannelOrigin } from '../messaging/channelIdentity.js';
 import { getSystemProxy } from '../utils/systemProxy.js';
 
 const CREDENTIALS_BASE = path.join(os.homedir(), '.x-computer', 'credentials', 'whatsapp');
@@ -119,11 +121,12 @@ class UserWhatsAppConnection {
   private reconnectRetryCount = 0;
   /** 实际连接状态：仅当 Baileys 发出 connection===open 时为 true，disconnect/close 后立即为 false */
   private connectionOpen = false;
+  private sendSessionId = uuid();
 
   constructor(
     private userId: string,
     private getConfig: (userId: string, key: string) => string | undefined | Promise<string | undefined>,
-    private onMessage: (userId: string, msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean }) => void,
+    private onMessage: (userId: string, msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean; origin?: ChannelOrigin }) => void,
   ) {
     this.authPath = path.join(CREDENTIALS_BASE, userId);
     fs.mkdirSync(this.authPath, { recursive: true });
@@ -258,13 +261,18 @@ class UserWhatsAppConnection {
         } as any,
       });
 
+      const previous = this.sock;
       this.sock = sock;
+      this.connectionOpen = false;
+      this.sendSessionId = uuid();
+      if (previous && previous !== sock) { try { previous.end(undefined); } catch { /* Already closed. */ } }
 
       sock.ev.on('connection.update', (update: Partial<BaileysEventMap['connection.update']>) => {
+        if (this.sock !== sock) return;
         const { connection, lastDisconnect, qr } = update;
         if (qr) {
           QRCode.toDataURL(qr, { width: 256, margin: 1 }).then((dataUrl: string) => {
-            this.qrCallback?.(dataUrl);
+            if (this.sock === sock) this.qrCallback?.(dataUrl);
           }).catch(() => {});
         }
         if (connection === 'open') {
@@ -355,13 +363,14 @@ class UserWhatsAppConnection {
         }
       });
 
-      sock.ev.on('creds.update', saveCreds);
+      sock.ev.on('creds.update', () => { if (this.sock === sock) return saveCreds(); });
 
       sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const rawConfig = this.getConfig(this.userId, 'whatsapp_config');
-        const config = parseWhatsAppConfig(rawConfig instanceof Promise ? await rawConfig : rawConfig);
-        if (!config?.enabled) return;
+        if (this.sock !== sock || type !== 'notify') return;
+        const accountId = this.getSendIdentity()?.accountId, sessionId = this.sendSessionId;
+        const rawConfig = await this.getConfig(this.userId, 'whatsapp_config');
+        const config = parseWhatsAppConfig(rawConfig);
+        if (this.sock !== sock || !config?.enabled) return;
 
         for (const msg of messages) {
           const isFromMe = !!msg.key.fromMe;
@@ -375,6 +384,7 @@ class UserWhatsAppConnection {
           if (!text.trim()) continue;
 
           this.onMessage(this.userId, {
+            origin: captureChannelOrigin(accountId, sessionId, rawConfig),
             fromJid,
             text,
             messageId: msg.key.id ?? undefined,
@@ -392,11 +402,24 @@ class UserWhatsAppConnection {
     }
   }
 
-  async sendMessage(toJid: string, text: string): Promise<{ ok: boolean; error?: string }> {
-    if (!this.sock) return { ok: false, error: '未连接，请先扫码登录' };
+  getSendIdentity(): { accountId: string; label: string; binding: string } | null {
+    const sock = this.sock;
+    if (!sock || !this.connectionOpen) return null;
+    const user = sock.user;
+    if (!user?.id) return null;
+    const accountId = user.id.replace(/:\d+(?=@)/, '');
+    return createSendIdentity(accountId, user.name, this.sendSessionId);
+  }
+
+  async sendMessage(toJid: string, text: string, expectedBinding?: string): Promise<{ ok: boolean; error?: string }> {
+    const sock = this.sock;
+    if (expectedBinding && this.getSendIdentity()?.binding !== expectedBinding) {
+      throw new SendExecutionDeniedError('WhatsApp 登录账号或连接已变化，尚未发送，请重新交办并确认');
+    }
+    if (!sock || !this.connectionOpen) return { ok: false, error: '未连接，请先扫码登录' };
     try {
       const jid = toJid.includes('@') ? toJid : `${toJid.replace(/\D/g, '')}@s.whatsapp.net`;
-      await this.sock.sendMessage(jid, { text });
+      await sock.sendMessage(jid, { text });
       return { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -433,10 +456,10 @@ class UserWhatsAppConnection {
 }
 
 /** 全局消息处理器（由 api 层在启动时注入） */
-let globalOnMessage: ((userId: string, msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean }) => void) | null = null;
+let globalOnMessage: ((userId: string, msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean; origin?: ChannelOrigin }) => void) | null = null;
 
 export function setWhatsAppMessageHandler(
-  handler: (userId: string, msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean }) => void,
+  handler: (userId: string, msg: { fromJid: string; text: string; messageId?: string; timestamp?: number; isGroup: boolean; origin?: ChannelOrigin }) => void,
 ): void {
   globalOnMessage = handler;
 }
@@ -477,9 +500,10 @@ export async function sendWhatsAppMessage(
   userId: string,
   to: string,
   message: string,
+  expectedBinding?: string,
 ): Promise<{ ok: boolean; error?: string }> {
   const conn = getOrCreateConnection(userId, getConfig);
-  return conn.sendMessage(to, message);
+  return conn.sendMessage(to, message, expectedBinding);
 }
 
 /**

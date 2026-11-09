@@ -2,8 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Folder, File, ChevronRight, ArrowUp, Home, HardDrive,
   Trash2, Search, RefreshCw, Edit, FolderPlus, FilePlus,
-  ArrowUpDown, ArrowUp as ArrowUpIcon, ArrowDown, Download, Upload, Copy,
+  ArrowUpDown, ArrowUp as ArrowUpIcon, ArrowDown, Download, Upload, Copy, Users,
 } from 'lucide-react';
+
+/** 与服务端 SPACE_MOUNT_DIR 一致：根目录下的共享空间文件夹 */
+const SPACE_MOUNT_DIR = '共享空间';
 import { api } from '@/utils/api';
 import { useDesktopStore } from '@/store/desktopStore';
 import { useConnectionStore } from '@/store/connectionStore';
@@ -164,7 +167,7 @@ export function FileManagerApp({ windowId, metadata }: Props) {
     const fullPath = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
     const ext = name.split('.').pop()?.toLowerCase() || '';
     const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'];
-    const officeExts = ['docx', 'xlsx', 'pptx'];
+    const officeExts = ['docx', 'xlsx', 'pptx', 'pdf'];
     const codeExts = ['ts', 'tsx', 'js', 'jsx', 'py', 'go', 'rs', 'java', 'json', 'yaml', 'yml', 'toml'];
     const audioExts = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'];
     const videoExts = ['mp4', 'webm', 'mov', 'ogg'];
@@ -271,6 +274,9 @@ export function FileManagerApp({ windowId, metadata }: Props) {
         </button>
         <button onClick={() => setCurrentPath('/')} className="p-1.5 rounded hover:bg-white/10 transition-colors" title="主目录">
           <Home size={14} className="text-desktop-muted" />
+        </button>
+        <button onClick={() => setCurrentPath(`/${SPACE_MOUNT_DIR}`)} className="p-1.5 rounded hover:bg-white/10 transition-colors" title="共享空间：和空间成员共用的文件">
+          <Users size={14} className="text-desktop-muted" />
         </button>
         <button onClick={() => loadFiles(currentPath)} className="p-1.5 rounded hover:bg-white/10 transition-colors" title="刷新">
           <RefreshCw size={14} className={`text-desktop-muted ${loading ? 'animate-spin' : ''}`} />
@@ -446,7 +452,9 @@ export function FileManagerApp({ windowId, metadata }: Props) {
                 }}
                 onContextMenu={(e) => handleFileContextMenu(e, file)}
               >
-                {file.type === 'directory' ? (
+                {file.type === 'directory' && (currentPath === `/${SPACE_MOUNT_DIR}` || (currentPath === '/' && file.name === SPACE_MOUNT_DIR)) ? (
+                  <Users size={18} className="text-sky-400/80 shrink-0" />
+                ) : file.type === 'directory' ? (
                   <Folder size={18} className="text-yellow-400/80 shrink-0" />
                 ) : (
                   <File size={18} className="text-desktop-muted shrink-0" />
@@ -506,7 +514,7 @@ export function FileManagerApp({ windowId, metadata }: Props) {
 
             {!loading && filtered.length === 0 && (
               <div className="text-center py-12 text-desktop-muted text-xs">
-                {search ? '没有找到匹配的文件' : '此文件夹为空'}
+                {search ? '没有找到匹配的文件' : currentPath === `/${SPACE_MOUNT_DIR}` ? '你还不在任何共享空间。可以对助手说“建一个叫家庭的空间”。' : '此文件夹为空'}
               </div>
             )}
           </div>

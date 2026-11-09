@@ -1,22 +1,19 @@
 /**
  * Admin utility/monitoring routes extracted from api.ts
- * Routes: /context, /mode, /tools, /mcp/reload, /policy/rules, /audit, /logs
+ * Routes: /context, /tools, /mcp/reload, /audit, /logs
  */
 
 import { Router } from 'express';
 import type { AgentOrchestrator } from '../orchestrator/AgentOrchestrator.js';
-import type { PolicyEngine } from '../policy/PolicyEngine.js';
 import type { AuditLogger } from '../observability/AuditLogger.js';
 import type { SandboxFS } from '../tooling/SandboxFS.js';
 import type { UserSandboxManager } from '../tooling/UserSandboxManager.js';
 import type { AppDatabase } from '../db/database.js';
-import type { ExecutionMode } from '../../../shared/src/index.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import { loadMcpAndRegisterForUser, reloadMcpAndRegister } from '../mcp/loadAndRegister.js';
 
 export function createAdminRouter(
   orchestrator: AgentOrchestrator,
-  policy: PolicyEngine,
   audit: AuditLogger,
   sandboxFS?: SandboxFS,
   userSandboxManager?: UserSandboxManager,
@@ -27,25 +24,9 @@ export function createAdminRouter(
   // ── Computer Context ─────────────────────────────────────
 
   /** Get current computer context (what the AI perceives) */
-  router.get('/context', (_req, res) => {
-    const ctx = orchestrator.getComputerContext();
+  router.get('/context', (req, res) => {
+    const ctx = orchestrator.getComputerContext(req.userId);
     res.json(ctx ?? { timestamp: 0, message: 'No context yet' });
-  });
-
-  // ── Execution Mode ───────────────────────────────────────
-
-  router.get('/mode', (_req, res) => {
-    res.json({ mode: orchestrator.getMode() });
-  });
-
-  router.post('/mode', (req, res) => {
-    const { mode } = req.body as { mode: ExecutionMode };
-    if (mode !== 'auto' && mode !== 'approval') {
-      res.status(400).json({ error: 'Mode must be "auto" or "approval"' });
-      return;
-    }
-    orchestrator.setMode(mode);
-    res.json({ mode });
   });
 
   // ── Tools ────────────────────────────────────────────────
@@ -73,12 +54,6 @@ export function createAdminRouter(
     } catch (err: any) {
       res.status(500).json({ error: err.message ?? '重载失败' });
     }
-  });
-
-  // ── Policy ───────────────────────────────────────────────
-
-  router.get('/policy/rules', (_req, res) => {
-    res.json(policy.getRules());
   });
 
   // ── Audit ────────────────────────────────────────────────

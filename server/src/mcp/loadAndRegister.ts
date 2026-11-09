@@ -10,7 +10,8 @@ import type { ToolDefinition } from '../../../shared/src/index.js';
 import type { McpServerConfig, McpToolSchema } from './types.js';
 import { isMcpHttpTransport, isMcpStdioTransport } from './types.js';
 import { listTools, callTool } from './client.js';
-import { closeAllStdioConnections } from './clientStdio.js';
+import { closeAllStdioConnections, validateStdioServer } from './clientStdio.js';
+import { createHash } from 'node:crypto';
 import { registerCapability } from '../capabilities/CapabilityRegistry.js';
 import { serverLogger } from '../observability/ServerLogger.js';
 import { clearCapabilitiesBySource } from '../capabilities/CapabilityRegistry.js';
@@ -175,11 +176,13 @@ export async function loadMcpAndRegister(
       toolsCount: 0,
     };
     try {
-      const tools = await listTools(server);
+      if (isMcpStdioTransport(server)) throw new Error('本地扩展在用户登录后通过独立容器加载');
+      const context = { owner: 'platform', trustedServer: true };
+      const tools = await listTools(server, context);
       for (const tool of tools) {
         const def = mcpToolToDefinition(server.id, tool);
-        const handler = async (input: Record<string, unknown>) => {
-          const out = await callTool(server, tool.name, input as Record<string, unknown>);
+        const handler = async (input: Record<string, unknown>, execution?: { signal?: AbortSignal }) => {
+          const out = await callTool(server, tool.name, input as Record<string, unknown>, { ...context, signal: execution?.signal });
           if (out.isError) throw new Error(out.text);
           return { text: out.text };
         };
@@ -206,7 +209,11 @@ export async function loadMcpAndRegister(
 let lastLoadResult: McpLoadResult | null = null;
 
 /** 供 GET /api/mcp/status 使用 */
-export function getMcpStatus(): McpLoadResult | null {
+export function getMcpStatus(orchestrator?: AgentOrchestrator, userId?: string): McpLoadResult | null {
+  if (orchestrator && userId) {
+    const own = userConfigs.get(orchestrator)?.get(userId);
+    if (own) return own.result;
+  }
   return lastLoadResult;
 }
 
@@ -230,7 +237,7 @@ export async function reloadMcpAndRegister(
   orchestrator: AgentOrchestrator,
   workspaceRoot?: string,
 ): Promise<McpLoadResult> {
-  closeAllStdioConnections();
+  await closeAllStdioConnections('platform');
   orchestrator.clearMcpTools();
   clearCapabilitiesBySource('mcp');
   return loadMcpAndRegister(orchestrator, workspaceRoot);
@@ -242,16 +249,27 @@ const MCP_SCOPE_PREFIX = 'mcp:';
  * 按用户加载 MCP 配置并注册到该用户 scope，供 chat/agent 使用。
  * 从 userWorkspaceRoot 的 mcp-servers.json 或 db.getConfig(userId, 'mcp_config') 读取。
  */
-export async function loadMcpAndRegisterForUser(
+const userLoads = new WeakMap<AgentOrchestrator, Map<string, Promise<McpLoadResult>>>();
+const userConfigs = new WeakMap<AgentOrchestrator, Map<string, { key:string; result:McpLoadResult; at:number }>>();
+export function loadMcpAndRegisterForUser(
+  orchestrator: AgentOrchestrator, userId: string, getUserWorkspaceRoot: (uid:string)=>string,
+  getConfig?: (uid:string,key:string)=>string|undefined|Promise<string|undefined>,
+): Promise<McpLoadResult> {
+  let queue=userLoads.get(orchestrator);if(!queue){queue=new Map();userLoads.set(orchestrator,queue);}
+  const work=(queue.get(userId)??Promise.resolve()).catch(()=>{}).then(()=>loadUserMcp(orchestrator,userId,getUserWorkspaceRoot,getConfig))
+    .finally(()=>{if(queue!.get(userId)===work)queue!.delete(userId);});
+  queue.set(userId,work);return work;
+}
+async function loadUserMcp(
   orchestrator: AgentOrchestrator,
   userId: string,
   getUserWorkspaceRoot: (uid: string) => string,
   getConfig?: (uid: string, key: string) => string | undefined | Promise<string | undefined>,
 ): Promise<McpLoadResult> {
   const scope = MCP_SCOPE_PREFIX + userId;
-  orchestrator.clearMcpToolsByScope(scope);
 
   let servers: McpServerConfig[] = [];
+  let inherited = false;
   const fromDbRaw = getConfig?.(userId, 'mcp_config');
   const fromDb = fromDbRaw instanceof Promise ? await fromDbRaw : fromDbRaw;
   if (fromDb?.trim()) {
@@ -280,6 +298,7 @@ export async function loadMcpAndRegisterForUser(
   if (servers.length === 0) {
     const defaults = loadDefaultConfig()?.mcp_servers;
     if (defaults) {
+      inherited = true;
       const raw =
         Array.isArray(defaults)
           ? { servers: defaults }
@@ -292,10 +311,12 @@ export async function loadMcpAndRegisterForUser(
       }
     }
   }
-  if (servers.length === 0) {
-    return { servers: [], totalTools: 0 };
-  }
-
+  const key=createHash('sha256').update(JSON.stringify([servers,inherited])).digest('hex');
+  let cache=userConfigs.get(orchestrator);if(!cache){cache=new Map();userConfigs.set(orchestrator,cache);}
+  const previous=cache.get(userId);
+  if(previous?.key===key&&!previous.result.servers.some(server=>server.error)&&Date.now()-previous.at<30000)return previous.result;
+  orchestrator.clearMcpToolsByScope(scope);
+  if(previous?.key!==key)await closeAllStdioConnections(userId);
   const result: McpLoadResult = { servers: [], totalTools: 0 };
   for (const server of servers) {
     if (!isMcpHttpTransport(server) && !isMcpStdioTransport(server)) continue;
@@ -308,11 +329,18 @@ export async function loadMcpAndRegisterForUser(
       toolsCount: 0,
     };
     try {
-      const tools = await listTools(server);
+      if (isMcpStdioTransport(server)) validateStdioServer(server);
+      const serverKey = createHash('sha256').update(JSON.stringify([server, inherited])).digest('hex');
+      const context = { owner: userId, trustedServer: inherited,
+        ...(isMcpStdioTransport(server) ? { containerId: await orchestrator.getMcpContainerId(userId, serverKey) } : {}) };
+      const tools = await listTools(server, context);
       for (const tool of tools) {
         const def = mcpToolToDefinition(server.id, tool);
-        const handler = async (input: Record<string, unknown>) => {
-          const out = await callTool(server, tool.name, input as Record<string, unknown>);
+        const handler = async (input: Record<string, unknown>, execution?: { signal?: AbortSignal }) => {
+          execution?.signal?.throwIfAborted();
+          const activeContext = { ...context, signal: execution?.signal,
+            ...(isMcpStdioTransport(server) ? { containerId: await orchestrator.getMcpContainerId(userId, serverKey) } : {}) };
+          const out = await callTool(server, tool.name, input as Record<string, unknown>, activeContext);
           if (out.isError) throw new Error(out.text);
           return { text: out.text };
         };
@@ -326,6 +354,7 @@ export async function loadMcpAndRegisterForUser(
       result.servers.push(entry);
     }
   }
+  cache.set(userId,{key,result,at:Date.now()});
   return result;
 }
 

@@ -12,9 +12,26 @@
  */
 
 import { Router } from 'express';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { callLLM } from '../chat/chatService.js';
 import type { AppDatabase } from '../db/database.js';
 import { fire as fireHook } from '../hooks/HookRegistry.js';
+import { getAssembledSystemPrompt } from '../prompts/systemCore.js';
+import { TOOL_USE_MANDATE, MEMORY_TOOL_MANDATE } from '../prompts/systemCore/mandates.js';
+import { get_encoding } from 'tiktoken';
+
+/** 懒加载 tiktoken encoder */
+let _encoder: ReturnType<typeof get_encoding> | null = null;
+function getEncoder() {
+  if (!_encoder) {
+    _encoder = get_encoding('cl100k_base');
+  }
+  return _encoder;
+}
+function countTokens(text: string): number {
+  if (!text) return 0;
+  return getEncoder().encode(text).length;
+}
 
 /** 提取搜索关键词周围的文本片段 */
 function extractSnippet(content: string, q: string, context = 60): string {
@@ -45,7 +62,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
     const tag = typeof req.query.tag === 'string' ? req.query.tag.trim() : undefined;
     const includeArchived = req.query.archived === 'true';
     const sessions = await db.listSessions(userId, limit, scene, includeArchived);
-    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; parent_session_id?: string | null }) => {
+    const mapped = sessions.map((s: { id: string; title: string | null; created_at: string; updated_at: string; tags?: string | null; is_pinned?: number; is_archived?: number; summary?: string | null; parent_session_id?: string | null; first_user_message?: string | null }) => {
       const tags = s.tags ? JSON.parse(s.tags) as string[] : [];
       return {
         id: s.id,
@@ -57,6 +74,7 @@ export function createChatSessionRouter(db: AppDatabase, options: ChatSessionRou
         isArchived: !!s.is_archived,
         summary: s.summary ?? null,
         parentSessionId: s.parent_session_id ?? null,
+        preview: s.first_user_message?.trim().replace(/\s+/g, ' ').slice(0, 120) ?? null,
       };
     });
     let result = mapped;
@@ -501,8 +519,7 @@ ${transcript}
 
   /**
    * GET /api/chat/sessions/:id/context-stats — 获取会话上下文统计
-   * 返回: { messageCount, estimatedTokens, estimatedChars, modelContextLimit }
-   *   estimatedTokens 按 4字符≈1 token 估算
+   * 返回详细的上下文使用分解，用于 treemap 可视化
    */
   router.get('/:id/context-stats', async (req, res) => {
     const session = await db.getSession(req.params.id);
@@ -510,16 +527,154 @@ ${transcript}
     if (session.user_id !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
 
     const messages = await db.getMessages(req.params.id, 5000);
-    const totalChars = messages.reduce((sum, m) => sum + ((m.content?.length) ?? 0), 0);
-    const estimatedTokens = Math.ceil(totalChars / 4);
     const modelContextLimit = 128_000; // 默认 128K 上下文窗口
+
+    // 计算各类别的字符数
+    // 系统提示词不在 DB 中，从 prompt 模块估算
+    const systemPrompt = getAssembledSystemPrompt() + '\n\n' + TOOL_USE_MANDATE + '\n\n' + MEMORY_TOOL_MANDATE;
+    let systemTokens = countTokens(systemPrompt);
+
+    // 解析系统提示词的各节（以 \n\n#  分隔）
+    interface TreemapNode {
+      name: string;
+      value: number;
+      children: TreemapNode[];
+      content?: string;
+    }
+
+    /** 按 markdown header (#/##/###) 层级解析为嵌套树 */
+    function parseMarkdownTree(text: string): TreemapNode[] {
+      const rootChildren: TreemapNode[] = [];
+      const stack: Array<{ level: number; children: TreemapNode[] }> = [{ level: 0, children: rootChildren }];
+
+      // 按 header 行分割文本
+      const blocks = text.split(/^(?=#{1,6}\s)/m);
+      for (const block of blocks) {
+        if (!block.trim()) continue;
+        const lines = block.split('\n');
+        const firstLine = lines[0];
+        const headerMatch = firstLine.match(/^(#{1,6})\s+(.+)/);
+        if (!headerMatch) continue;
+
+        const level = headerMatch[1].length;
+        const title = headerMatch[2].trim();
+        const body = lines.slice(1).join('\n').trim();
+        const content = block.trim();
+        const tokens = countTokens(content);
+
+        if (tokens <= 0) continue;
+
+        const node: TreemapNode = { name: title, value: tokens, children: [], content };
+
+        // 弹出比当前层级更深或同级的节点，找到正确的父级
+        while (stack.length > 1 && stack[stack.length - 1].level >= level) {
+          stack.pop();
+        }
+        stack[stack.length - 1].children.push(node);
+
+        // 当前节点可能成为后续更深层节点的父级（但仅当它有内容体或只是 header 行时才入栈）
+        // 注意：值包含 header + body，但只有 body 非空时才可能有子节
+        if (body.length > 0) {
+          stack.push({ level, children: node.children });
+        }
+      }
+
+      return rootChildren;
+    }
+
+    const systemSections = parseMarkdownTree(systemPrompt);
+    let userTokens = 0;
+    let assistantTokens = 0;
+    let toolTokens = 0;
+
+    // 收集各角色消息的 children
+    const userChildren: TreemapNode[] = [];
+    const assistantChildren: TreemapNode[] = [];
+    const toolChildren: TreemapNode[] = [];
+
+    for (const msg of messages) {
+      const content = msg.content ?? '';
+      if (msg.role === 'system') {
+        const tokens = countTokens(content);
+        systemTokens += tokens;
+        if (tokens > 0) {
+          systemSections.push({ name: 'DB 系统消息', value: tokens, children: [], content });
+        }
+      } else if (msg.role === 'user') {
+        const tokens = countTokens(content);
+        userTokens += tokens;
+        if (tokens > 0) {
+          const preview = content.slice(0, 60).replace(/\n/g, ' ');
+          userChildren.push({ name: preview + (content.length > 60 ? '…' : ''), value: tokens, children: [], content });
+        }
+      } else if (msg.role === 'assistant') {
+        if (msg.tool_calls_json) {
+          try {
+            const toolCalls = JSON.parse(msg.tool_calls_json);
+            for (const tc of toolCalls) {
+              const tcStr = JSON.stringify(tc);
+              const tcTokens = countTokens(tcStr);
+              toolTokens += tcTokens;
+              const fnName = tc.function?.name || tc.name || 'unknown';
+              toolChildren.push({ name: `调用: ${fnName}`, value: tcTokens, children: [], content: tcStr });
+            }
+          } catch { /* ignore parse errors */ }
+        }
+        const tokens = countTokens(content);
+        assistantTokens += tokens;
+        if (tokens > 0) {
+          const preview = content.slice(0, 60).replace(/\n/g, ' ');
+          assistantChildren.push({ name: preview + (content.length > 60 ? '…' : ''), value: tokens, children: [], content });
+        }
+      } else if (msg.role === 'tool') {
+        const tokens = countTokens(content);
+        toolTokens += tokens;
+        if (tokens > 0) {
+          const preview = content.slice(0, 60).replace(/\n/g, ' ');
+          toolChildren.push({ name: preview + (content.length > 60 ? '…' : ''), value: tokens, children: [], content });
+        }
+      }
+    }
+
+    const estimatedTokens = systemTokens + userTokens + assistantTokens + toolTokens;
+
+    // 构建 treemap 所需的嵌套数据
+    const treemapData: TreemapNode[] = [
+      {
+        name: '系统消息',
+        value: systemTokens,
+        children: systemSections,
+      },
+      {
+        name: '用户消息',
+        value: userTokens,
+        children: userChildren,
+      },
+      {
+        name: '助手回复',
+        value: assistantTokens,
+        children: assistantChildren,
+      },
+      {
+        name: '工具调用',
+        value: toolTokens,
+        children: toolChildren,
+      },
+    ];
 
     res.json({
       messageCount: messages.length,
       estimatedTokens,
-      estimatedChars: totalChars,
+      estimatedChars: estimatedTokens * 4,
       modelContextLimit,
       usagePercent: Math.min(100, Math.round((estimatedTokens / modelContextLimit) * 100)),
+      treemapData,
+      breakdown: {
+        system: { tokens: systemTokens, chars: systemTokens * 4 },
+        user: { tokens: userTokens, chars: userTokens * 4 },
+        assistant: { tokens: assistantTokens, chars: assistantTokens * 4 },
+        toolCalls: { tokens: toolTokens, chars: toolTokens * 4 },
+      },
     });
   });
 

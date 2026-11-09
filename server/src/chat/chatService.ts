@@ -1,8 +1,25 @@
+import { resolveLlmApiType } from '../../../shared/src/index.js';
 /**
  * Chat service — calls configured LLM (OpenAI-compatible or Anthropic) for assistant replies.
  * Used by POST /api/chat; credentials come from frontend request (not stored on server).
  */
 import { serverLogger } from '../observability/ServerLogger.js';
+import { createHash } from 'node:crypto';
+import {modelFetch,isModelBudgetError,currentModelBudgetScope} from '../subscription/modelBudget.js';
+import { parseProviderUsage, recordModelUsage } from '../llm/usage.js';
+
+function ignoreMalformedResponse(error: unknown): object {
+  if (isModelBudgetError(error)||error instanceof Error && error.name === 'AbortError') throw error;
+  return {};
+}
+
+/** Records provider-reported usage against the current run; silently skips when the provider sent none. */
+function noteUsage(providerId: string | undefined, modelId: string, raw: unknown): void {
+  const usage = parseProviderUsage(raw);
+  if (!usage) return;
+  const scope = currentModelBudgetScope();
+  recordModelUsage({ ...usage, providerId: providerId ?? 'unknown', modelId, userId: scope?.userId, runId: scope?.runId });
+}
 
 /** 支持 assistant 带 tool_calls、tool 结果消息（用于 Agent 循环） */
 export interface ChatMessage {
@@ -14,7 +31,14 @@ export interface ChatMessage {
   tool_call_id?: string;
 }
 
+export interface ModelImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  data: string;
+}
+
 export interface ChatRequest {
+  /** Runtime-only image bytes. Checkpoints retain paths and hashes instead. */
+  inputImages?: ModelImage[];
   messages: ChatMessage[];
   providerId: string;
   modelId: string;
@@ -22,6 +46,7 @@ export interface ChatRequest {
   apiKey?: string;
   /** API 类型：'openai' 使用 OpenAI 兼容接口，'anthropic' 使用 Anthropic 接口 */
   apiType?: 'openai' | 'anthropic';
+  signal?: AbortSignal;
 }
 
 /** OpenAI-style tool definition for function calling */
@@ -41,6 +66,113 @@ export interface LLMToolCall {
 export interface LLMWithToolsResult {
   content: string;
   toolCalls: LLMToolCall[];
+}
+
+type OpenAIToolChoice =
+  | 'auto'
+  | { type: 'function'; function: { name: string } };
+
+export function resolveExplicitToolChoice(
+  messages: ChatMessage[],
+  tools: LLMToolDef[],
+): OpenAIToolChoice {
+  let lastUserIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === 'user') {
+      lastUserIndex = index;
+      break;
+    }
+  }
+  if (lastUserIndex < 0 || messages.slice(lastUserIndex + 1).some((message) => message.role === 'tool')) {
+    return 'auto';
+  }
+  const content = messages[lastUserIndex]?.content ?? '';
+  if (!/(?:调用|使用|执行|请用|call|use|invoke)/i.test(content)) {
+    return 'auto';
+  }
+  const mentioned = tools.filter((tool) => content.includes(tool.name));
+  if (mentioned.length !== 1) return 'auto';
+  return {
+    type: 'function',
+    function: { name: mentioned[0]!.name },
+  };
+}
+
+function getSingleToolArgumentName(tool: LLMToolDef): string | null {
+  const parameters = tool.parameters as {
+    properties?: Record<string, unknown>;
+    required?: unknown;
+  };
+  const required = Array.isArray(parameters.required)
+    ? parameters.required.filter((name): name is string => typeof name === 'string')
+    : [];
+  const candidates = required.length > 0
+    ? required
+    : Object.keys(parameters.properties ?? {});
+  return candidates[0] ?? null;
+}
+
+function parseTextualArgument(raw: string, tool: LLMToolDef): Record<string, unknown> | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return {};
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  let value: string | null = null;
+  if (trimmed.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      value = typeof parsed === 'string' ? parsed : null;
+    } catch {
+      value = null;
+    }
+  } else if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    value = trimmed.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  }
+  if (value == null) return null;
+  const argumentName = getSingleToolArgumentName(tool);
+  return argumentName ? { [argumentName]: value } : {};
+}
+
+/**
+ * 部分 OpenAI 兼容服务会把工具调用放进文本标签而不是标准 tool_calls 字段。
+ * 仅在明确出现 tool_call 标签且函数名属于本轮已声明工具时兜底解析，避免误执行普通文本。
+ */
+export function parseTextualToolCalls(content: string, tools: LLMToolDef[]): LLMWithToolsResult {
+  if (!/<(?:minimax:)?tool_call>/i.test(content)) {
+    return { content, toolCalls: [] };
+  }
+  const toolByName = new Map(tools.map((tool) => [tool.name, tool]));
+  const toolCalls: LLMToolCall[] = [];
+  const callPattern = /([A-Za-z_][\w.-]*)\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\{[\s\S]*?\})\s*\)/g;
+  let match: RegExpExecArray | null;
+  while ((match = callPattern.exec(content)) != null) {
+    const name = match[1]!;
+    const tool = toolByName.get(name);
+    if (!tool) continue;
+    const args = parseTextualArgument(match[2]!, tool);
+    if (args == null) continue;
+    toolCalls.push({
+      id: `text_call_${toolCalls.length}`,
+      name,
+      arguments: args,
+    });
+  }
+  if (toolCalls.length === 0) {
+    return { content, toolCalls: [] };
+  }
+  const cleaned = content
+    .replace(/<\/?(?:minimax:)?tool_call>/gi, '')
+    .replace(callPattern, '')
+    .trim();
+  return { content: cleaned, toolCalls };
 }
 
 /** 部分 API（如阿里 DashScope）必须带 model；当 modelId 为 __custom__ 或空时按 base 回退默认模型 */
@@ -63,7 +195,7 @@ export interface GenerateImageResult {
  * @throws Error with message suitable for frontend if request fails
  */
 export async function callLLM(req: ChatRequest): Promise<string> {
-  const { messages, providerId, modelId, baseUrl, apiKey, apiType } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType, signal } = req;
 
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -72,23 +204,23 @@ export async function callLLM(req: ChatRequest): Promise<string> {
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
 
-  // 优先使用 apiType，否则根据 providerId 判断
-  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+  // Known protocol-specific endpoints take precedence over legacy default metadata.
+  const useAnthropic = resolveLlmApiType(providerId, baseUrl, apiType) === 'anthropic';
 
   if (useAnthropic) {
-    return callAnthropic({ effectiveBase, modelId, apiKey: key, messages });
+    return callAnthropic({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
   }
 
-  return callOpenAICompatible({ effectiveBase, modelId, apiKey: key, messages });
+  return callOpenAICompatible({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
 }
 
 /**
  * Call the configured LLM with optional tools (function calling).
  * When the model returns tool_calls (e.g. file_write), they are parsed and returned for the caller to execute.
- * Only OpenAI-compatible providers support tools; Anthropic returns content only and toolCalls: [].
+ * Anthropic tool_use/tool_result blocks are translated to the same internal history.
  */
 export async function callLLMWithTools(req: ChatRequest, tools: LLMToolDef[]): Promise<LLMWithToolsResult> {
-  const { messages, providerId, modelId, baseUrl, apiKey, apiType } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType, signal } = req;
 
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -97,20 +229,26 @@ export async function callLLMWithTools(req: ChatRequest, tools: LLMToolDef[]): P
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
 
-  // 优先使用 apiType，否则根据 providerId 判断
-  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+  // Known protocol-specific endpoints take precedence over legacy default metadata.
+  const useAnthropic = resolveLlmApiType(providerId, baseUrl, apiType) === 'anthropic';
 
-  if (useAnthropic || tools.length === 0) {
+  if (useAnthropic && tools.length > 0) {
+    return callAnthropicWithTools(req, tools);
+  }
+  if (tools.length === 0) {
     const content = await callLLM(req);
     return { content, toolCalls: [] };
   }
 
   return callOpenAICompatibleWithTools({
     effectiveBase,
+    providerId,
     modelId,
     apiKey: key,
     messages,
     tools,
+    signal,
+    inputImages: req.inputImages,
   });
 }
 
@@ -123,22 +261,93 @@ export async function callLLMWithToolsStream(
   tools: LLMToolDef[],
   onChunk: (chunk: string) => void,
 ): Promise<LLMWithToolsResult> {
-  const useAnthropic = req.apiType === 'anthropic' || (req.apiType === undefined && req.providerId === 'anthropic');
+  const useAnthropic = resolveLlmApiType(req.providerId, req.baseUrl, req.apiType) === 'anthropic';
   if (useAnthropic || tools.length === 0) {
     const result = await callLLMWithTools(req, tools);
+    req.signal?.throwIfAborted();
     if (result.content) onChunk(result.content);
     return result;
   }
   return streamOpenAICompatibleWithTools(
     {
       effectiveBase: (req.baseUrl || '').replace(/\/$/, ''),
+      providerId: req.providerId,
       modelId: req.modelId,
       apiKey: (req.apiKey || '').trim(),
       messages: req.messages,
       tools,
+      signal: req.signal,
+      inputImages: req.inputImages,
     },
     onChunk,
   );
+}
+
+function anthropicToolName(name: string): string {
+  // Tool names such as file.read contain dots that Anthropic does not accept.
+  return `tool_${createHash('sha256').update(name).digest('hex').slice(0, 48)}`;
+}
+
+function anthropicImages(images: ModelImage[]) {
+  return images.map(image => ({ type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } }));
+}
+
+function anthropicUserContent(content: string, images?: ModelImage[]) {
+  return images?.length ? [...anthropicImages(images), ...(content ? [{ type: 'text', text: content }] : [])] : content;
+}
+
+function anthropicMessagesUrl(baseUrl: string | undefined): string {
+  const base = (baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');
+  if (base.endsWith('/v1/messages')) return base;
+  return base.endsWith('/v1') ? base + '/messages' : base + '/v1/messages';
+}
+
+async function callAnthropicWithTools(req: ChatRequest, tools: LLMToolDef[]): Promise<LLMWithToolsResult> {
+  req.signal?.throwIfAborted();
+  if (!req.apiKey) throw new Error('该提供商需要配置 API Key');
+  const system = req.messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n\n');
+  const messages: Array<{ role: 'user' | 'assistant'; content: Array<Record<string, unknown>> }> = [];
+  const imageMessage = [...req.messages].reverse().find(message => message.role === 'user');
+  for (const message of req.messages) {
+    if (message.role === 'system') continue;
+    const role = message.role === 'assistant' ? 'assistant' : 'user';
+    const content: Array<Record<string, unknown>> = [];
+    if (message.role === 'tool') {
+      content.push({ type: 'tool_result', tool_use_id: message.tool_call_id, content: message.content });
+    } else {
+      if (message.content) content.push({ type: 'text', text: message.content });
+      for (const call of message.tool_calls ?? []) content.push({ type: 'tool_use', id: call.id, name: anthropicToolName(call.name), input: call.arguments });
+    }
+    if (message === imageMessage && req.inputImages?.length) content.unshift(...anthropicImages(req.inputImages));
+    if (!content.length) continue;
+    const previous = messages.at(-1);
+    if (previous?.role === role) previous.content.push(...content);
+    else messages.push({ role, content });
+  }
+  const response = await modelFetch(anthropicMessagesUrl(req.baseUrl), {
+    method: 'POST', signal: req.signal,
+    headers: { 'Content-Type': 'application/json', 'x-api-key': req.apiKey, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: req.modelId, max_tokens: 4096, ...(system ? { system } : {}), messages,
+      tools: tools.map((tool) => ({ name: anthropicToolName(tool.name), description: tool.description, input_schema: tool.parameters })) }),
+  });
+  const data = await response.json().catch(ignoreMalformedResponse) as { error?: { message?: string }; content?: unknown };
+  req.signal?.throwIfAborted();
+  if (!response.ok) throw new Error(data.error?.message || response.statusText || `请求失败: ${response.status}`);
+  if (!Array.isArray(data.content)) throw new Error('模型未返回有效回复');
+  noteUsage(req.providerId, req.modelId, (data as { usage?: unknown }).usage);
+  const toolByName = new Map(tools.map((tool) => [anthropicToolName(tool.name), tool.name]));
+  const content: string[] = [];
+  const toolCalls: LLMToolCall[] = [];
+  for (const block of data.content) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'text' && typeof block.text === 'string') content.push(block.text);
+    if (block.type === 'tool_use') {
+      if (typeof block.id !== 'string' || typeof block.name !== 'string' || !toolByName.has(block.name)
+        || !block.input || typeof block.input !== 'object' || Array.isArray(block.input)) throw new Error('模型返回了无效或未授权的工具调用');
+      toolCalls.push({ id: block.id, name: toolByName.get(block.name)!, arguments: block.input });
+    }
+  }
+  return { content: content.join('\n'), toolCalls };
 }
 
 /**
@@ -146,7 +355,7 @@ export async function callLLMWithToolsStream(
  * @throws Error with message suitable for frontend if request fails
  */
 export async function* callLLMStream(req: ChatRequest): AsyncGenerator<string> {
-  const { messages, providerId, modelId, baseUrl, apiKey, apiType } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType, signal } = req;
 
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
@@ -155,15 +364,15 @@ export async function* callLLMStream(req: ChatRequest): AsyncGenerator<string> {
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
 
-  // 优先使用 apiType，否则根据 providerId 判断
-  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+  // Known protocol-specific endpoints take precedence over legacy default metadata.
+  const useAnthropic = resolveLlmApiType(providerId, baseUrl, apiType) === 'anthropic';
 
   if (useAnthropic) {
-    yield* streamAnthropic({ effectiveBase, modelId, apiKey: key, messages });
+    yield* streamAnthropic({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
     return;
   }
 
-  yield* streamOpenAICompatible({ effectiveBase, modelId, apiKey: key, messages });
+  yield* streamOpenAICompatible({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
 }
 
 /**
@@ -177,15 +386,15 @@ export type GenerateImageOptions = { referenceImageUrls?: string[] };
 export async function callLLMGenerateImage(
   req: ChatRequest & GenerateImageOptions,
 ): Promise<GenerateImageResult> {
-  const { messages, providerId, modelId, baseUrl, apiKey, apiType, referenceImageUrls } = req;
+  const { messages, providerId, modelId, baseUrl, apiKey, apiType, referenceImageUrls, signal } = req;
   if (!messages.length) throw new Error('messages 不能为空');
   const lastUser = [...messages].reverse().find((m) => m.role === 'user');
   if (!lastUser) throw new Error('需要至少一条用户消息');
 
   const effectiveBase = (baseUrl || '').replace(/\/$/, '');
   const key = (apiKey || '').trim();
-  // 优先使用 apiType，否则根据 providerId 判断
-  const useAnthropic = apiType === 'anthropic' || (apiType === undefined && providerId === 'anthropic');
+  // Known protocol-specific endpoints take precedence over legacy default metadata.
+  const useAnthropic = resolveLlmApiType(providerId, baseUrl, apiType) === 'anthropic';
   if (useAnthropic) {
     throw new Error('图片生成当前仅支持 OpenAI 兼容接口（如 OpenRouter）或阿里 DashScope，请选用支持 image 模态的提供商');
   }
@@ -199,6 +408,7 @@ export async function callLLMGenerateImage(
         apiKey: key,
         prompt: typeof lastUser.content === 'string' ? lastUser.content : '',
         referenceImages: refs,
+        signal,
       });
     }
     // 无参考图时：若为文生图异步模型（千问/万相）则走 text2image/image-synthesis；否则走 multimodal-generation
@@ -219,6 +429,7 @@ export async function callLLMGenerateImage(
       modelId,
       apiKey: key,
       prompt: typeof lastUser.content === 'string' ? lastUser.content : '',
+      signal,
     });
   }
 
@@ -227,6 +438,7 @@ export async function callLLMGenerateImage(
     modelId,
     apiKey: key,
     messages,
+    signal,
   });
 }
 
@@ -236,6 +448,7 @@ async function callDashScopeGenerateImage(opts: {
   modelId: string;
   apiKey: string;
   prompt: string;
+  signal?: AbortSignal;
 }): Promise<GenerateImageResult> {
   const { baseUrl, modelId, apiKey, prompt } = opts;
   const promptText = prompt.trim().slice(0, IMAGE_PROMPT_MAX_LENGTH);
@@ -275,10 +488,11 @@ async function callDashScopeGenerateImage(opts: {
       'Content-Type': 'application/json',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
+    signal: opts.signal,
     body: JSON.stringify(body),
   });
 
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const data = (await res.json().catch(ignoreMalformedResponse)) as Record<string, unknown>;
   if (!res.ok) {
     const errMsg = (data?.message as string) ?? (data?.code as string) ?? res.statusText;
     throw new Error(String(errMsg || `请求失败: ${res.status}`));
@@ -311,6 +525,7 @@ async function callDashScopeImageEdit(opts: {
   apiKey: string;
   prompt: string;
   referenceImages: string[];
+  signal?: AbortSignal;
 }): Promise<GenerateImageResult> {
   const { baseUrl, modelId, apiKey, prompt, referenceImages } = opts;
   const promptText = prompt.trim().slice(0, IMAGE_PROMPT_MAX_LENGTH);
@@ -355,10 +570,11 @@ async function callDashScopeImageEdit(opts: {
       'Content-Type': 'application/json',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
+    signal: opts.signal,
     body: JSON.stringify(body),
   });
 
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const data = (await res.json().catch(ignoreMalformedResponse)) as Record<string, unknown>;
   if (!res.ok) {
     const errMsg = (data?.message as string) ?? (data?.code as string) ?? res.statusText;
     throw new Error(String(errMsg || `请求失败: ${res.status}`));
@@ -385,11 +601,13 @@ const IMAGE_PROMPT_MAX_LENGTH = 2000;
 
 async function callOpenAICompatibleGenerateImage(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
+  signal?: AbortSignal;
 }): Promise<GenerateImageResult> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const truncatedMessages = messages.map((m) => {
@@ -406,16 +624,17 @@ async function callOpenAICompatibleGenerateImage(opts: {
   };
   if (body.model === undefined) delete body.model;
 
-  const res = await fetch(url, {
+  const res = await modelFetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
+    signal: opts.signal,
     body: JSON.stringify(body),
   });
 
-  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  const data = (await res.json().catch(ignoreMalformedResponse)) as Record<string, unknown>;
   if (!res.ok) {
     const errMsg = (data?.error as { message?: string })?.message ?? (data?.message as string) ?? res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
@@ -458,18 +677,106 @@ function stripThinkTags(text: string): string {
   return result.trim();
 }
 
+export function createThinkStreamFilter(onVisibleChunk: (chunk: string) => void): {
+  push: (chunk: string) => void;
+  finish: () => void;
+} {
+  const startTag = '<think>';
+  const endTag = '</think>';
+  let buffer = '';
+  let insideThink = false;
+
+  const drain = (final: boolean) => {
+    while (buffer) {
+      const lower = buffer.toLowerCase();
+      if (insideThink) {
+        const endIndex = lower.indexOf(endTag);
+        if (endIndex >= 0) {
+          buffer = buffer.slice(endIndex + endTag.length);
+          insideThink = false;
+          continue;
+        }
+        if (final) {
+          buffer = '';
+          return;
+        }
+        buffer = buffer.slice(Math.max(0, buffer.length - endTag.length + 1));
+        return;
+      }
+
+      const startIndex = lower.indexOf(startTag);
+      if (startIndex >= 0) {
+        if (startIndex > 0) onVisibleChunk(buffer.slice(0, startIndex));
+        buffer = buffer.slice(startIndex + startTag.length);
+        insideThink = true;
+        continue;
+      }
+      if (final) {
+        onVisibleChunk(buffer);
+        buffer = '';
+        return;
+      }
+      const visibleLength = Math.max(0, buffer.length - startTag.length + 1);
+      if (visibleLength > 0) {
+        onVisibleChunk(buffer.slice(0, visibleLength));
+        buffer = buffer.slice(visibleLength);
+      }
+      return;
+    }
+  };
+
+  return {
+    push(chunk: string) {
+      buffer += chunk;
+      drain(false);
+    },
+    finish() {
+      drain(true);
+    },
+  };
+}
+
+function openAIMessages(messages: ChatMessage[], images?: ModelImage[]) {
+  const imageMessage = [...messages].reverse().find(message => message.role === 'user');
+  return messages.map((m) => {
+    if (m.role === 'tool' && m.tool_call_id != null) {
+      return { role: 'tool' as const, content: m.content, tool_call_id: m.tool_call_id };
+    }
+    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
+      return {
+        role: 'assistant' as const,
+        content: m.content || '',
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
+        })),
+      };
+    }
+    const content = images?.length && m === imageMessage
+      ? [...(m.content ? [{ type: 'text' as const, text: m.content }] : []), ...images.map(image => ({
+          type: 'image_url' as const, image_url: { url: `data:${image.mediaType};base64,${image.data}` },
+        }))]
+      : m.content || '';
+    return { role: m.role, content };
+  });
+}
+
 async function callOpenAICompatible(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
+  inputImages?: ModelImage[];
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const body: Record<string, unknown> = {
     model: effectiveModelForRequest(modelId, effectiveBase),
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    messages: openAIMessages(messages, opts.inputImages),
     max_tokens: 4096,
   };
   if (body.model === undefined) delete body.model;
@@ -478,15 +785,17 @@ async function callOpenAICompatible(opts: {
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await modelFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
+      signal: opts.signal,
       body: JSON.stringify(body),
     });
   } catch (e: any) {
+    if (e?.name === 'AbortError'||isModelBudgetError(e)) throw e;
     const msg = e?.message || String(e);
     if (/fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|network/i.test(msg)) {
       throw new Error('无法连接 LLM 服务，请检查 Base URL 与网络', { cause: e });
@@ -494,11 +803,12 @@ async function callOpenAICompatible(opts: {
     throw e;
   }
 
-  const data = (await res.json().catch(() => ({}))) as any;
+  const data = (await res.json().catch(ignoreMalformedResponse)) as any;
   if (!res.ok) {
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
+  noteUsage(providerId, modelId, data?.usage);
 
   let content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') {
@@ -523,12 +833,15 @@ async function callOpenAICompatible(opts: {
 
 async function callOpenAICompatibleWithTools(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
+  inputImages?: ModelImage[];
   tools: LLMToolDef[];
+  signal?: AbortSignal;
 }): Promise<LLMWithToolsResult> {
-  const { effectiveBase, modelId, apiKey, messages, tools } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages, tools } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const toolsBody = tools.map((t) => ({
@@ -539,30 +852,14 @@ async function callOpenAICompatibleWithTools(opts: {
       parameters: t.parameters,
     },
   }));
-  const apiMessages = messages.map((m) => {
-    if (m.role === 'tool' && m.tool_call_id != null) {
-      return { role: 'tool' as const, content: m.content, tool_call_id: m.tool_call_id };
-    }
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-      return {
-        role: 'assistant' as const,
-        content: m.content || '',
-        tool_calls: m.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
-        })),
-      };
-    }
-    return { role: m.role, content: m.content || '' };
-  });
+  const apiMessages = openAIMessages(messages, opts.inputImages);
 
   const body: Record<string, unknown> = {
     model: effectiveModelForRequest(modelId, effectiveBase),
     messages: apiMessages,
     max_tokens: 4096,
     tools: toolsBody,
-    tool_choice: 'auto',
+    tool_choice: resolveExplicitToolChoice(messages, tools),
   };
   if (body.model === undefined) delete body.model;
   // 对思考模型启用 reasoning_split，将思考内容分离到 reasoning_details 字段
@@ -577,15 +874,17 @@ async function callOpenAICompatibleWithTools(opts: {
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await modelFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
+      signal: opts.signal,
       body: JSON.stringify(body),
     });
   } catch (e: any) {
+    if (e?.name === 'AbortError'||isModelBudgetError(e)) throw e;
     const msg = e?.message || String(e);
     if (/fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|network/i.test(msg)) {
       throw new Error('无法连接 LLM 服务，请检查 Base URL 与网络', { cause: e });
@@ -593,11 +892,12 @@ async function callOpenAICompatibleWithTools(opts: {
     throw e;
   }
 
-  const data = (await res.json().catch(() => ({}))) as any;
+  const data = (await res.json().catch(ignoreMalformedResponse)) as any;
   if (!res.ok) {
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
+  noteUsage(providerId, modelId, data?.usage);
 
   const msg = data?.choices?.[0]?.message;
   if (!msg) throw new Error('模型未返回有效回复');
@@ -620,20 +920,27 @@ async function callOpenAICompatibleWithTools(opts: {
     const id = typeof tc.id === 'string' ? tc.id : `call_${toolCalls.length}`;
     toolCalls.push({ id, name: fn.name, arguments: args });
   }
+  if (toolCalls.length === 0) {
+    const textual = parseTextualToolCalls(text, tools);
+    if (textual.toolCalls.length > 0) return textual;
+  }
   return { content: text, toolCalls };
 }
 
 async function streamOpenAICompatibleWithTools(
   opts: {
     effectiveBase: string;
+    providerId?: string;
     modelId: string;
     apiKey: string;
     messages: ChatMessage[];
+    inputImages?: ModelImage[];
     tools: LLMToolDef[];
+    signal?: AbortSignal;
   },
   onChunk: (chunk: string) => void,
 ): Promise<LLMWithToolsResult> {
-  const { effectiveBase, modelId, apiKey, messages, tools } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages, tools } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const toolsBody = tools.map((t) => ({
@@ -644,44 +951,31 @@ async function streamOpenAICompatibleWithTools(
       parameters: t.parameters,
     },
   }));
-  const apiMessages = messages.map((m) => {
-    if (m.role === 'tool' && m.tool_call_id != null) {
-      return { role: 'tool' as const, content: m.content, tool_call_id: m.tool_call_id };
-    }
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length > 0) {
-      return {
-        role: 'assistant' as const,
-        content: m.content || '',
-        tool_calls: m.tool_calls.map((tc) => ({
-          id: tc.id,
-          type: 'function' as const,
-          function: { name: tc.name, arguments: JSON.stringify(tc.arguments ?? {}) },
-        })),
-      };
-    }
-    return { role: m.role, content: m.content || '' };
-  });
+  const apiMessages = openAIMessages(messages, opts.inputImages);
   const body = {
     model: effectiveModelForRequest(modelId, effectiveBase),
     messages: apiMessages,
     max_tokens: 4096,
     stream: true as const,
+    stream_options: { include_usage: true },
     tools: toolsBody,
-    tool_choice: 'auto' as const,
+    tool_choice: resolveExplicitToolChoice(messages, tools),
   };
   if (body.model === undefined) delete (body as any).model;
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await modelFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
+      signal: opts.signal,
       body: JSON.stringify(body),
     });
   } catch (e: unknown) {
+    if (e instanceof Error && e.name === 'AbortError'||isModelBudgetError(e)) throw e;
     const err = e as { message?: string; cause?: { code?: string; message?: string } };
     const causeCode = err?.cause && typeof err.cause === 'object' && 'code' in err.cause ? (err.cause as { code?: string }).code : undefined;
     const causeMsg = err?.cause && typeof err.cause === 'object' && 'message' in err.cause ? (err.cause as { message?: string }).message : undefined;
@@ -696,7 +990,7 @@ async function streamOpenAICompatibleWithTools(
   }
 
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as any;
+    const data = (await res.json().catch(ignoreMalformedResponse)) as any;
     throw new Error(data?.error?.message || data?.message || res.statusText || `请求失败: ${res.status}`);
   }
   const reader = res.body?.getReader();
@@ -704,8 +998,13 @@ async function streamOpenAICompatibleWithTools(
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let rawContent = '';
   let content = '';
   const toolCallsAccum: Array<{ id: string; name: string; args: string }> = [];
+  const thinkFilter = createThinkStreamFilter((visibleChunk) => {
+    content += visibleChunk;
+    onChunk(visibleChunk);
+  });
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -719,12 +1018,13 @@ async function streamOpenAICompatibleWithTools(
         if (data === '[DONE]') continue;
         try {
           const parsed = JSON.parse(data) as any;
+          if (parsed?.usage) noteUsage(providerId, modelId, parsed.usage);
           const delta = parsed?.choices?.[0]?.delta;
           if (!delta) continue;
           const text = delta.content;
           if (typeof text === 'string') {
-            content += text;
-            onChunk(text);
+            rawContent += text;
+            thinkFilter.push(text);
           }
           const rawTc = delta.tool_calls;
           if (Array.isArray(rawTc)) {
@@ -742,14 +1042,17 @@ async function streamOpenAICompatibleWithTools(
               }
             }
           }
-        } catch {
-          // ignore
+        } catch (error) {
+          ignoreMalformedResponse(error);
         }
       }
     }
   } finally {
+    await reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
+  thinkFilter.finish();
+  content = stripThinkTags(rawContent);
   const toolCalls: LLMToolCall[] = [];
   for (const acc of toolCallsAccum) {
     if (!acc.name) continue;
@@ -767,28 +1070,36 @@ async function streamOpenAICompatibleWithTools(
       arguments: args,
     });
   }
+  if (toolCalls.length === 0) {
+    const textual = parseTextualToolCalls(content, tools);
+    if (textual.toolCalls.length > 0) return textual;
+  }
   return { content, toolCalls };
 }
 
 async function callAnthropic(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
+  inputImages?: ModelImage[];
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   const base = effectiveBase || 'https://api.anthropic.com';
   if (!apiKey) throw new Error('该提供商需要配置 API Key');
 
   const systemParts: string[] = [];
-  const apiMessages: { role: 'user' | 'assistant'; content: string }[] = [];
+  const apiMessages: { role: 'user' | 'assistant'; content: string | Record<string, unknown>[] }[] = [];
+  const imageMessage = [...messages].reverse().find(message => message.role === 'user');
   for (const m of messages) {
     if (m.role === 'system') {
       systemParts.push(m.content);
     } else {
       apiMessages.push({
         role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content,
+        content: m === imageMessage ? anthropicUserContent(m.content, opts.inputImages) : m.content,
       });
     }
   }
@@ -800,25 +1111,28 @@ async function callAnthropic(opts: {
   };
   if (systemParts.length) body.system = systemParts.join('\n\n');
 
-  const res = await fetch(`${base}/v1/messages`, {
+  const res = await modelFetch(anthropicMessagesUrl(base), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
+    signal: opts.signal,
     body: JSON.stringify(body),
   });
 
-  const data = (await res.json().catch(() => ({}))) as any;
+  const data = (await res.json().catch(ignoreMalformedResponse)) as any;
   if (!res.ok) {
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
+  noteUsage(providerId, modelId, data?.usage);
 
   // Anthropic 返回 content 数组，包含 thinking/text/tool_use 等类型块
   const contentBlocks = data?.content;
   if (!Array.isArray(contentBlocks)) throw new Error('模型未返回有效回复');
+  noteUsage(providerId, modelId, data?.usage);
   // 提取所有 text 类型的内容块，忽略 thinking 块
   const textParts: string[] = [];
   for (const block of contentBlocks) {
@@ -834,18 +1148,22 @@ async function callAnthropic(opts: {
 
 async function* streamOpenAICompatible(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
+  inputImages?: ModelImage[];
+  signal?: AbortSignal;
 }): AsyncGenerator<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const body: Record<string, unknown> = {
     model: effectiveModelForRequest(modelId, effectiveBase),
-    messages: messages.map((m) => ({ role: m.role, content: m.content })),
+    messages: openAIMessages(messages, opts.inputImages),
     max_tokens: 4096,
     stream: true,
+    stream_options: { include_usage: true },
   };
   if (body.model === undefined) delete body.model;
   // 对思考模型启用 reasoning_split，将思考内容分离到 reasoning_details 字段
@@ -853,15 +1171,17 @@ async function* streamOpenAICompatible(opts: {
 
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await modelFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       },
+      signal: opts.signal,
       body: JSON.stringify(body),
     });
   } catch (e: any) {
+    if (e?.name === 'AbortError'||isModelBudgetError(e)) throw e;
     const msg = e?.message || String(e);
     if (/fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|network/i.test(msg)) {
       throw new Error('无法连接 LLM 服务，请检查 Base URL 与网络', { cause: e });
@@ -870,7 +1190,7 @@ async function* streamOpenAICompatible(opts: {
   }
 
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as any;
+    const data = (await res.json().catch(ignoreMalformedResponse)) as any;
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
@@ -893,6 +1213,7 @@ async function* streamOpenAICompatible(opts: {
           if (data === '[DONE]') continue;
           try {
             const parsed = JSON.parse(data) as any;
+            if (parsed?.usage) noteUsage(providerId, modelId, parsed.usage);
             const content = parsed?.choices?.[0]?.delta?.content;
             if (typeof content === 'string') yield content;
           } catch {
@@ -902,6 +1223,7 @@ async function* streamOpenAICompatible(opts: {
       }
     }
   } finally {
+    await reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
 }
@@ -910,23 +1232,27 @@ async function* streamOpenAICompatible(opts: {
 
 async function* streamAnthropic(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
+  inputImages?: ModelImage[];
+  signal?: AbortSignal;
 }): AsyncGenerator<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   const base = effectiveBase || 'https://api.anthropic.com';
   if (!apiKey) throw new Error('该提供商需要配置 API Key');
 
   const systemParts: string[] = [];
-  const apiMessages: { role: 'user' | 'assistant'; content: string }[] = [];
+  const apiMessages: { role: 'user' | 'assistant'; content: string | Record<string, unknown>[] }[] = [];
+  const imageMessage = [...messages].reverse().find(message => message.role === 'user');
   for (const m of messages) {
     if (m.role === 'system') {
       systemParts.push(m.content);
     } else {
       apiMessages.push({
         role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.content,
+        content: m === imageMessage ? anthropicUserContent(m.content, opts.inputImages) : m.content,
       });
     }
   }
@@ -939,18 +1265,19 @@ async function* streamAnthropic(opts: {
   };
   if (systemParts.length) body.system = systemParts.join('\n\n');
 
-  const res = await fetch(`${base}/v1/messages`, {
+  const res = await modelFetch(anthropicMessagesUrl(base), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
+    signal: opts.signal,
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as any;
+    const data = (await res.json().catch(ignoreMalformedResponse)) as any;
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
@@ -959,6 +1286,7 @@ async function* streamAnthropic(opts: {
   if (!reader) throw new Error('无法读取响应流');
 
   const decoder = new TextDecoder();
+  const streamUsage = { input: 0, output: 0 };
   let buffer = '';
   try {
     while (true) {
@@ -975,6 +1303,8 @@ async function* streamAnthropic(opts: {
             if (parsed?.type === 'content_block_delta' && parsed?.delta?.type === 'text_delta' && typeof parsed.delta.text === 'string') {
               yield parsed.delta.text;
             }
+            if (parsed?.type === 'message_start' && typeof parsed?.message?.usage?.input_tokens === 'number') streamUsage.input = parsed.message.usage.input_tokens;
+            if (parsed?.type === 'message_delta' && typeof parsed?.usage?.output_tokens === 'number') streamUsage.output = parsed.usage.output_tokens;
           } catch {
             // ignore
           }
@@ -982,6 +1312,8 @@ async function* streamAnthropic(opts: {
       }
     }
   } finally {
+    await reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
+  if (streamUsage.input || streamUsage.output) noteUsage(providerId, modelId, { input_tokens: streamUsage.input, output_tokens: streamUsage.output });
 }

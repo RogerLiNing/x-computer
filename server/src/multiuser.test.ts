@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import path from 'path';
 import os from 'os';
@@ -45,19 +45,19 @@ describe('多用户基础设施', () => {
       expect(res.status).toBe(200);
     });
 
-    it('携带 X-User-Id 时正常响应', async () => {
+    it('携带有效会话时正常响应', async () => {
       const res = await request(app)
         .get('/api/health')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('ok');
     });
 
-    it('非法格式 userId 返回 400', async () => {
+    it('公开路径不信任未认证的 userId', async () => {
       const res = await request(app)
         .get('/api/health')
-        .set('X-User-Id', 'has spaces!@#');
-      expect(res.status).toBe(400);
+        .set('X-User-Id','has spaces!@#');
+      expect(res.status).toBe(200);
     });
   });
 
@@ -94,7 +94,7 @@ describe('多用户基础设施', () => {
     it('GET /api/users/me 自动创建用户', async () => {
       const res = await request(app)
         .get('/api/users/me')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.id).toBe(USER_A);
       expect(res.body).toHaveProperty('createdAt');
@@ -107,7 +107,7 @@ describe('多用户基础设施', () => {
     it('PUT /api/users/me/config 批量写入配置', async () => {
       const res = await request(app)
         .put('/api/users/me/config')
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({
           desktop_layout: { icons: [] },
         });
@@ -115,19 +115,32 @@ describe('多用户基础设施', () => {
       expect(res.body.success).toBe(true);
     });
 
-    it('非专业版用户 PUT llm_config 返回 403', async () => {
+    it('普通用户默认可以 PUT 自己的 llm_config', async () => {
       const res = await request(app)
         .put('/api/users/me/config')
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ llm_config: { providers: [{ id: 'openai' }] } });
-      expect(res.status).toBe(403);
-      expect(res.body.error).toMatch(/专业版|升级/i);
+      expect(res.status).toBe(200);
+    });
+
+    it('paid 策略下非专业版用户 PUT llm_config 返回 403', async () => {
+      vi.stubEnv('X_COMPUTER_USER_LLM_POLICY', 'paid');
+      try {
+        const res = await request(app)
+          .put('/api/users/me/config')
+          .set('Cookie', await app.locals.sessions.createCookie(USER_A))
+          .send({ llm_config: { providers: [{ id: 'openai' }] } });
+        expect(res.status).toBe(403);
+        expect(res.body.error).toBe('当前账号无权配置个人模型');
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     it('GET /api/users/me/config 读取配置', async () => {
       const res = await request(app)
         .get('/api/users/me/config')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.desktop_layout).toEqual({ icons: [] });
     });
@@ -142,11 +155,15 @@ describe('多用户基础设施', () => {
       try {
         const res = await request(app)
           .get('/api/users/me/config')
-          .set('X-User-Id', USER_B);
+          .set('Cookie', await app.locals.sessions.createCookie(USER_B));
         expect(res.status).toBe(200);
         expect(res.body).toEqual({});
       } finally {
-        process.env.X_COMPUTER_CONFIG_PATH = prev;
+        if (prev === undefined) {
+          delete process.env.X_COMPUTER_CONFIG_PATH;
+        } else {
+          process.env.X_COMPUTER_CONFIG_PATH = prev;
+        }
         clearDefaultConfigCache();
         await fs.unlink(emptyConfigPath).catch(() => {});
       }
@@ -155,7 +172,7 @@ describe('多用户基础设施', () => {
     it('PUT /api/users/me/config/:key 更新单个配置', async () => {
       const res = await request(app)
         .put('/api/users/me/config/theme')
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ value: 'dark' });
       expect(res.status).toBe(200);
     });
@@ -163,7 +180,7 @@ describe('多用户基础设施', () => {
     it('GET /api/users/me/config/:key 读取单个配置', async () => {
       const res = await request(app)
         .get('/api/users/me/config/theme')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.value).toBe('dark');
     });
@@ -171,12 +188,12 @@ describe('多用户基础设施', () => {
     it('DELETE /api/users/me/config/:key 删除配置', async () => {
       await request(app)
         .delete('/api/users/me/config/theme')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       // Wait for rate-limit window to pass (2 s)
       await new Promise((r) => setTimeout(r, 2100));
       const res = await request(app)
         .get('/api/users/me/config/theme')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(404);
     });
   });
@@ -189,7 +206,7 @@ describe('多用户基础设施', () => {
     it('POST /api/chat/sessions 创建会话', async () => {
       const res = await request(app)
         .post('/api/chat/sessions')
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ title: '测试会话' });
       expect(res.status).toBe(201);
       expect(res.body.title).toBe('测试会话');
@@ -200,7 +217,7 @@ describe('多用户基础设施', () => {
     it('GET /api/chat/sessions 列出会话', async () => {
       const res = await request(app)
         .get('/api/chat/sessions')
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body.length).toBeGreaterThanOrEqual(1);
@@ -210,7 +227,7 @@ describe('多用户基础设施', () => {
     it('用户 B 看不到用户 A 的会话', async () => {
       const res = await request(app)
         .get('/api/chat/sessions')
-        .set('X-User-Id', USER_B);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_B));
       expect(res.status).toBe(200);
       expect(res.body.length).toBe(0);
     });
@@ -218,17 +235,25 @@ describe('多用户基础设施', () => {
     it('POST /api/chat/sessions/:id/messages 追加消息', async () => {
       const res = await request(app)
         .post(`/api/chat/sessions/${sessionId}/messages`)
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ role: 'user', content: '你好' });
       expect(res.status).toBe(201);
       expect(res.body.role).toBe('user');
       expect(res.body.content).toBe('你好');
     });
 
+    it('GET /api/chat/sessions 返回首条用户消息预览', async () => {
+      const res = await request(app)
+        .get('/api/chat/sessions')
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
+      expect(res.status).toBe(200);
+      expect(res.body.find((session: { id: string }) => session.id === sessionId)?.preview).toBe('你好');
+    });
+
     it('POST 追加 assistant 消息（含 toolCalls）', async () => {
       const res = await request(app)
         .post(`/api/chat/sessions/${sessionId}/messages`)
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({
           role: 'assistant',
           content: '你好！',
@@ -241,7 +266,7 @@ describe('多用户基础设施', () => {
     it('GET /api/chat/sessions/:id/messages 获取消息', async () => {
       const res = await request(app)
         .get(`/api/chat/sessions/${sessionId}/messages`)
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.length).toBe(2);
       expect(res.body[0].role).toBe('user');
@@ -251,14 +276,14 @@ describe('多用户基础设施', () => {
     it('用户 B 无权访问用户 A 的会话消息', async () => {
       const res = await request(app)
         .get(`/api/chat/sessions/${sessionId}/messages`)
-        .set('X-User-Id', USER_B);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_B));
       expect(res.status).toBe(403);
     });
 
     it('PUT /api/chat/sessions/:id 更新标题', async () => {
       const res = await request(app)
         .put(`/api/chat/sessions/${sessionId}`)
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ title: '新标题' });
       expect(res.status).toBe(200);
     });
@@ -266,26 +291,26 @@ describe('多用户基础设施', () => {
     it('DELETE /api/chat/sessions/:id 删除会话', async () => {
       const res = await request(app)
         .delete(`/api/chat/sessions/${sessionId}`)
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       // 验证已删除
       const check = await request(app)
         .get(`/api/chat/sessions/${sessionId}`)
-        .set('X-User-Id', USER_A);
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(check.status).toBe(404);
     });
 
     it('PATCH /api/chat/sessions/messages/:msgId/bookmark 收藏消息', async () => {
-      const session = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
+      const session = await request(app).post('/api/chat/sessions').set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({});
       const sId = session.body.id;
       const msg = await request(app)
         .post(`/api/chat/sessions/${sId}/messages`)
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ role: 'user', content: 'test bookmark' });
       const msgId = msg.body.id;
       const res = await request(app)
         .patch(`/api/chat/sessions/messages/${msgId}/bookmark`)
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ bookmarked: true });
       expect(res.status).toBe(200);
       expect(res.body.bookmarked).toBe(true);
@@ -294,19 +319,19 @@ describe('多用户基础设施', () => {
     it('GET /api/chat/sessions/bookmarks 返回跨会话收藏消息', async () => {
       resetRateLimitState(); // ensure clean rate limit state
       // 创建两个会话，各加一条收藏消息
-      const s1 = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
-      const s2 = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
-      const m1 = await request(app).post(`/api/chat/sessions/${s1.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: 'bm1' });
-      const m2 = await request(app).post(`/api/chat/sessions/${s2.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: 'bm2' });
-      await request(app).patch(`/api/chat/sessions/messages/${m1.body.id}/bookmark`).set('X-User-Id', USER_A).send({ bookmarked: true });
-      await request(app).patch(`/api/chat/sessions/messages/${m2.body.id}/bookmark`).set('X-User-Id', USER_A).send({ bookmarked: true });
+      const s1 = await request(app).post('/api/chat/sessions').set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({});
+      const s2 = await request(app).post('/api/chat/sessions').set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({});
+      const m1 = await request(app).post(`/api/chat/sessions/${s1.body.id}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ role: 'user', content: 'bm1' });
+      const m2 = await request(app).post(`/api/chat/sessions/${s2.body.id}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ role: 'user', content: 'bm2' });
+      await request(app).patch(`/api/chat/sessions/messages/${m1.body.id}/bookmark`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ bookmarked: true });
+      await request(app).patch(`/api/chat/sessions/messages/${m2.body.id}/bookmark`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ bookmarked: true });
       // 等待速率限制窗口通过（3s > 2s rate limit）
       await new Promise((r) => setTimeout(r, 3000));
-      const res = await request(app).get('/api/chat/sessions/bookmarks').set('X-User-Id', USER_A);
+      const res = await request(app).get('/api/chat/sessions/bookmarks').set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.length).toBeGreaterThanOrEqual(2);
       // 用户 B 不应看到用户 A 的收藏
-      const bRes = await request(app).get('/api/chat/sessions/bookmarks').set('X-User-Id', USER_B);
+      const bRes = await request(app).get('/api/chat/sessions/bookmarks').set('Cookie', await app.locals.sessions.createCookie(USER_B));
       expect(bRes.status).toBe(200);
       const bIds = bRes.body.map((m: any) => m.id);
       expect(bIds).not.toContain(m1.body.id);
@@ -314,33 +339,33 @@ describe('多用户基础设施', () => {
 
     it('GET /api/chat/sessions/search 跨会话全文搜索', async () => {
       resetRateLimitState();
-      const s = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({});
-      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '香蕉苹果橙子' });
-      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '只包含苹果的消息' });
+      const s = await request(app).post('/api/chat/sessions').set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({});
+      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ role: 'user', content: '香蕉苹果橙子' });
+      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ role: 'user', content: '只包含苹果的消息' });
       await new Promise((r) => setTimeout(r, 2500));
-      const res = await request(app).get('/api/chat/sessions/search?q=苹果').set('X-User-Id', USER_A);
+      const res = await request(app).get('/api/chat/sessions/search?q=苹果').set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(res.status).toBe(200);
       expect(res.body.length).toBeGreaterThanOrEqual(2);
       const snippets = res.body.map((m: any) => m.snippet);
       expect(snippets.every((s: string) => s.includes('苹果'))).toBe(true);
       // 空查询返回空数组
-      const emptyRes = await request(app).get('/api/chat/sessions/search?q=').set('X-User-Id', USER_A);
+      const emptyRes = await request(app).get('/api/chat/sessions/search?q=').set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(emptyRes.status).toBe(200);
       expect(emptyRes.body).toHaveLength(0);
     });
 
     it('POST /api/chat/sessions/branch 从消息创建分支会话', async () => {
       resetRateLimitState();
-      const s = await request(app).post('/api/chat/sessions').set('X-User-Id', USER_A).send({ title: '原始会话' });
-      const m1 = await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '第一条消息' });
-      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('X-User-Id', USER_A).send({ role: 'user', content: '第二条消息' });
+      const s = await request(app).post('/api/chat/sessions').set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ title: '原始会话' });
+      const m1 = await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ role: 'user', content: '第一条消息' });
+      await request(app).post(`/api/chat/sessions/${s.body.id}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ role: 'user', content: '第二条消息' });
       await new Promise((r) => setTimeout(r, 2500));
-      const res = await request(app).post('/api/chat/sessions/branch').set('X-User-Id', USER_A).send({ messageId: m1.body.id });
+      const res = await request(app).post('/api/chat/sessions/branch').set('Cookie', await app.locals.sessions.createCookie(USER_A)).send({ messageId: m1.body.id });
       expect(res.status).toBe(201);
       expect(res.body.title).toMatch(/分支/);
       const newSessionId = res.body.id;
       // 新会话应包含两条消息（从 m1 开始）
-      const newMsgs = await request(app).get(`/api/chat/sessions/${newSessionId}/messages`).set('X-User-Id', USER_A);
+      const newMsgs = await request(app).get(`/api/chat/sessions/${newSessionId}/messages`).set('Cookie', await app.locals.sessions.createCookie(USER_A));
       expect(newMsgs.body.length).toBeGreaterThanOrEqual(1);
     });
   });
@@ -352,7 +377,7 @@ describe('多用户基础设施', () => {
       // 用户 A 写文件
       await request(app)
         .post('/api/fs/write')
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .send({ path: 'test-isolation.txt', content: 'hello from A' });
       // 等待速率限制窗口通过（2 秒）
       await new Promise((r) => setTimeout(r, 2100));
@@ -360,7 +385,7 @@ describe('多用户基础设施', () => {
       // 用户 A 能读到
       const readA = await request(app)
         .get('/api/fs/read')
-        .set('X-User-Id', USER_A)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_A))
         .query({ path: 'test-isolation.txt' });
       expect(readA.status).toBe(200);
       expect(readA.body.content).toBe('hello from A');
@@ -368,7 +393,7 @@ describe('多用户基础设施', () => {
       // 用户 B 读不到（不同的沙箱）
       const readB = await request(app)
         .get('/api/fs/read')
-        .set('X-User-Id', USER_B)
+        .set('Cookie', await app.locals.sessions.createCookie(USER_B))
         .query({ path: 'test-isolation.txt' });
       expect(readB.status).toBe(400); // file not found
     });

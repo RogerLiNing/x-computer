@@ -4,6 +4,7 @@
  */
 
 import Docker from 'dockerode';
+import { createDockerClient } from '../docker/dockerSocket.js';
 import mysql from 'mysql2/promise';
 import { serverLogger } from '../observability/ServerLogger.js';
 
@@ -140,7 +141,7 @@ export async function ensureMysqlReady(): Promise<void> {
   serverLogger.info('db', 'MySQL 不可用，正在检查 Docker 并尝试启动 MySQL 容器…');
   let docker: Docker;
   try {
-    docker = new Docker({ socketPath: '/var/run/docker.sock' });
+    docker = createDockerClient();
     await docker.ping();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -1,5 +1,10 @@
 import type { Message } from './Message';
 
+/** Enter used to confirm an IME candidate must not submit the conversation. */
+export function shouldSubmitChat(event: { key: string; shiftKey: boolean; nativeEvent: { isComposing?: boolean; keyCode?: number } }): boolean {
+  return event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229;
+}
+
 /**
  * 取最近 N 轮对话（仅 user/assistant），用于 API 请求。后端会注入 system 提示，此处不传首条 system。
  * 若需扩展可配置 N，可从设置或 llmConfig 读取。
