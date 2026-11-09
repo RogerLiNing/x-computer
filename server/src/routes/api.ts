@@ -337,7 +337,7 @@ export function createApiRouter(
     router.use(createMcpRouter(orchestrator, sandboxFS, userSandboxManager, db));
   }
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
-  router.use(createPackagesRouter(db, userSandboxManager, plugins));
+  router.use(createPackagesRouter(db, userSandboxManager, plugins, orchestrator));
   router.use(createCapabilitiesRouter(orchestrator));
   router.use(createHealthRouter(orchestrator, audit));
   router.use(createAdminRouter(orchestrator, audit, sandboxFS, userSandboxManager, db));

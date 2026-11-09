@@ -461,6 +461,11 @@ export class AgentOrchestrator extends EventEmitter {
     this.executor.registerDynamicTool(definition, handler, scope);
   }
 
+  /** 包安装、启停或移除后重新注册该用户的包工具 */
+  reloadPackageToolsForUser(userId: string): Promise<void> {
+    return this.executor.reloadPackageTools(userId);
+  }
+
   /** 清除全局 MCP 工具（重载前调用） */
   clearMcpTools(): void {
     this.executor.clearDynamicTools('mcp.');
@@ -606,6 +611,8 @@ export class AgentOrchestrator extends EventEmitter {
         : (allowedToolNames ?? []).filter(withinScope);
     let effectiveAllowed: string[] | undefined = onDemand ? resolveToolNames() : allowedToolNames;
 
+    await this.executor.ensurePackageToolsLoaded(userId);
+    const grantedPermissions = await this.executor.grantedPackagePermissions(userId);
     let scopedTools = (await this.getLLMToolDefsFiltered(userId)).filter(tool => withinScheduledScope(tool.name));
     let tools = scopedTools.filter(tool => withinScope(tool.name));
     if (effectiveAllowed !== undefined) {
@@ -718,6 +725,7 @@ export class AgentOrchestrator extends EventEmitter {
         scheduledBlockedToolNames: blockedToolNames,
         allowedToolNames,
         blockedToolNames: [...blockedTools],
+        grantedPermissions,
         delegationDepth,
         runId:params.runId,
         getConfig: accessors.getConfig,

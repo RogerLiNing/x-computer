@@ -81,13 +81,15 @@ describe('built-in policies', () => {
     expect(await policy(invocation({ context: {} }))).toBeUndefined();
   });
 
-  it('permission policy only applies when the tool declares permissions and the context lists grants', async () => {
+  it('permission policy gates package tools that declare permissions when the context lists grants', async () => {
     const policy = createPermissionPolicy();
-    const needsNetwork = { ...definition, requiredPermissions: ['network'] };
-    expect(await policy(invocation({ definition: needsNetwork, context: {} }))).toBeUndefined();
-    expect(await policy(invocation({ definition: needsNetwork, context: { grantedPermissions: ['kv'] } }))).toMatchObject({ action: 'deny', code: 'permission' });
-    expect(await policy(invocation({ definition: needsNetwork, context: { grantedPermissions: ['network'] } }))).toBeUndefined();
-    expect(await policy(invocation({ definition: undefined, context: { grantedPermissions: [] } }))).toBeUndefined();
+    const needsNetwork = { ...definition, name: 'pkg.demo.echo', requiredPermissions: ['network'] };
+    const pkg = (context: Record<string, unknown>) => invocation({ toolName: 'pkg.demo.echo', definition: needsNetwork, context });
+    expect(await policy(invocation({ toolName: 'file.write', definition: { ...definition, requiredPermissions: ['fs.write'] }, context: { grantedPermissions: [] } }))).toBeUndefined();
+    expect(await policy(pkg({}))).toBeUndefined();
+    expect(await policy(pkg({ grantedPermissions: ['kv'] }))).toMatchObject({ action: 'deny', code: 'permission' });
+    expect(await policy(pkg({ grantedPermissions: ['network'] }))).toBeUndefined();
+    expect(await policy(invocation({ toolName: 'pkg.demo.echo', definition: undefined, context: { grantedPermissions: [] } }))).toBeUndefined();
   });
 });
 

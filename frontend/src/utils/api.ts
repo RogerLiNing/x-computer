@@ -10,6 +10,7 @@ import type {
   LivingAIConfig,
   LivingAIGoal,
   LivingAIStatus,
+  XPackageRecord,
 } from '@x-computer/shared';
 import type { ToolCallRecord } from '@/components/shared';
 
@@ -1645,6 +1646,16 @@ export const api = {
   getAppVersions: (appId:string) => request<{versions:Array<{id:string;name:string;createdAt:number}>}>(`/apps/${encodeURIComponent(appId)}/versions`),
   restoreAppVersion: (appId:string,versionId:string) => request<{app:{id:string;name:string;path:string}}>(`/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(versionId)}/restore`,{method:'POST'}),
   createContentPreview: (content:string,mode:'html'|'react') => request<{url:string;expiresAt:number}>('/apps/preview',{method:'POST',body:JSON.stringify({content,mode})}),
+
+  /** 包注册表：已安装的包（应用/工具/技能）、内置后端插件、可安装目录 */
+  listPackages: () =>
+    request<{ packages: XPackageRecord[]; builtin: Array<{ id: string; name: string; description?: string; enabled: boolean; startupPolicy: string; permissions: string[] }> }>('/packages'),
+  setPackageEnabled: (id: string, enabled: boolean) =>
+    request<{ ok: boolean; package: XPackageRecord }>(`/packages/${encodeURIComponent(id)}/enabled`, { method: 'POST', body: JSON.stringify({ enabled }) }),
+  removePackage: (id: string) =>
+    request<{ ok: boolean }>(`/packages/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  searchPackageCatalog: (q: string) =>
+    request<{ configured: boolean; packages: Array<{ id: string; name: string; description?: string; author?: string; catalog: string; versions: Array<{ version: string }> }> }>(`/packages/catalog?q=${encodeURIComponent(q)}`),
 
   getMiniApps: () =>
     request<{ apps: Array<{ id: string; name: string; path: string }> }>('/apps'),

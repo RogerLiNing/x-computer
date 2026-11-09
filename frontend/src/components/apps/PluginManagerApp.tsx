@@ -21,6 +21,7 @@ import {
 } from '@/appRegistry';
 import { useAppRegistryRevision } from '@/hooks/useAppRegistry';
 import { useDesktopStore } from '@/store/desktopStore';
+import { InstalledPackagesSection } from './InstalledPackagesSection';
 
 interface RuntimePlugin {
   id: string;
@@ -212,6 +213,8 @@ export function PluginManagerApp() {
             })}
           </div>
         </section>
+
+        <InstalledPackagesSection />
 
         {runtime && (
           <section className="rounded-xl border border-white/8 bg-white/[0.025] p-4">

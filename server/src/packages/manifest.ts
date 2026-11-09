@@ -1,4 +1,5 @@
 import type { RiskLevel, ToolParameter, XPackageManifest, XPackageTool } from '@x-computer/shared';
+import { impliedPermission, isPackagePermission, permissionCovers } from './permissions.js';
 
 export const MANIFEST_FILE = 'x-package.json';
 
@@ -9,8 +10,6 @@ const KINDS = ['ui', 'tools', 'skill'] as const;
 const PARAMETER_TYPES = ['string', 'number', 'boolean', 'object', 'array'] as const;
 const RISK_LEVELS = ['low', 'medium', 'high', 'critical'] as const;
 const STARTUP_POLICIES = ['eager', 'on-demand', 'manual'] as const;
-/** Permission names a package may request; `network:` and `fs.read:` take a scope suffix. */
-const PERMISSIONS = ['kv', 'queue', 'broadcast', 'notify', 'llm', 'scheduler', 'fs.read', 'fs.write', 'network', 'mcp', 'script'] as const;
 /** Tool names reserved for the host; a package may not shadow them. */
 const RESERVED_TOOL_PREFIXES = ['x.', 'file.', 'shell.', 'llm.', 'memory', 'capability.', 'skill.', 'docker.', 'server.', 'office.', 'backend.', 'workflow.', 'signal.', 'mcp.', 'video.', 'python.', 'http.'];
 
@@ -24,12 +23,6 @@ function isRelativeEntry(value: unknown): value is string {
   if (typeof value !== 'string' || !value || value.length > 256) return false;
   const normalized = value.replace(/\\/g, '/');
   return !normalized.startsWith('/') && !/^[a-zA-Z]:/.test(normalized) && !normalized.split('/').includes('..') && !normalized.includes('\0');
-}
-
-function isPermission(value: unknown): value is string {
-  if (typeof value !== 'string') return false;
-  const [head] = value.split(':', 1);
-  return (PERMISSIONS as readonly string[]).includes(head) && value.length <= 256 && !/\s/.test(value);
 }
 
 function validateParameters(value: unknown, where: string, errors: string[]): ToolParameter[] {
@@ -92,7 +85,7 @@ export function validatePackageManifest(input: unknown): ManifestValidation {
   const kinds = Array.isArray(input.kinds) ? input.kinds.filter((kind): kind is XPackageManifest['kinds'][number] => (KINDS as readonly string[]).includes(kind as string)) : [];
   if (!Array.isArray(input.kinds) || kinds.length === 0 || kinds.length !== input.kinds.length) errors.push('kinds 至少包含 ui、tools、skill 之一');
   if (!Array.isArray(input.permissions)) errors.push('permissions 必须是数组');
-  else input.permissions.forEach((permission, index) => { if (!isPermission(permission)) errors.push(`permissions[${index}] 未知：${String(permission)}`); });
+  else input.permissions.forEach((permission, index) => { if (!isPackagePermission(permission)) errors.push(`permissions[${index}] 未知：${String(permission)}`); });
   for (const key of ['description', 'icon', 'author'] as const) {
     if (input[key] !== undefined && (typeof input[key] !== 'string' || (input[key] as string).length > 1024)) errors.push(`${key} 必须是字符串`);
   }
@@ -107,6 +100,11 @@ export function validatePackageManifest(input: unknown): ManifestValidation {
   }
   const tools = kinds.includes('tools') ? validateTools(input.tools, errors) : undefined;
   if (kinds.includes('tools') && tools && tools.length === 0 && errors.length === 0) errors.push('tools 至少声明一个工具');
+  const declared = Array.isArray(input.permissions) ? input.permissions.filter(isPackagePermission) : [];
+  for (const tool of tools ?? []) {
+    const needed = impliedPermission(tool.impl);
+    if (!permissionCovers(needed, declared)) errors.push(`工具 ${tool.name} 需要在 permissions 中声明 ${needed}`);
+  }
   let skill: XPackageManifest['skill'];
   if (kinds.includes('skill')) {
     if (!isRecord(input.skill) || !isRelativeEntry(input.skill.entry)) errors.push('skill.entry 必须是包内相对路径');

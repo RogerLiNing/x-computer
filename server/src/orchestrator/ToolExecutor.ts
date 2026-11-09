@@ -4,6 +4,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { UncertainToolOutcomeError } from '../tooling/UncertainToolOutcomeError.js';
 import { createDefaultToolPipeline, type ToolPipeline, type Initiator } from './pipeline/index.js';
 import { PackageRegistry } from '../packages/PackageRegistry.js';
+import { PackageToolRegistrar } from '../packages/PackageToolRegistrar.js';
+import { PackageCatalog, configuredCatalogUrls } from '../packages/catalog.js';
+import { getSpaceStore } from '../spaces/SpaceStore.js';
+import { createPackageToolHandlers, packageToolDefinitions } from './tools/packages.js';
 import { MANIFEST_FILE, manifestForMiniApp, validatePackageManifest } from '../packages/manifest.js';
 import { SendApprovalRequiredError, SendExecutionDeniedError } from '../tooling/sendApproval.js';
 import { ShellApprovalRequiredError } from '../tooling/shellApproval.js';
@@ -366,8 +370,9 @@ export interface ExecutionContext {
 
 type ToolHandler = (input: Record<string, unknown>, context?: ExecutionContext) => Promise<unknown>;
 
-/** 按 scope 存储的动态工具（如 mcp:userId），供多用户 MCP 隔离 */
+/** 按 scope 存储的动态工具（如 mcp:userId、pkg:userId），供多用户隔离 */
 const SCOPE_MCP_PREFIX = 'mcp:';
+const USER_SCOPE_PREFIXES = [SCOPE_MCP_PREFIX, 'pkg:'] as const;
 
 /** 主脑自我进化提示词：读/写由系统按用户隔离存储的 EVOLVED_CORE_PROMPT */
 export interface EvolvedPromptService {
@@ -497,11 +502,55 @@ export class ToolExecutor {
   /** 替换执行流水线（如接入带审计持久化的默认流水线） */
   setPipeline(pipeline: ToolPipeline): void { this.pipeline = pipeline; }
   private packageRegistry?: PackageRegistry;
+  private packageToolRegistrar?: PackageToolRegistrar;
   /** 包注册表（需要数据库）；模型生成的应用在此登记为 ui 包 */
   private packages(): PackageRegistry | undefined {
-    if (!this.db) return undefined;
-    this.packageRegistry ??= new PackageRegistry(this.db);
+    // Tests and legacy callers pass partial database stubs; the registry needs the SQL surface.
+    const db = this.db as Partial<AppDatabase> | undefined;
+    if (!db || typeof db.getDialect !== 'function' || typeof db.run !== 'function' || typeof db.query !== 'function') return undefined;
+    this.packageRegistry ??= new PackageRegistry(this.db!);
     return this.packageRegistry;
+  }
+  /** 把用户已启用的 tools 类包映射为该用户 scope 内的工具 */
+  private packageTools(): PackageToolRegistrar | undefined {
+    const registry = this.packages();
+    if (!registry || !this.db) return undefined;
+    this.packageToolRegistrar ??= new PackageToolRegistrar(registry, this, {
+      db: this.db,
+      runTool: async (name, input, context) => {
+        const call = await this.execute({ id: `pkg-${uuid()}`, taskId: '__package__', action: name, toolName: name, toolInput: input, status: 'pending', riskLevel: 'low' }, 'container', context as ExecutionContext);
+        if (call.error) throw new Error(call.error);
+        return call.output;
+      },
+    });
+    return this.packageToolRegistrar;
+  }
+  /** 每次运行前调用：按需把该用户的包工具注册进来（未变化时无开销） */
+  async ensurePackageToolsLoaded(userId: string | undefined): Promise<void> {
+    try { await this.packageTools()?.ensureLoaded(userId); }
+    catch (error: unknown) { serverLogger.warn('packages', '加载包工具失败，本轮不提供包工具', error instanceof Error ? error.message : String(error)); }
+  }
+  /** 包安装、启停或移除后调用 */
+  async reloadPackageTools(userId: string): Promise<void> { await this.packageTools()?.reload(userId); }
+  /** 该用户已启用的包所声明的全部权限；供流水线的权限策略使用 */
+  async grantedPackagePermissions(userId: string | undefined): Promise<string[] | undefined> {
+    try { return await this.packageTools()?.grantedPermissions(userId); }
+    catch (error: unknown) { serverLogger.warn('packages', '读取包权限失败', error instanceof Error ? error.message : String(error)); return undefined; }
+  }
+  /** 包管理工具始终注册；注册表在首次使用时才建表，避免没有完整数据库的调用方启动失败 */
+  private registerPackageTools(): void {
+    if (!this.db) return;
+    const db = this.db;
+    const requireRegistry = () => { const registry = this.packages(); if (!registry) throw new Error('包注册表不可用'); return registry; };
+    const catalog = new PackageCatalog(configuredCatalogUrls());
+    const handlers = createPackageToolHandlers({
+      get registry() { return requireRegistry(); },
+      catalog,
+      get spaces() { return getSpaceStore(db); },
+      resolveFS: (context) => this.resolveFS(context as ExecutionContext | undefined),
+      onChanged: (userId) => this.reloadPackageTools(userId),
+    });
+    for (const definition of packageToolDefinitions) this.register(definition, handlers[definition.name]!);
   }
   /** 读取模型已写好的包清单（id 须一致），否则按应用信息生成默认清单并写入包目录。 */
   private async resolveAppManifest(fs: SandboxFS, app: { id: string; name: string; path: string }) {
@@ -542,6 +591,7 @@ export class ToolExecutor {
     private db?: AppDatabase,
   ) {
     this.registerBuiltinTools();
+    this.registerPackageTools();
   }
 
   /** 由 createApiRouter 注入，用于 signal.emit 时触发用户配置的触发器 */
@@ -640,11 +690,7 @@ export class ToolExecutor {
       runtimeType,
     };
 
-    let handler: ToolHandler | undefined;
-    if (context?.userId) {
-      const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + context.userId);
-      handler = scopeMap?.get(step.toolName)?.handler;
-    }
+    let handler: ToolHandler | undefined = this.userScopedTool(step.toolName, context?.userId)?.handler;
     handler ??= this.tools.get(step.toolName);
     if (!handler) {
       call.error = `Tool not found: ${step.toolName}`;
@@ -683,21 +729,27 @@ export class ToolExecutor {
     return call;
   }
 
-  getToolDefinition(name: string, userId?: string): ToolDefinition | undefined {
-    if (userId) {
-      const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + userId);
-      const own=scopeMap?.get(name)?.definition;
-      if(own)return own;
+  /** 用户私有 scope（MCP、包）里的工具，先注册的 scope 优先 */
+  private userScopedTool(name: string, userId?: string): { definition: ToolDefinition; handler: ToolHandler } | undefined {
+    if (!userId) return undefined;
+    for (const prefix of USER_SCOPE_PREFIXES) {
+      const own = this.scopedTools.get(prefix + userId)?.get(name);
+      if (own) return own;
     }
-    return this.definitions.get(name);
+    return undefined;
+  }
+
+  getToolDefinition(name: string, userId?: string): ToolDefinition | undefined {
+    return this.userScopedTool(name, userId)?.definition ?? this.definitions.get(name);
   }
 
   listTools(userId?: string): ToolDefinition[] {
     const definitions = new Map(this.definitions);
     if (userId) {
-      const scopeMap = this.scopedTools.get(SCOPE_MCP_PREFIX + userId);
-      if (scopeMap) {
-        for (const { definition } of scopeMap.values()) definitions.set(definition.name,definition);
+      for (const prefix of USER_SCOPE_PREFIXES) {
+        const scopeMap = this.scopedTools.get(prefix + userId);
+        if (!scopeMap) continue;
+        for (const { definition } of scopeMap.values()) definitions.set(definition.name, definition);
       }
     }
     return [...definitions.values()];
@@ -2809,6 +2861,7 @@ git clone https://${hostname}/${skillName}.git
           try {
             const manifest = await this.resolveAppManifest(fs, { id: appId, name, path: appPath });
             await registry.install(userId, manifest, { source: 'generated', path: appPath });
+            await this.reloadPackageTools(userId);
           } catch (error: unknown) {
             return { ok: false, error: `应用已写入但包登记失败：${error instanceof Error ? error.message : String(error)}` };
           }

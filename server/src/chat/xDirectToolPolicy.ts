@@ -1,4 +1,5 @@
 import { SPACE_FILE_TOOL_NAMES, SPACE_TOOL_NAMES } from '../orchestrator/tools/space.js';
+import { PACKAGE_TOOL_NAMES } from '../orchestrator/tools/packages.js';
 
 export const X_DIRECT_PRELOADED_TOOLS = [
   'x.notify_user',
@@ -37,6 +38,7 @@ export function resolveIntentPreloadedTools(userMessage: string | undefined): st
   }
   if (/提醒|到时叫我|\bremind(?:er)?\b/i.test(message)) tools.push('x.schedule_reminder');
   if (/空间|邀请码|\bspace\b|\binvite\b/i.test(message)) tools.push(...SPACE_TOOL_NAMES, ...SPACE_FILE_TOOL_NAMES);
+  if (/安装|卸载|停用|启用|插件|扩展包|\bpackage\b|\binstall\b/i.test(message)) tools.push(...PACKAGE_TOOL_NAMES);
   if (/x\.schedule_run|定时|到点|届时|(?:明天|后天|每天|每周).{0,12}(?:点|时)|(?:分钟|小时)后|\bschedule\b/i.test(message)) tools.push('x.schedule_run');
   if (/\.docx\b|Word\s*文档|Word\b|创建.{0,12}文档|制作.{0,12}文档/i.test(message)) {
     tools.push('office.create_docx');

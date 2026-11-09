@@ -37,13 +37,16 @@ describe('validatePackageManifest', () => {
     expect(badImpl.ok).toBe(false);
     const badName = validatePackageManifest({ ...valid, tools: [{ ...valid.tools[0], name: 'x.create_app' }] });
     expect(badName.ok).toBe(false);
+    const undeclared = validatePackageManifest({ ...valid, tools: [{ ...valid.tools[0], impl: { type: 'http', url: 'https://api.example.com/x' } }] });
+    expect(undeclared.ok).toBe(false);
+    expect(validatePackageManifest({ ...valid, permissions: ['kv', 'network:api.example.com'], tools: [{ ...valid.tools[0], impl: { type: 'http', url: 'https://api.example.com/x' } }] }).ok).toBe(true);
   });
 
   it('rejects entry paths that escape the package directory and unknown permissions', () => {
     expect(validatePackageManifest({ ...valid, ui: { entry: '../index.html' } }).ok).toBe(false);
     expect(validatePackageManifest({ ...valid, ui: { entry: '/etc/passwd' } }).ok).toBe(false);
     expect(validatePackageManifest({ ...valid, permissions: ['root'] }).ok).toBe(false);
-    expect(validatePackageManifest({ ...valid, permissions: ['network:api.example.com', 'fs.read:apps/com.roger.todo'] }).ok).toBe(true);
+    expect(validatePackageManifest({ ...valid, permissions: ['kv', 'network:api.example.com', 'fs.read:apps/com.roger.todo'] }).ok).toBe(true);
   });
 
   it('rejects a non-object input', () => {
