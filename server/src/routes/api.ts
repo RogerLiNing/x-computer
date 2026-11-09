@@ -39,6 +39,7 @@ import { createAgentsRouter } from './agents.js';
 import { createMcpRouter } from './mcp.js';
 import { createAppsRouter } from './apps.js';
 import { createPackagesRouter } from './packages.js';
+import { createUsageRouter } from './usage.js';
 import { createCapabilitiesRouter } from './capabilities.js';
 import { createEditorAgentRouter } from './editorAgent.js';
 import { createChatRouter } from './chat.js';
@@ -338,6 +339,7 @@ export function createApiRouter(
   }
   router.use(createAppsRouter(orchestrator, userSandboxManager, db, miniAppLogStore));
   router.use(createPackagesRouter(db, userSandboxManager, plugins, orchestrator));
+  router.use(createUsageRouter(db));
   router.use(createCapabilitiesRouter(orchestrator));
   router.use(createHealthRouter(orchestrator, audit));
   router.use(createAdminRouter(orchestrator, audit, sandboxFS, userSandboxManager, db));

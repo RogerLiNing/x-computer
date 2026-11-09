@@ -14,6 +14,8 @@ interface BudgetContext {service:Pick<SubscriptionService,'consumeAiCall'> & Par
 const context=new AsyncLocalStorage<BudgetContext>();
 export function currentModelBudgetSignal(){return context.getStore()?.signal;}
 export function currentModelBudgetService(){return context.getStore()?.service;}
+/** The user and run a model call belongs to, for usage accounting. */
+export function currentModelBudgetScope():{userId?:string;runId?:string}|undefined{const scope=context.getStore();return scope?{userId:scope.userId,runId:scope.runId}:undefined;}
 export function withModelBudget<T>(scope:BudgetContext,work:()=>T):T{
   const parent=context.getStore();
   const runId=scope.runId??(parent?.userId===scope.userId?parent?.runId:undefined);

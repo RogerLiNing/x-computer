@@ -217,6 +217,8 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 }
 
+export interface UsageTotals { calls: number; promptTokens: number; completionTokens: number; costUsd: number | null }
+
 export const api = {
   // Mode
   getMode: () => request<{ mode: string }>('/mode'),
@@ -1646,6 +1648,10 @@ export const api = {
   getAppVersions: (appId:string) => request<{versions:Array<{id:string;name:string;createdAt:number}>}>(`/apps/${encodeURIComponent(appId)}/versions`),
   restoreAppVersion: (appId:string,versionId:string) => request<{app:{id:string;name:string;path:string}}>(`/apps/${encodeURIComponent(appId)}/versions/${encodeURIComponent(versionId)}/restore`,{method:'POST'}),
   createContentPreview: (content:string,mode:'html'|'react') => request<{url:string;expiresAt:number}>('/apps/preview',{method:'POST',body:JSON.stringify({content,mode})}),
+
+  /** 本人模型用量：总计、按模型、按天 */
+  getModelUsage: (days?: number) =>
+    request<{ since: number; totals: UsageTotals; byModel: Array<UsageTotals & { providerId: string; modelId: string }>; byDay: Array<UsageTotals & { day: string }> }>(`/usage/models${days ? `?days=${days}` : ''}`),
 
   /** 包注册表：已安装的包（应用/工具/技能）、内置后端插件、可安装目录 */
   listPackages: () =>

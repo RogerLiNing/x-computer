@@ -5,11 +5,20 @@ import { resolveLlmApiType } from '../../../shared/src/index.js';
  */
 import { serverLogger } from '../observability/ServerLogger.js';
 import { createHash } from 'node:crypto';
-import {modelFetch,isModelBudgetError} from '../subscription/modelBudget.js';
+import {modelFetch,isModelBudgetError,currentModelBudgetScope} from '../subscription/modelBudget.js';
+import { parseProviderUsage, recordModelUsage } from '../llm/usage.js';
 
 function ignoreMalformedResponse(error: unknown): object {
   if (isModelBudgetError(error)||error instanceof Error && error.name === 'AbortError') throw error;
   return {};
+}
+
+/** Records provider-reported usage against the current run; silently skips when the provider sent none. */
+function noteUsage(providerId: string | undefined, modelId: string, raw: unknown): void {
+  const usage = parseProviderUsage(raw);
+  if (!usage) return;
+  const scope = currentModelBudgetScope();
+  recordModelUsage({ ...usage, providerId: providerId ?? 'unknown', modelId, userId: scope?.userId, runId: scope?.runId });
 }
 
 /** 支持 assistant 带 tool_calls、tool 结果消息（用于 Agent 循环） */
@@ -199,10 +208,10 @@ export async function callLLM(req: ChatRequest): Promise<string> {
   const useAnthropic = resolveLlmApiType(providerId, baseUrl, apiType) === 'anthropic';
 
   if (useAnthropic) {
-    return callAnthropic({ effectiveBase, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
+    return callAnthropic({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
   }
 
-  return callOpenAICompatible({ effectiveBase, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
+  return callOpenAICompatible({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
 }
 
 /**
@@ -233,6 +242,7 @@ export async function callLLMWithTools(req: ChatRequest, tools: LLMToolDef[]): P
 
   return callOpenAICompatibleWithTools({
     effectiveBase,
+    providerId,
     modelId,
     apiKey: key,
     messages,
@@ -261,6 +271,7 @@ export async function callLLMWithToolsStream(
   return streamOpenAICompatibleWithTools(
     {
       effectiveBase: (req.baseUrl || '').replace(/\/$/, ''),
+      providerId: req.providerId,
       modelId: req.modelId,
       apiKey: (req.apiKey || '').trim(),
       messages: req.messages,
@@ -323,6 +334,7 @@ async function callAnthropicWithTools(req: ChatRequest, tools: LLMToolDef[]): Pr
   req.signal?.throwIfAborted();
   if (!response.ok) throw new Error(data.error?.message || response.statusText || `请求失败: ${response.status}`);
   if (!Array.isArray(data.content)) throw new Error('模型未返回有效回复');
+  noteUsage(req.providerId, req.modelId, (data as { usage?: unknown }).usage);
   const toolByName = new Map(tools.map((tool) => [anthropicToolName(tool.name), tool.name]));
   const content: string[] = [];
   const toolCalls: LLMToolCall[] = [];
@@ -356,11 +368,11 @@ export async function* callLLMStream(req: ChatRequest): AsyncGenerator<string> {
   const useAnthropic = resolveLlmApiType(providerId, baseUrl, apiType) === 'anthropic';
 
   if (useAnthropic) {
-    yield* streamAnthropic({ effectiveBase, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
+    yield* streamAnthropic({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
     return;
   }
 
-  yield* streamOpenAICompatible({ effectiveBase, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
+  yield* streamOpenAICompatible({ effectiveBase, providerId, modelId, apiKey: key, messages, signal, inputImages: req.inputImages });
 }
 
 /**
@@ -589,12 +601,13 @@ const IMAGE_PROMPT_MAX_LENGTH = 2000;
 
 async function callOpenAICompatibleGenerateImage(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
   signal?: AbortSignal;
 }): Promise<GenerateImageResult> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const truncatedMessages = messages.map((m) => {
@@ -751,13 +764,14 @@ function openAIMessages(messages: ChatMessage[], images?: ModelImage[]) {
 
 async function callOpenAICompatible(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
   inputImages?: ModelImage[];
   signal?: AbortSignal;
 }): Promise<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -794,6 +808,7 @@ async function callOpenAICompatible(opts: {
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
+  noteUsage(providerId, modelId, data?.usage);
 
   let content = data?.choices?.[0]?.message?.content;
   if (typeof content !== 'string') {
@@ -818,6 +833,7 @@ async function callOpenAICompatible(opts: {
 
 async function callOpenAICompatibleWithTools(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
@@ -825,7 +841,7 @@ async function callOpenAICompatibleWithTools(opts: {
   tools: LLMToolDef[];
   signal?: AbortSignal;
 }): Promise<LLMWithToolsResult> {
-  const { effectiveBase, modelId, apiKey, messages, tools } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages, tools } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const toolsBody = tools.map((t) => ({
@@ -881,6 +897,7 @@ async function callOpenAICompatibleWithTools(opts: {
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
+  noteUsage(providerId, modelId, data?.usage);
 
   const msg = data?.choices?.[0]?.message;
   if (!msg) throw new Error('模型未返回有效回复');
@@ -913,6 +930,7 @@ async function callOpenAICompatibleWithTools(opts: {
 async function streamOpenAICompatibleWithTools(
   opts: {
     effectiveBase: string;
+    providerId?: string;
     modelId: string;
     apiKey: string;
     messages: ChatMessage[];
@@ -922,7 +940,7 @@ async function streamOpenAICompatibleWithTools(
   },
   onChunk: (chunk: string) => void,
 ): Promise<LLMWithToolsResult> {
-  const { effectiveBase, modelId, apiKey, messages, tools } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages, tools } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const toolsBody = tools.map((t) => ({
@@ -939,6 +957,7 @@ async function streamOpenAICompatibleWithTools(
     messages: apiMessages,
     max_tokens: 4096,
     stream: true as const,
+    stream_options: { include_usage: true },
     tools: toolsBody,
     tool_choice: resolveExplicitToolChoice(messages, tools),
   };
@@ -999,6 +1018,7 @@ async function streamOpenAICompatibleWithTools(
         if (data === '[DONE]') continue;
         try {
           const parsed = JSON.parse(data) as any;
+          if (parsed?.usage) noteUsage(providerId, modelId, parsed.usage);
           const delta = parsed?.choices?.[0]?.delta;
           if (!delta) continue;
           const text = delta.content;
@@ -1059,13 +1079,14 @@ async function streamOpenAICompatibleWithTools(
 
 async function callAnthropic(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
   inputImages?: ModelImage[];
   signal?: AbortSignal;
 }): Promise<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   const base = effectiveBase || 'https://api.anthropic.com';
   if (!apiKey) throw new Error('该提供商需要配置 API Key');
 
@@ -1106,10 +1127,12 @@ async function callAnthropic(opts: {
     const errMsg = data?.error?.message || data?.message || res.statusText;
     throw new Error(errMsg || `请求失败: ${res.status}`);
   }
+  noteUsage(providerId, modelId, data?.usage);
 
   // Anthropic 返回 content 数组，包含 thinking/text/tool_use 等类型块
   const contentBlocks = data?.content;
   if (!Array.isArray(contentBlocks)) throw new Error('模型未返回有效回复');
+  noteUsage(providerId, modelId, data?.usage);
   // 提取所有 text 类型的内容块，忽略 thinking 块
   const textParts: string[] = [];
   for (const block of contentBlocks) {
@@ -1125,13 +1148,14 @@ async function callAnthropic(opts: {
 
 async function* streamOpenAICompatible(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
   inputImages?: ModelImage[];
   signal?: AbortSignal;
 }): AsyncGenerator<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   if (!effectiveBase) throw new Error('请配置该提供商的 Base URL');
   const url = `${effectiveBase}/chat/completions`;
   const body: Record<string, unknown> = {
@@ -1139,6 +1163,7 @@ async function* streamOpenAICompatible(opts: {
     messages: openAIMessages(messages, opts.inputImages),
     max_tokens: 4096,
     stream: true,
+    stream_options: { include_usage: true },
   };
   if (body.model === undefined) delete body.model;
   // 对思考模型启用 reasoning_split，将思考内容分离到 reasoning_details 字段
@@ -1188,6 +1213,7 @@ async function* streamOpenAICompatible(opts: {
           if (data === '[DONE]') continue;
           try {
             const parsed = JSON.parse(data) as any;
+            if (parsed?.usage) noteUsage(providerId, modelId, parsed.usage);
             const content = parsed?.choices?.[0]?.delta?.content;
             if (typeof content === 'string') yield content;
           } catch {
@@ -1206,13 +1232,14 @@ async function* streamOpenAICompatible(opts: {
 
 async function* streamAnthropic(opts: {
   effectiveBase: string;
+  providerId?: string;
   modelId: string;
   apiKey: string;
   messages: ChatMessage[];
   inputImages?: ModelImage[];
   signal?: AbortSignal;
 }): AsyncGenerator<string> {
-  const { effectiveBase, modelId, apiKey, messages } = opts;
+  const { effectiveBase, providerId, modelId, apiKey, messages } = opts;
   const base = effectiveBase || 'https://api.anthropic.com';
   if (!apiKey) throw new Error('该提供商需要配置 API Key');
 
@@ -1259,6 +1286,7 @@ async function* streamAnthropic(opts: {
   if (!reader) throw new Error('无法读取响应流');
 
   const decoder = new TextDecoder();
+  const streamUsage = { input: 0, output: 0 };
   let buffer = '';
   try {
     while (true) {
@@ -1275,6 +1303,8 @@ async function* streamAnthropic(opts: {
             if (parsed?.type === 'content_block_delta' && parsed?.delta?.type === 'text_delta' && typeof parsed.delta.text === 'string') {
               yield parsed.delta.text;
             }
+            if (parsed?.type === 'message_start' && typeof parsed?.message?.usage?.input_tokens === 'number') streamUsage.input = parsed.message.usage.input_tokens;
+            if (parsed?.type === 'message_delta' && typeof parsed?.usage?.output_tokens === 'number') streamUsage.output = parsed.usage.output_tokens;
           } catch {
             // ignore
           }
@@ -1285,4 +1315,5 @@ async function* streamAnthropic(opts: {
     await reader.cancel().catch(()=>{});
     reader.releaseLock();
   }
+  if (streamUsage.input || streamUsage.output) noteUsage(providerId, modelId, { input_tokens: streamUsage.input, output_tokens: streamUsage.output });
 }

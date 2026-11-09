@@ -15,6 +15,8 @@ import { fileURLToPath } from 'url';
 import { getRecentAssistantChat as getRecentAssistantChatImpl } from './chat/recentChatForX.js';
 import { AgentOrchestrator } from './orchestrator/AgentOrchestrator.js';
 import { AuditLogger } from './observability/AuditLogger.js';
+import { ModelUsageStore } from './llm/ModelUsageStore.js';
+import { setModelUsageSink } from './llm/usage.js';
 import { SandboxFS } from './tooling/SandboxFS.js';
 import { SandboxShell } from './tooling/SandboxShell.js';
 import { UserSandboxManager } from './tooling/UserSandboxManager.js';
@@ -379,6 +381,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
 
   // ── NotificationService ──────────────────────────────────────────
   initNotificationService(db);
+
+  // ── 模型用量：每次模型响应的 token 记入 model_usage ──
+  const modelUsageStore = new ModelUsageStore(db);
+  setModelUsageSink((record) => modelUsageStore.insert(record));
 
   // ── 审计持久化（C.4）：根据 taskId 解析 userId 写入 audit_log ──
   audit.setPersist((entry) => {

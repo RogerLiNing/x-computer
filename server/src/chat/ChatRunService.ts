@@ -4,6 +4,7 @@ import { UserInputRequiredError, type UserQuestion } from '../tooling/userQuesti
 import {RunOwnershipStore,RunOwnershipLostError} from './RunOwnershipStore.js';
 import { resolveRequestedTextArtifactPath, buildTextArtifactDeliveryInstruction, isSchedulingTool } from './xDirectToolPolicy.js';
 import { createHash, randomUUID } from 'node:crypto';
+import { isVirtualModel, resolveAutoRoute, routeVirtualModel, type RouteTier } from '../llm/virtualModel.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { AppDatabase } from '../db/database.js';
@@ -67,6 +68,8 @@ export interface ChatRunInput {
   userMessage?: { content: string; images?: string[]; attachedFiles?: Array<{ name: string; path: string }> };
 }
 interface RunRecord extends ChatRunInput, ChatRunSnapshot {
+  /** Physical model chosen for a virtual (`auto`) selection; later rounds and resumes stay on it. */
+  routedModel?:{tier:RouteTier;providerId:string;modelId:string;reason:string};
   gatedSends?: boolean;
   durableDelegation?:boolean;
   resumeDelegations?:boolean;
@@ -1319,9 +1322,30 @@ export class ChatRunService {
     }
   }
 
+  /** `auto` picks a cheap or strong physical model from the user's or deployment's autoRoute config, once per run. */
+  private async resolveModelSelection(record:RunRecord):Promise<{providerId:string;modelId:string}> {
+    if(!isVirtualModel(record.modelId))return {providerId:record.providerId,modelId:record.modelId};
+    if(record.routedModel)return record.routedModel;
+    let userConfig:unknown;
+    try{const raw=await this.options.db.getConfig(record.userId,'llm_config');userConfig=raw?JSON.parse(raw):undefined;}catch{userConfig=undefined;}
+    const config=resolveAutoRoute(userConfig);
+    if(!config)throw new ChatRunBlockedError('选择了自动模型（auto），但未配置 autoRoute 的 cheap / strong 模型。');
+    const lastUser=[...record.messages].reverse().find(message=>message.role==='user')?.content??record.userMessage?.content??'';
+    const decision=routeVirtualModel({
+      toolCount:record.expert||record.coordination?record.allowedToolNames?.length??0:0,
+      hasImages:!!(record.userMessage?.images?.length||record.imageInputs?.length),
+      promptText:[record.systemPrompt??'',...record.messages.map(message=>message.content)].join('\n'),
+      lastUserMessage:lastUser,
+    },config);
+    record.routedModel={tier:decision.tier,...decision.model,reason:decision.reason};
+    await this.save(record);
+    return decision.model;
+  }
+
   private async executeOwned(record:RunRecord,signal:AbortSignal):Promise<void> {
     try {
-      const llmConfig = await this.options.getLLMConfig(record.userId, record.providerId, record.modelId);
+      const selected = await this.resolveModelSelection(record);
+      const llmConfig = await this.options.getLLMConfig(record.userId, selected.providerId, selected.modelId);
       signal.throwIfAborted();
       await this.requireScheduledFileWrite(record);
       await this.prepareInputs(record,signal);
