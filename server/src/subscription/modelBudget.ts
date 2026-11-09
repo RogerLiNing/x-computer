@@ -1,6 +1,7 @@
 import {AsyncLocalStorage} from 'node:async_hooks';
 import type {SubscriptionService} from './SubscriptionService.js';
 import type {ModelCallLease} from './ModelCallQueue.js';
+import {fetchWithConnectRetry} from '../llm/connectRetry.js';
 
 export class ModelQuotaError extends Error {
   constructor(message='本期模型调用次数已用完。进度会保留，可在额度恢复后继续。') {super(message);this.name='ModelQuotaError';}
@@ -41,7 +42,7 @@ export async function modelFetch(url:string,init:RequestInit):Promise<Response>{
   await lease?.assert();
   await scope?.assertRun?.();
   const signal=lease?.signal??inputSignal;signal?.throwIfAborted();
-  const response=await fetch(url,{...init,signal});
+  const response=await fetchWithConnectRetry(url,{...init,signal});
   if(!lease)return response;
   if(!response.body){await lease.release();return response;}
   return leasedResponse(response,lease);
