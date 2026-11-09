@@ -39,3 +39,36 @@ describe('schedule persistence and cron validation', () => {
     await expect(scheduler.addJob('owner', 'test', 'invalid')).rejects.toThrow('时间无效');
   });
 });
+
+describe('scheduler reliability', () => {
+  it('caps standing jobs per user and names the way out', async () => {
+    process.env.X_SCHEDULER_MAX_JOBS_PER_USER = '2';
+    try {
+      const scheduler = new XScheduler(async () => {});
+      await scheduler.addJob('alice', 'a', Date.now() + 60_000);
+      await scheduler.addJob('alice', 'b', Date.now() + 60_000);
+      await expect(scheduler.addJob('alice', 'c', Date.now() + 60_000)).rejects.toThrow(/最多同时保留 2 个/);
+      await expect(scheduler.addJob('bob', 'c', Date.now() + 60_000)).resolves.toBeDefined();
+    } finally { delete process.env.X_SCHEDULER_MAX_JOBS_PER_USER; }
+  });
+
+  it('reports a heartbeat and lists disabled jobs with their last outcome', async () => {
+    const store = {
+      loadAll: async () => [{ id: 'j1', userId: 'alice', intent: 'live', runAt: Date.now() + 60_000, createdAt: 1 }],
+      save: async () => {}, updateRunAt: async () => {}, remove: async () => {},
+      listAllForUser: async () => [
+        { id: 'j1', userId: 'alice', intent: 'live', runAt: Date.now() + 60_000, createdAt: 1, enabled: true },
+        { id: 'j2', userId: 'alice', intent: 'stopped', runAt: 0, createdAt: 1, enabled: false },
+      ],
+      lastOutcomes: async () => ({ j2: { status: 'needs_attention', error: '模型未配置', at: 5 } }),
+    };
+    const scheduler = new XScheduler(async () => {}, store);
+    await scheduler.loadJobs();
+    expect(scheduler.getStats()).toMatchObject({ running: false, lastTickAt: null, healthy: true, jobCount: 1 });
+    await scheduler.tick();
+    expect(scheduler.getStats().lastTickAt).not.toBeNull();
+    const listed = await scheduler.listJobsWithOutcome('alice');
+    expect(listed.map((job) => [job.id, job.enabled, job.lastRun?.status])).toEqual([['j1', true, undefined], ['j2', false, 'needs_attention']]);
+    expect(scheduler.listJobs('alice')).toHaveLength(1);
+  });
+});

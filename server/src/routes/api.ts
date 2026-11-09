@@ -618,6 +618,14 @@ export function createApiRouter(
         },
         queue: (job, nextAt) => occurrences!.queue(job, nextAt),
         recover: () => occurrences!.recover(),
+        lastOutcomes: (userId) => occurrences!.lastOutcomes(userId),
+        async listAllForUser(userId: string) {
+          const rows = await db!.listScheduledJobsByUser(userId);
+          return rows.map(r => ({
+            id: r.id, userId: r.user_id, intent: r.intent, runAt: r.next_run ?? r.run_at, cron: r.cron ?? undefined,
+            createdAt: r.created_at, name: r.name ?? undefined, enabled: r.enabled === 1,
+          }));
+        },
         async save(job: ScheduledJob): Promise<void> {
           await db!.insertScheduledJob({
             id: job.id,

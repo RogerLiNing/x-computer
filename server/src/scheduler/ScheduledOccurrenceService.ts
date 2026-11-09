@@ -225,7 +225,7 @@ export class ScheduledOccurrenceService {
   private async channelHistory(row: Occurrence, runs: ChatRunService) {
     const previous = await this.options.db.query<Occurrence>(`SELECT * FROM scheduled_occurrences
       WHERE user_id=? AND job_id=? AND status='completed' AND run_id IS NOT NULL
-      AND (scheduled_at<? OR (scheduled_at=? AND id<?)) ORDER BY scheduled_at DESC,id DESC LIMIT 4`,
+      AND (scheduled_at<? OR (scheduled_at=? AND id<?)) ORDER BY scheduled_at DESC,id DESC LIMIT 12`,
     [row.user_id, row.job_id, row.scheduled_at, row.scheduled_at, row.id]);
     const history: Array<{role: 'user' | 'assistant'; content: string}> = [];
     for (const item of previous.reverse()) {
@@ -304,6 +304,15 @@ export class ScheduledOccurrenceService {
         : ['not_sent','sending','sent','unknown'].includes(reply_status??'') ? reply_status : undefined : undefined;
       return {...row,status:publicStatus(row.status),name:job.name||job.intent.slice(0,80),replyStatus};
     });
+  }
+  /** The newest occurrence of each job the user owns, as the scheduler shows it. */
+  async lastOutcomes(userId: string): Promise<Record<string, { status: string; error: string | null; at: number }>> {
+    await this.ready;
+    const rows = await this.options.db.query<Pick<Occurrence, 'job_id' | 'status' | 'error' | 'scheduled_at'>>(
+      'SELECT job_id,status,error,scheduled_at FROM scheduled_occurrences WHERE user_id=? AND cancelled=0 ORDER BY scheduled_at DESC,id DESC LIMIT 500', [userId]);
+    const outcomes: Record<string, { status: string; error: string | null; at: number }> = {};
+    for (const row of rows) if (!outcomes[row.job_id]) outcomes[row.job_id] = { status: publicStatus(row.status), error: row.error, at: Number(row.scheduled_at) };
+    return outcomes;
   }
   async cancelJob(jobId: string): Promise<void> {
     await this.ready;

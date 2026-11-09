@@ -20,6 +20,9 @@ export interface ScheduledJob {
   scopeJson?: string | null;
 }
 
+/** The most recent occurrence of a job: what happened the last time it was due. */
+export interface ScheduledJobOutcome { status: string; error: string | null; at: number }
+
 /** Durable stores enqueue an occurrence before moving the plan forward. */
 export interface ScheduledJobStore {
   loadAll(): Promise<ScheduledJob[]>;
@@ -28,9 +31,22 @@ export interface ScheduledJobStore {
   remove(id: string): void | Promise<void>;
   queue?(job: ScheduledJob, nextAt: number | null): Promise<void>;
   recover?(): Promise<void>;
+  /** Every job of the user, including ones the scheduler switched off after a failure. */
+  listAllForUser?(userId: string): Promise<Array<ScheduledJob & { enabled: boolean }>>;
+  /** Latest outcome per job id. */
+  lastOutcomes?(userId: string): Promise<Record<string, ScheduledJobOutcome>>;
 }
 
 const TICK_MS = 60_000; // 每分钟检查一次
+/** A tick older than this while running means the loop is stuck or the process is gone. */
+export const SCHEDULER_STALE_AFTER_MS = 3 * TICK_MS;
+const DEFAULT_MAX_JOBS_PER_USER = 20;
+
+/** One person's standing jobs are capped so a sentence cannot schedule more than they meant. */
+export function maxJobsPerUser(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.X_SCHEDULER_MAX_JOBS_PER_USER);
+  return Number.isInteger(raw) && raw > 0 ? raw : DEFAULT_MAX_JOBS_PER_USER;
+}
 
 function nextId(): string {
   return `sched-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -85,6 +101,7 @@ export class XScheduler {
   private jobs: ScheduledJob[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
+  private lastTickAt: number | null = null;
 
   constructor(onRun: OnRunJob, store?: ScheduledJobStore) {
     this.onRun = onRun;
@@ -127,6 +144,10 @@ export class XScheduler {
       throw new Error('请指定有效的执行时间');
     }
     if (!Number.isFinite(runAt)) throw new Error('执行时间无效');
+    const limit = maxJobsPerUser();
+    if (this.jobs.filter((j) => j.userId === userId).length >= limit) {
+      throw new Error(`最多同时保留 ${limit} 个定时任务，请先用 x.remove_scheduled_run 删除不再需要的任务`);
+    }
     const job: ScheduledJob = {
       id,
       userId,
@@ -148,17 +169,31 @@ export class XScheduler {
     return [...this.jobs];
   }
 
+  /** Jobs with their enabled flag and last outcome, so a stopped job explains itself instead of vanishing. */
+  async listJobsWithOutcome(userId: string): Promise<Array<ScheduledJob & { enabled: boolean; lastRun?: ScheduledJobOutcome }>> {
+    const jobs: Array<ScheduledJob & { enabled: boolean }> = this.store?.listAllForUser
+      ? await this.store.listAllForUser(userId)
+      : this.listJobs(userId).map((job) => ({ ...job, enabled: true }));
+    const outcomes = this.store?.lastOutcomes ? await this.store.lastOutcomes(userId) : {};
+    return jobs.map((job) => ({ ...job, ...(outcomes[job.id] ? { lastRun: outcomes[job.id] } : {}) }));
+  }
+
   /** 调度器是否已启动（每分钟 tick 一次） */
   isRunning(): boolean {
     return this.timer != null;
   }
 
   /** 状态摘要：任务数、下次运行时间（当前用户或全局最近一次） */
-  getStats(userId?: string): { jobCount: number; nextRunAt: number | null } {
+  getStats(userId?: string): { jobCount: number; nextRunAt: number | null; running: boolean; lastTickAt: number | null; healthy: boolean } {
     const list = userId ? this.jobs.filter((j) => j.userId === userId) : this.jobs;
     const now = Date.now();
     const future = list.filter((j) => j.runAt > now).map((j) => j.runAt);
+    const running = this.timer !== null;
     return {
+      running,
+      lastTickAt: this.lastTickAt,
+      // A paused scheduler is not unhealthy; a running one that stopped ticking is.
+      healthy: !running || (this.lastTickAt !== null && now - this.lastTickAt < SCHEDULER_STALE_AFTER_MS),
       jobCount: list.length,
       nextRunAt: future.length > 0 ? Math.min(...future) : null,
     };
@@ -198,6 +233,7 @@ export class XScheduler {
   async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
+    this.lastTickAt = Date.now();
     try {
     await this.loadJobs();
     const now = Date.now();

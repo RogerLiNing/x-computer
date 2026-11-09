@@ -2519,7 +2519,7 @@ git clone https://${hostname}/${skillName}.git
         if (!userId || userId === 'anonymous') return { jobs: [], message: '需要已登录用户' };
         const scheduler = getDefaultScheduler();
         if (!scheduler) return { jobs: [], message: '定时调度未就绪' };
-        const list = scheduler.listJobs(userId);
+        const list = await scheduler.listJobsWithOutcome(userId);
         return {
           jobs: list.map((j) => ({
             id: j.id,
@@ -2527,7 +2527,10 @@ git clone https://${hostname}/${skillName}.git
             runAt: j.runAt,
             runAtISO: new Date(j.runAt).toISOString(),
             cron: j.cron ?? undefined,
+            enabled: j.enabled,
+            ...(j.lastRun ? { lastRun: { status: j.lastRun.status, error: j.lastRun.error ?? undefined, atISO: new Date(j.lastRun.at).toISOString() } } : {}),
           })),
+          message: list.some((j) => !j.enabled) ? '标记 enabled=false 的任务因上次执行需要处理而已停止；修复后可重新交办。' : undefined,
         };
       },
     );

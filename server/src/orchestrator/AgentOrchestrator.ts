@@ -21,7 +21,8 @@ import type { AsyncDatabase } from '../db/database.js';
 import type { MiniAppLogStore } from '../miniAppLogStore.js';
 import type { EvolvedPromptService, GetRecentAssistantChat } from './ToolExecutor.js';
 import { v4 as uuid } from 'uuid';
-import { callLLMWithTools, callLLMWithToolsStream } from '../chat/chatService.js';
+import { callLLM, callLLMWithTools, callLLMWithToolsStream } from '../chat/chatService.js';
+import { compactIfNeeded } from '../chat/compaction/runCompaction.js';
 import type { ChatMessage, LLMToolCall } from '../chat/chatService.js';
 import { fire as fireHook } from '../hooks/HookRegistry.js';
 import { getCurrentAwareness } from '../prompts/systemCore.js';
@@ -638,6 +639,13 @@ export class AgentOrchestrator extends EventEmitter {
         .join('\n\n')
         .slice(-30000);
     while (steps < maxSteps) {
+      signal?.throwIfAborted();
+      // Long conversations are folded into a summary before they overflow the model's window.
+      const compacted = await compactIfNeeded(messages, llmConfig, (prompt) => callLLM({
+        messages: [{ role: 'user', content: prompt }], providerId: llmConfig.providerId, modelId: llmConfig.modelId,
+        baseUrl: llmConfig.baseUrl, apiKey: llmConfig.apiKey, apiType: llmConfig.apiType, signal,
+      }));
+      if (compacted) await checkpoint();
       signal?.throwIfAborted();
       let result = onContentChunk
         ? await callLLMWithToolsStream(
