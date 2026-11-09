@@ -395,11 +395,12 @@ export function createApiRouter(
   const getSystemPromptForScheduler = async (uid: string) => {
     const toolLoadingMode = getToolLoadingMode();
     const onDemandTools = toolLoadingMode === 'on_demand';
-    const [learnedPrompt, evolvedCorePrompt, basePrompt, timeline] = await Promise.all([
+    const [learnedPrompt, evolvedCorePrompt, basePrompt, timeline, memoryIndex] = await Promise.all([
       getLearnedPromptForUser(uid),
       getEvolvedCorePromptForUser(uid),
       getBasePromptForUser(uid),
       buildTimelineContext(db as any, uid),
+      getMemoryServiceForUser(uid).then((mem) => (mem ? mem.promptMemory().catch(() => '') : '')),
     ]);
     const tools = listAllCapabilities(orchestrator.getTools());
     const skills = getDiscoveredSkills(uid);
@@ -415,6 +416,7 @@ export function createApiRouter(
       toolLoadingModeOnDemand: onDemandTools,
       capabilities: caps,
       learnedPrompt,
+      memoryIndex,
       evolvedCorePrompt,
       timeline,
     });

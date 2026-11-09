@@ -4,6 +4,7 @@
  */
 
 import type { SandboxFS } from '../tooling/SandboxFS.js';
+import { TopicNotes } from './TopicNotes.js';
 import type { VectorStore, VectorEntry } from './vectorStore.js';
 
 const MEMORY_DIR = 'memory';
@@ -63,10 +64,23 @@ function statusPath(workspaceId?: string): string {
 }
 
 export class MemoryService {
+  /** 主题笔记、到期/作废条目、归档与撤销日志 */
+  readonly topics: TopicNotes;
   constructor(
     private fs: SandboxFS,
     private vectorStore?: VectorStore,
-  ) {}
+  ) {
+    this.topics = new TopicNotes(fs);
+  }
+
+  /** 注入系统提示的记忆：MEMORY.md 的有效条目 + 主题目录（正文按需用 memory_topic_read 读取） */
+  async promptMemory(): Promise<string> {
+    const [main, index] = await Promise.all([this.topics.promptMain(), this.topics.promptIndex()]);
+    const parts: string[] = [];
+    if (main) parts.push(main);
+    if (index) parts.push(`可按需读取的主题笔记（用 memory_topic_read）：\n${index}`);
+    return parts.join('\n\n');
+  }
 
   private async readStatusMeta(workspaceId?: string): Promise<MemoryRuntimeStatusMeta> {
     try {
@@ -293,6 +307,9 @@ export class MemoryService {
         parts.push(`[${dateStr}]\n` + daily.slice(0, 1500));
       }
     }
+
+    const topicHits = await this.topics.recall(keywords);
+    for (const hit of topicHits) parts.push(`[主题 ${hit.name}]\n${hit.excerpt}`);
 
     return parts.join('\n\n').trim() || '';
   }

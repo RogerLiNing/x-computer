@@ -10,6 +10,7 @@ import { getSpaceStore } from '../spaces/SpaceStore.js';
 import { createPackageToolHandlers, packageToolDefinitions } from './tools/packages.js';
 import { JobRegistry } from '../jobs/JobRegistry.js';
 import { createJobToolHandlers, jobToolDefinitions } from './tools/jobs.js';
+import { createMemoryTopicToolHandlers, memoryTopicToolDefinitions } from './tools/memoryTopics.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { broadcastToUser } from '../wsBroadcast.js';
 import { MANIFEST_FILE, manifestForMiniApp, validatePackageManifest } from '../packages/manifest.js';
@@ -608,6 +609,8 @@ export class ToolExecutor {
     this.registerPackageTools();
     const jobHandlers = createJobToolHandlers(this.jobs);
     for (const definition of jobToolDefinitions) this.register(definition, jobHandlers[definition.name]!);
+    const memoryHandlers = createMemoryTopicToolHandlers({ getMemoryServiceForUser: (userId) => this.getMemoryServiceForUser?.(userId) ?? Promise.resolve(null) });
+    for (const definition of memoryTopicToolDefinitions) this.register(definition, memoryHandlers[definition.name]!);
   }
 
   /** 由 createApiRouter 注入，用于 signal.emit 时触发用户配置的触发器 */

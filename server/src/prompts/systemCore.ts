@@ -159,6 +159,8 @@ export interface AssembleOptions {
   memory?: string;
   /** 从对话中学习到的规则与偏好（随对话不断丰富，非写死） */
   learnedPrompt?: string;
+  /** 长期记忆的有效条目与主题笔记目录（MemoryService.promptMemory） */
+  memoryIndex?: string;
   /** AI 自我进化的核心提示词片段（主脑通过 evolve_system_prompt 追加，系统组装时注入） */
   evolvedCorePrompt?: string;
   /** AI 助手专用说明（由 X 主脑根据用户与助手对话优化，仅注入到 AI 助手场景） */
@@ -258,6 +260,7 @@ export function getAssembledSystemPrompt(options: AssembleOptions = {}): string 
     taskSummary = '',
     memory = '',
     learnedPrompt = '',
+    memoryIndex = '',
     evolvedCorePrompt = '',
     assistantPrompt = '',
     timeline = '',
@@ -278,11 +281,12 @@ export function getAssembledSystemPrompt(options: AssembleOptions = {}): string 
 
   // 时间与系统感知：主脑应像人类一样知道「现在几点、什么环境」
   const currentAwareness = getCurrentAwareness();
-  if (currentAwareness || capabilities || computerContext || taskSummary || memory || learnedPrompt || timeline) {
+  if (currentAwareness || capabilities || computerContext || taskSummary || memory || learnedPrompt || memoryIndex || timeline) {
     const parts: string[] = [];
     if (currentAwareness) parts.push(`# 当前感知\n${currentAwareness}`);
     if (timeline) parts.push(`# 时间线\n${timeline}`);
     if (promptMode === 'full' && learnedPrompt) parts.push(`# 从对话中学习到的规则与偏好\n${learnedPrompt.trim()}`);
+    if (memoryIndex) parts.push(`# 长期记忆\n${memoryIndex.trim()}\n\n记忆规则：用户说出值得长期记住的事实、偏好或决定时用 memory_remember 记下（有时效的加 until）；用户更正旧说法时用 memory_supersede；问题涉及某个主题时先 memory_topic_read。`);
     const capsText = toolLoadingModeOnDemand ? CAPABILITIES_ON_DEMAND : capabilities;
     if (capsText) parts.push(`# 当前可用能力\n${capsText}`);
     if (computerContext) parts.push(`# 当前整机状态\n${computerContext}`);

@@ -378,6 +378,13 @@ export function createChatRouter(
     return svc.readLearnedPrompt();
   }
 
+  /** 取当前用户的长期记忆有效条目与主题目录 */
+  async function getMemoryIndexForUser(userId: string | undefined): Promise<string> {
+    const mem = await getMemoryServiceForUser(userId);
+    if (!mem) return '';
+    try { return await mem.promptMemory(); } catch { return ''; }
+  }
+
   /** 取当前用户「AI 自我进化的核心提示词」片段 */
   async function getEvolvedCorePromptForUser(userId: string | undefined): Promise<string> {
     const mem = await getMemoryServiceForUser(userId);
@@ -428,13 +435,14 @@ export function createChatRouter(
       const llmConfig = await getChatLLMConfig(userId, providerId, modelId);
       serverLogger.info('chat', `POST /chat [${providerId}/${modelId}] messages=${messages.length} stream=${!!stream} scene=${scene ?? 'none'}`);
 
-      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
+      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext, memoryIndex] = await Promise.all([
         getLearnedPromptForUser(userId),
         getEvolvedCorePromptForUser(userId),
         getBasePromptForUser(userId),
         getAssistantPromptForUser(userId),
         buildTimelineContext(db as any, userId),
         getLivingContext(userId, scene),
+        getMemoryIndexForUser(userId),
       ]);
 
       let chatMessages = messages.map((m) => ({
@@ -466,6 +474,7 @@ export function createChatRouter(
           taskSummary,
           memory,
           learnedPrompt,
+          memoryIndex,
           evolvedCorePrompt,
           assistantPrompt: sceneId !== 'x_direct' ? assistantPrompt : '',
           timeline,
@@ -594,13 +603,14 @@ export function createChatRouter(
         );
       }
 
-      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
+      const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext, memoryIndex] = await Promise.all([
         getLearnedPromptForUser(userId),
         getEvolvedCorePromptForUser(userId),
         getBasePromptForUser(userId),
         getAssistantPromptForUser(userId),
         buildTimelineContext(db as any, userId ?? ''),
         getLivingContext(userId, scene),
+        getMemoryIndexForUser(userId),
       ]);
       const clientToolNames = new Set(toolsBody.map((t) => t.name));
       const allServerTools = await orchestrator.getLLMToolDefsFiltered(userId);
@@ -636,6 +646,7 @@ export function createChatRouter(
           taskSummary,
           memory,
           learnedPrompt,
+          memoryIndex,
           evolvedCorePrompt,
           assistantPrompt: sceneId !== 'x_direct' ? assistantPrompt : '',
           timeline,
@@ -798,13 +809,14 @@ export function createChatRouter(
         const toolLoadingMode = getToolLoadingMode();
         const onDemand = toolLoadingMode === 'on_demand';
         const sceneId = scene && ['normal_chat', 'x_direct', 'none'].includes(scene) ? scene : 'normal_chat';
-        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
+        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext, memoryIndex] = await Promise.all([
           getLearnedPromptForUser(userId),
           getEvolvedCorePromptForUser(userId),
           getBasePromptForUser(userId),
           getAssistantPromptForUser(userId),
           buildTimelineContext(db as any, userId),
           getLivingContext(userId, sceneId),
+          getMemoryIndexForUser(userId),
         ]);
         const caps = onDemand
           ? ''
@@ -821,6 +833,7 @@ export function createChatRouter(
           taskSummary,
           memory,
           learnedPrompt,
+          memoryIndex,
           evolvedCorePrompt,
           assistantPrompt,
           timeline,
@@ -975,13 +988,14 @@ export function createChatRouter(
         allowedToolNames = agent.toolNames?.length ? agent.toolNames : undefined;
         sceneId = 'normal_chat';
       } else {
-        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext] = await Promise.all([
+        const [learnedPrompt, evolvedCorePrompt, basePrompt, assistantPrompt, timeline, livingContext, memoryIndex] = await Promise.all([
           getLearnedPromptForUser(userId),
           getEvolvedCorePromptForUser(userId),
           getBasePromptForUser(userId),
           getAssistantPromptForUser(userId),
           buildTimelineContext(db as any, userId),
           getLivingContext(userId, sceneId),
+          getMemoryIndexForUser(userId),
         ]);
         const toolLoadingMode = getToolLoadingMode();
         const onDemand = toolLoadingMode === 'on_demand';
@@ -1006,6 +1020,7 @@ export function createChatRouter(
           taskSummary,
           memory,
           learnedPrompt,
+          memoryIndex,
           evolvedCorePrompt,
           assistantPrompt: sceneId !== 'x_direct' ? assistantPrompt : '',
           timeline,

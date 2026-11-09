@@ -217,6 +217,33 @@ export function createMemoryRouter(
   });
 
   /** GET：按路径读记忆文件全文或片段（对齐 OpenClaw readFile）。Query: path（必填）, from?, lines? */
+  /** 主题笔记：列表、读取、整体写入、撤销 */
+  router.get('/memory/topics', async (req, res) => {
+    const mem = (await getMemoryServiceForUser((req as { userId?: string }).userId)) ?? memoryService;
+    try { res.json({ topics: await mem.topics.list(), journal: (await mem.topics.journal()).slice(-20).map(({ before: _b, after: _a, ...rest }) => rest) }); }
+    catch (err: any) { res.status(500).json({ error: err.message ?? '读取主题失败' }); }
+  });
+  router.get('/memory/topics/:name', async (req, res) => {
+    const mem = (await getMemoryServiceForUser((req as { userId?: string }).userId)) ?? memoryService;
+    try {
+      const content = await mem.topics.read(req.params.name);
+      if (content === undefined) return res.status(404).json({ error: '没有这个主题' });
+      res.json({ name: req.params.name, content });
+    } catch (err: any) { res.status(400).json({ error: err.message ?? '读取失败' }); }
+  });
+  router.put('/memory/topics/:name', async (req, res) => {
+    const mem = (await getMemoryServiceForUser((req as { userId?: string }).userId)) ?? memoryService;
+    const content = (req.body as { content?: unknown } | undefined)?.content;
+    if (typeof content !== 'string') return res.status(400).json({ error: 'content 必须是字符串' });
+    try { await mem.topics.write(req.params.name, content, 'user-edit'); res.json({ ok: true }); }
+    catch (err: any) { res.status(400).json({ error: err.message ?? '写入失败' }); }
+  });
+  router.post('/memory/undo', async (req, res) => {
+    const mem = (await getMemoryServiceForUser((req as { userId?: string }).userId)) ?? memoryService;
+    try { const undone = await mem.topics.undoLast(); res.json(undone ? { ok: true, file: undone.file, reason: undone.reason } : { ok: false, error: '没有可撤销的修改' }); }
+    catch (err: any) { res.status(500).json({ error: err.message ?? '撤销失败' }); }
+  });
+
   router.get('/memory/read', async (req, res) => {
     try {
       const pathParam = String(req.query?.path ?? '').trim();
