@@ -25,8 +25,10 @@ export function isAllowedSocketOrigin(origin:string|undefined,host:string|undefi
   }catch{return false;}
 }
 
-export function attachWebSocketServer(server:http.Server, {orchestrator,audit,sessions}:{orchestrator:AgentOrchestrator;audit:AuditLogger;sessions:SessionAuth}) {
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 262144 });
+export function attachWebSocketServer(server:http.Server, {orchestrator,audit,sessions,upgrades}:{orchestrator:AgentOrchestrator;audit:AuditLogger;sessions:SessionAuth;upgrades?:{register(path:string,handler:(request:http.IncomingMessage,socket:import('node:stream').Duplex,head:Buffer)=>void):void}}) {
+// With an upgrade router the server multiplexes several WebSocket paths; without one, ws owns the server as before.
+const wss = upgrades ? new WebSocketServer({ noServer: true, maxPayload: 262144 }) : new WebSocketServer({ server, path: '/ws', maxPayload: 262144 });
+upgrades?.register('/ws',(request,socket,head)=>wss.handleUpgrade(request,socket,head,(ws)=>wss.emit('connection',ws,request)));
 
 /** 已连接的客户端，关联 userId 与订阅的小程序通道 */
 interface ClientInfo {

@@ -15,6 +15,7 @@ import http from 'http';
 import { createApp } from './app.js';
 
 import { attachWebSocketServer } from './webSocketServer.js';
+import { createUpgradeRouter } from './nodes/index.js';
 import { loadMcpAndRegister } from './mcp/loadAndRegister.js';
 import { initServerManager } from './server/ServerManager.js';
 
@@ -27,7 +28,7 @@ const workspaceRoot = process.env.X_COMPUTER_WORKSPACE
 const requireLogin = process.env.X_COMPUTER_REQUIRE_LOGIN !== 'false';
 
 // 顶层 await（Node.js 支持 ES modules 顶层 await）
-const { app, orchestrator, audit, sandboxFS, db, plugins } = await createApp({
+const { app, orchestrator, audit, sandboxFS, db, plugins, nodes } = await createApp({
   ...(workspaceRoot ? { workspaceRoot } : {}),
   allowAnonymous: !requireLogin,
 });
@@ -36,7 +37,9 @@ const { app, orchestrator, audit, sandboxFS, db, plugins } = await createApp({
 initServerManager(db);
 
 const server = http.createServer(app);
-attachWebSocketServer(server,{orchestrator,audit,sessions:app.locals.sessions});
+const upgrades = createUpgradeRouter(server);
+attachWebSocketServer(server,{orchestrator,audit,sessions:app.locals.sessions,upgrades});
+if (nodes) upgrades.register(nodes.gateway.path, nodes.gateway.handleUpgrade);
 
 // ── Start ──────────────────────────────────────────────────
 

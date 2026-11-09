@@ -16,6 +16,8 @@ import { getRecentAssistantChat as getRecentAssistantChatImpl } from './chat/rec
 import { AgentOrchestrator } from './orchestrator/AgentOrchestrator.js';
 import { AuditLogger } from './observability/AuditLogger.js';
 import { ModelUsageStore } from './llm/ModelUsageStore.js';
+import { createNodeRuntime, type NodeRuntime } from './nodes/index.js';
+import { createNodeEnrollRouter, createNodesRouter } from './routes/nodes.js';
 import { setModelUsageSink } from './llm/usage.js';
 import { SandboxFS } from './tooling/SandboxFS.js';
 import { SandboxShell } from './tooling/SandboxShell.js';
@@ -108,6 +110,8 @@ export interface AppResult {
   db: AsyncDatabase;
   heartbeatService: HeartbeatService;
   plugins: PluginRegistry;
+  /** 节点子智能体：注册表、网关、任务 */
+  nodes?: NodeRuntime;
 }
 
 /**
@@ -421,6 +425,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
     app.use('/webhook', createWebhookTriggerRouter(db, orchestrator));
   }
 
+  // 节点子智能体：注册端点在用户鉴权之前（节点用一次性令牌换密钥），其余接口在 /api 之下
+  const nodes = createNodeRuntime(db, subscriptionService);
+  orchestrator.setNodeRuntime(nodes);
+  app.use('/api/nodes', createNodeEnrollRouter(nodes));
+
   // 运行档位是启动诊断信息，不包含用户数据，登录前也可读取。
   app.use('/api/runtime', createRuntimeRouter(plugins, db));
   // 配置文件（含 profile/local 层）变化时重新加载，无需重启
@@ -439,6 +448,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
   app.use('/api/auth', createAuthRouter(db, userSandboxManager));
   app.use('/api/auth', createAuthEnhancedRoutes(db, oauthConfig,app.locals.sessions));
   app.use('/api', createApiRouter(orchestrator, audit, sandboxFS, userSandboxManager, db, miniAppLogStore, subscriptionService, plugins));
+  app.use('/api', createNodesRouter(nodes));
   app.use('/api/users', createUserRouter(db, subscriptionService));
   app.use('/api/computer', createComputerRouter(computer));
   app.use('/api/fs', createFSRouter(sandboxFS, userSandboxManager, db));
@@ -488,5 +498,6 @@ export async function createApp(options: CreateAppOptions = {}): Promise<AppResu
     db,
     heartbeatService,
     plugins,
+    nodes,
   };
 }

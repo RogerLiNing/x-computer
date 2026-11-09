@@ -463,6 +463,9 @@ export class AgentOrchestrator extends EventEmitter {
     this.executor.registerDynamicTool(definition, handler, scope);
   }
 
+  /** 节点子智能体运行时，供 node.* 工具使用 */
+  setNodeRuntime(runtime: import('../nodes/index.js').NodeRuntime): void { this.executor.setNodeRuntime(runtime); }
+
   /** 包安装、启停或移除后重新注册该用户的包工具 */
   reloadPackageToolsForUser(userId: string): Promise<void> {
     return this.executor.reloadPackageTools(userId);

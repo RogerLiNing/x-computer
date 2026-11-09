@@ -37,6 +37,7 @@
     "server",
     "frontend",
     "workflow-engine",
+    "node-agent",
     "packages/core",
     "packages/sdk/js"
   ],

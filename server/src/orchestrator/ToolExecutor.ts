@@ -13,6 +13,8 @@ import { createJobToolHandlers, jobToolDefinitions } from './tools/jobs.js';
 import { createMemoryTopicToolHandlers, memoryTopicToolDefinitions } from './tools/memoryTopics.js';
 import { createPresentCardHandler, presentCardDefinition } from './tools/cards.js';
 import { createRunCodeHandler, runCodeDefinition } from './tools/runCodeTool.js';
+import { createNodeToolHandlers, nodeToolDefinitions } from './tools/nodeTools.js';
+import type { NodeRuntime } from '../nodes/index.js';
 import { NotificationService } from '../services/NotificationService.js';
 import { broadcastToUser } from '../wsBroadcast.js';
 import { MANIFEST_FILE, manifestForMiniApp, validatePackageManifest } from '../packages/manifest.js';
@@ -508,6 +510,9 @@ export class ToolExecutor {
   setExpertDispatchRunner(runner:ExpertDispatchRunner){this.expertDispatchRunner=runner;}
   /** 替换执行流水线（如接入带审计持久化的默认流水线） */
   setPipeline(pipeline: ToolPipeline): void { this.pipeline = pipeline; }
+  private nodeRuntime?: NodeRuntime;
+  /** 节点子智能体运行时（node.* 工具） */
+  setNodeRuntime(runtime: NodeRuntime): void { this.nodeRuntime = runtime; }
   /** 后台任务（长命令等）；完成时通知用户 */
   readonly jobs = new JobRegistry({
     onFinished: async (job) => {
@@ -614,6 +619,8 @@ export class ToolExecutor {
     const memoryHandlers = createMemoryTopicToolHandlers({ getMemoryServiceForUser: (userId) => this.getMemoryServiceForUser?.(userId) ?? Promise.resolve(null) });
     for (const definition of memoryTopicToolDefinitions) this.register(definition, memoryHandlers[definition.name]!);
     this.register(presentCardDefinition, createPresentCardHandler());
+    const nodeHandlers = createNodeToolHandlers(() => this.nodeRuntime);
+    for (const definition of nodeToolDefinitions) this.register(definition, nodeHandlers[definition.name]!);
     this.register(runCodeDefinition, createRunCodeHandler({
       listToolNames: (context) => {
         const ctx = context as ExecutionContext | undefined;
